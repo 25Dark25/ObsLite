@@ -10,7 +10,7 @@ The interface follows OBS Studio, so OBS users find everything where they expect
 
 Measured on Windows 11 with an RTX 4060 Laptop GPU; your numbers will vary.
 
-> **Status: early (0.1.0, first release).** obs-lite has been tested on a single machine
+> **Status: early (0.2.0).** obs-lite has been tested on a single machine
 > (Windows 11, NVIDIA GPU); see [docs/TESTING.md](docs/TESTING.md) for what was and was not
 > verified. It has not had any security audit or independent code review. Most of the code was
 > written with an AI coding assistant (Claude Code) and then built and tested as described there.
@@ -117,14 +117,14 @@ A7FC EDEA D7E6 C343 7312  284A 442D A687 E0FF 73EE
 2. Verify the signature of the zip:
 
    ```sh
-   gpg --verify obs-lite-0.1.0-windows-x64.zip.asc obs-lite-0.1.0-windows-x64.zip
+   gpg --verify obs-lite-0.2.0-windows-x64.zip.asc obs-lite-0.2.0-windows-x64.zip
    ```
 
    The output must say `Good signature` and show the fingerprint above.
 
 3. Optionally, compare the zip's SHA-256 with the one in the release notes:
-   `sha256sum obs-lite-0.1.0-windows-x64.zip`, or on Windows
-   `Get-FileHash obs-lite-0.1.0-windows-x64.zip -Algorithm SHA256`.
+   `sha256sum obs-lite-0.2.0-windows-x64.zip`, or on Windows
+   `Get-FileHash obs-lite-0.2.0-windows-x64.zip -Algorithm SHA256`.
 
 `gpg` ships with [Gpg4win](https://gpg4win.org/) and with Git for Windows.
 
