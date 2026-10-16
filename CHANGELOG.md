@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-16
+
 ### Added
 
 - Screen recorder for Windows with an OBS Studio-like interface (preview, Sources, Audio Mixer and
@@ -23,4 +25,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Minimum supported Rust version: 1.95.
 - Releases ship `THIRD-PARTY-LICENSES.html` with the licenses of the bundled crates.
 
-[Unreleased]: https://github.com/25Dark25/obs-lite/commits/main
+[Unreleased]: https://github.com/25Dark25/obs-lite/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/25Dark25/obs-lite/releases/tag/v0.1.0

@@ -10,7 +10,7 @@ The interface follows OBS Studio, so OBS users find everything where they expect
 
 Measured on Windows 11 with an RTX 4060 Laptop GPU; your numbers will vary.
 
-> **Status: early (0.1.0, not yet released).** obs-lite has been tested on a single machine
+> **Status: early (0.1.0, first release).** obs-lite has been tested on a single machine
 > (Windows 11, NVIDIA GPU); see [docs/TESTING.md](docs/TESTING.md) for what was and was not
 > verified. It has not had any security audit or independent code review. Most of the code was
 > written with an AI coding assistant (Claude Code) and then built and tested as described there.
