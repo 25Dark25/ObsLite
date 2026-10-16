@@ -22,7 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Recordings no longer contain occasional black frames (about one every 15 s in 0.1.0, more
   with a webcam active) or half-drawn frames.
-- A `settings.json` saved with a UTF-8 BOM is no longer replaced by the defaults.
 
 ## [0.1.0] - 2026-10-16
 
