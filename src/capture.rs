@@ -2,7 +2,7 @@
 
 use std::error::Error;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -29,7 +29,8 @@ use crate::i18n::tr;
 type BoxError = Box<dyn Error + Send + Sync>;
 type Size = (u32, u32);
 
-const PREVIEW_MAX_WIDTH: usize = 640;
+/// Preview width until the UI reports how wide the preview is drawn.
+const PREVIEW_DEFAULT_WIDTH: usize = 640;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SourceId {
@@ -94,6 +95,8 @@ pub struct PreviewFrame {
 /// State shared between the capture thread, the audio mixer and the UI.
 pub struct Shared {
     pub preview: Mutex<Option<PreviewFrame>>,
+    /// Width in screen pixels the preview is drawn at; frames are scaled down to it, not further.
+    pub preview_width: AtomicUsize,
     pub frames: AtomicU64,
     /// Drives video and audio timestamps; pausing it pauses the recording.
     pub clock: Arc<Clock>,
@@ -186,26 +189,17 @@ impl GraphicsCaptureApiHandler for Handler {
 }
 
 impl Handler {
-    /// Nearest-neighbour downscale of the BGRA frame into a small RGBA preview.
+    /// Scales the frame down to the size the preview is drawn at.
     fn update_preview(&mut self, frame: &mut Frame) -> Result<(), BoxError> {
         let mut buffer = frame.buffer()?;
         let (w, h, pitch) = (buffer.width() as usize, buffer.height() as usize, buffer.row_pitch() as usize);
         if w == 0 || h == 0 {
             return Ok(());
         }
-        let scale = (w as f32 / PREVIEW_MAX_WIDTH as f32).max(1.0);
-        let (pw, ph) = (((w as f32 / scale) as usize).max(1), ((h as f32 / scale) as usize).max(1));
-        let raw = buffer.as_raw_buffer();
-        let mut rgba = vec![0u8; pw * ph * 4];
-        for y in 0..ph {
-            let row = &raw[((y as f32 * scale) as usize).min(h - 1) * pitch..];
-            for x in 0..pw {
-                let sx = ((x as f32 * scale) as usize).min(w - 1) * 4;
-                let d = (y * pw + x) * 4;
-                rgba[d..d + 4].copy_from_slice(&[row[sx + 2], row[sx + 1], row[sx], 255]);
-            }
-        }
         let shared = &self.flags.shared;
+        let pw = shared.preview_width.load(Ordering::Relaxed).clamp(64.min(w), w);
+        let ph = (h * pw / w).max(1);
+        let rgba = downscale(buffer.as_raw_buffer(), (w, h), pitch, (pw, ph));
         let mut preview = shared.preview.lock().unwrap();
         let seq = preview.as_ref().map_or(0, |p| p.seq + 1);
         *preview = Some(PreviewFrame { size: [pw, ph], rgba, seq });
@@ -235,6 +229,7 @@ impl Session {
     pub fn start(opts: SessionOptions, repaint: Option<eframe::egui::Context>) -> Result<Self, String> {
         let shared = Arc::new(Shared {
             preview: Mutex::new(None),
+            preview_width: AtomicUsize::new(PREVIEW_DEFAULT_WIDTH),
             frames: AtomicU64::new(0),
             clock: Arc::new(Clock::new()),
             encoder_ready: Arc::new(AtomicBool::new(false)),
@@ -338,6 +333,35 @@ fn read_back(last: &LastFrame) -> windows::core::Result<(u32, u32, Vec<u8>)> {
     }
 }
 
+/// Area-average downscale of BGRA rows (`pitch` bytes apart) to `size` opaque RGBA. Every
+/// source pixel counts, so text stays legible; picking one pixel per block did not.
+fn downscale(bgra: &[u8], (w, h): (usize, usize), pitch: usize, size: (usize, usize)) -> Vec<u8> {
+    let (pw, ph) = size;
+    let column: Vec<usize> = (0..w).map(|x| x * pw / w).collect();
+    let mut sums = vec![0u32; pw * 3];
+    let mut counts = vec![0u32; pw];
+    let mut rgba = Vec::with_capacity(pw * ph * 4);
+    for y in 0..ph {
+        let (top, bottom) = (y * h / ph, ((y + 1) * h / ph).max(y * h / ph + 1));
+        sums.fill(0);
+        counts.fill(0);
+        for sy in top..bottom {
+            let row = &bgra[sy * pitch..sy * pitch + w * 4];
+            for (&c, &[b, g, r, _]) in column.iter().zip(row.as_chunks::<4>().0) {
+                sums[c * 3] += r as u32;
+                sums[c * 3 + 1] += g as u32;
+                sums[c * 3 + 2] += b as u32;
+                counts[c] += 1;
+            }
+        }
+        for (rgb, &n) in sums.as_chunks::<3>().0.iter().zip(&counts) {
+            let n = n.max(1);
+            rgba.extend_from_slice(&[(rgb[0] / n) as u8, (rgb[1] / n) as u8, (rgb[2] / n) as u8, 255]);
+        }
+    }
+    rgba
+}
+
 /// Converts BGRA rows (`pitch` bytes apart) into tightly packed opaque RGBA.
 fn bgra_to_rgba(bgra: &[u8], width: usize, height: usize, pitch: usize) -> Vec<u8> {
     let mut rgba = Vec::with_capacity(width * height * 4);
@@ -417,6 +441,20 @@ mod tests {
             bgra_to_rgba(&bgra, 2, 2, 12),
             [3, 2, 1, 255, 7, 6, 5, 255, 11, 10, 9, 255, 15, 14, 13, 255]
         );
+    }
+
+    #[test]
+    fn preview_downscale_averages_every_pixel() {
+        // 4×2 BGRA, rows padded to 20 bytes: left half black/white columns, right half grey.
+        let mut bgra = Vec::new();
+        for _ in 0..2 {
+            bgra.extend_from_slice(&[0, 0, 0, 255, 255, 255, 255, 255, 100, 100, 100, 255, 100, 100, 100, 255, 9, 9, 9, 9]);
+        }
+        // Half size: each output pixel is the mean of a 2×2 block.
+        assert_eq!(downscale(&bgra, (4, 2), 20, (2, 1)), [127, 127, 127, 255, 100, 100, 100, 255]);
+        // Same size: a plain BGRA to RGBA copy.
+        let same = downscale(&bgra, (4, 2), 20, (4, 2));
+        assert_eq!(same, bgra_to_rgba(&bgra, 4, 2, 20));
     }
 
     #[test]

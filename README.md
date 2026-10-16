@@ -5,12 +5,14 @@ The interface follows OBS Studio, so OBS users find everything where they expect
 
 | | Idle (preview + audio) | Recording 1080p60 + audio |
 |---|---|---|
-| Private memory | ~85 MB | ~180 MB |
-| CPU (16 threads) | ~0.3 % | ~1.1 % |
+| Private memory | ~100 MB | ~350 MB |
+| CPU (16 threads) | ~0.5 % | ~1.3 % |
 
-Measured on Windows 11 with an RTX 4060 Laptop GPU; your numbers will vary.
+Measured on Windows 11 with an RTX 4060 Laptop GPU, without a webcam; your numbers will vary.
+About 100 MB of the recording figure is the queue of frame copies that keeps the encoder from
+dropping or blacking out frames when it briefly stalls.
 
-> **Status: early (0.2.0).** obs-lite has been tested on a single machine
+> **Status: early (0.2.1).** obs-lite has been tested on a single machine
 > (Windows 11, NVIDIA GPU); see [docs/TESTING.md](docs/TESTING.md) for what was and was not
 > verified. It has not had any security audit or independent code review. Most of the code was
 > written with an AI coding assistant (Claude Code) and then built and tested as described there.
@@ -73,7 +75,8 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spa
   in its own preview.
 - **System tray icon**, with an option to minimize to the tray.
 - **Spanish and English** interface.
-- Low-cost preview (5 fps).
+- Sharp preview at 5 fps: frames are scaled down to the size the preview is drawn at, averaging
+  every pixel, so text stays legible.
 
 ## Configuration
 
@@ -117,14 +120,14 @@ A7FC EDEA D7E6 C343 7312  284A 442D A687 E0FF 73EE
 2. Verify the signature of the zip:
 
    ```sh
-   gpg --verify obs-lite-0.2.0-windows-x64.zip.asc obs-lite-0.2.0-windows-x64.zip
+   gpg --verify obs-lite-0.2.1-windows-x64.zip.asc obs-lite-0.2.1-windows-x64.zip
    ```
 
    The output must say `Good signature` and show the fingerprint above.
 
 3. Optionally, compare the zip's SHA-256 with the one in the release notes:
-   `sha256sum obs-lite-0.2.0-windows-x64.zip`, or on Windows
-   `Get-FileHash obs-lite-0.2.0-windows-x64.zip -Algorithm SHA256`.
+   `sha256sum obs-lite-0.2.1-windows-x64.zip`, or on Windows
+   `Get-FileHash obs-lite-0.2.1-windows-x64.zip -Algorithm SHA256`.
 
 `gpg` ships with [Gpg4win](https://gpg4win.org/) and with Git for Windows.
 
