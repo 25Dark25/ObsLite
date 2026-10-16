@@ -17,8 +17,9 @@ Releases are tagged, built and signed by the maintainer. Replace `X.Y.Z` with th
 
 3. **Build** the executable: *Actions › Release build › Run workflow*, choosing the tag
    (or `gh api -X POST repos/25Dark25/obs-lite/actions/workflows/release-build.yml/dispatches -f ref=vX.Y.Z`).
-   Download the `obs-lite-<commit>` artifact, unzip it, and check that `sha256sum obs-lite.exe`
-   matches the hash printed in the run's *Checksum* step and that the commit is the tag's
+   Download the `obs-lite-<commit>` artifact, unzip it, and check that
+   `sha256sum obs-lite.exe THIRD-PARTY-LICENSES.html` matches the hashes printed in the run's
+   *Checksum* step and that the commit is the tag's
    (`git rev-parse vX.Y.Z^{commit}`). The Windows build is not bit-for-bit reproducible, so a local
    build will not have the same hash.
 
@@ -32,8 +33,8 @@ Releases are tagged, built and signed by the maintainer. Replace `X.Y.Z` with th
 5. **Checksums and signatures**:
 
    ```sh
-   sha256sum obs-lite.exe obs-lite-X.Y.Z-src.zip > SHA256SUMS
-   for f in obs-lite.exe obs-lite-X.Y.Z-src.zip SHA256SUMS; do
+   sha256sum obs-lite.exe THIRD-PARTY-LICENSES.html obs-lite-X.Y.Z-src.zip > SHA256SUMS
+   for f in obs-lite.exe THIRD-PARTY-LICENSES.html obs-lite-X.Y.Z-src.zip SHA256SUMS; do
      gpg --local-user A7FCEDEAD7E6C3437312284A442DA687E0FF73EE --detach-sign --armor "$f"
    done
    ```
@@ -41,4 +42,5 @@ Releases are tagged, built and signed by the maintainer. Replace `X.Y.Z` with th
    Check them as a user would, following *Verifying a release* in the README.
 
 6. **Publish**: create a GitHub release from the tag, use the changelog section as the notes, and
-   upload `obs-lite.exe`, `obs-lite-X.Y.Z-src.zip`, `SHA256SUMS` and the three `.asc` files.
+   upload `obs-lite.exe`, `THIRD-PARTY-LICENSES.html`, `obs-lite-X.Y.Z-src.zip`, `SHA256SUMS`
+   and the four `.asc` files.

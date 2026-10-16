@@ -10,6 +10,7 @@ ignore = []
 
 [licenses]
 # Every license here is compatible with distributing obs-lite under MIT.
+# Keep in sync with `accepted` in about.toml.
 allow = [
     "Apache-2.0",
     "ISC",
