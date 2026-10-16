@@ -119,10 +119,13 @@ fn path() -> Option<PathBuf> {
 
 impl Config {
     pub fn load() -> Self {
-        path()
-            .and_then(|p| fs::read_to_string(p).ok())
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        path().and_then(|p| fs::read_to_string(p).ok()).and_then(|s| Self::parse(&s)).unwrap_or_default()
+    }
+
+    /// Editors such as Windows PowerShell save UTF-8 with a BOM, which serde_json rejects;
+    /// without this the app would start with defaults and overwrite the file on exit.
+    fn parse(json: &str) -> Option<Self> {
+        serde_json::from_str(json.trim_start_matches('\u{feff}')).ok()
     }
 
     pub fn save(&self) {
@@ -162,5 +165,11 @@ mod tests {
         let c: Config = serde_json::from_str(r#"{"fps": 30}"#).unwrap();
         assert_eq!(c.fps, 30);
         assert_eq!(c.quality, Quality::Medium);
+    }
+
+    #[test]
+    fn settings_saved_with_a_utf8_bom_still_load() {
+        let c = Config::parse("\u{feff}{\"fps\": 30}").expect("settings with a BOM are rejected");
+        assert_eq!(c.fps, 30);
     }
 }
