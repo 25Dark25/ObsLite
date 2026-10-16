@@ -21,5 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings saved in `%APPDATA%\obs-lite\settings.json`.
 - `--selftest` command-line mode that records through the full pipeline and reports frame counts.
 - Minimum supported Rust version: 1.95.
+- Releases ship `THIRD-PARTY-LICENSES.html` with the licenses of the bundled crates.
 
 [Unreleased]: https://github.com/25Dark25/obs-lite/commits/main

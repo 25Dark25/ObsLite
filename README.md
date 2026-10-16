@@ -162,4 +162,6 @@ Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Each release also ships `THIRD-PARTY-LICENSES.html` with the licenses of the
+crates compiled into `obs-lite.exe`, generated with [cargo-about](https://github.com/EmbarkStudios/cargo-about)
+(`cargo about generate --locked --fail about.hbs -o THIRD-PARTY-LICENSES.html`).
