@@ -7,12 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-17
+
+The 0.2.0 release was withdrawn before its files were attached; 0.2.1 includes all of its
+changes.
+
 ### Changed
 
 - The preview is scaled to the size it is drawn at (up to the source's resolution) with area
   averaging, instead of to 640 pixels by picking one pixel per block, so it is no longer pixelated.
 
-## [0.2.0] - 2026-10-17
+## [0.2.0] - 2026-10-17 [YANKED]
 
 ### Added
 
@@ -48,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Minimum supported Rust version: 1.95.
 - Releases ship `THIRD-PARTY-LICENSES.html` with the licenses of the bundled crates.
 
-[Unreleased]: https://github.com/25Dark25/obs-lite/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/25Dark25/obs-lite/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/25Dark25/obs-lite/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/25Dark25/obs-lite/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/25Dark25/obs-lite/releases/tag/v0.1.0
