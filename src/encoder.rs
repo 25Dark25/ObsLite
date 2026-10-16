@@ -1,10 +1,11 @@
-//! Hardware H.264 encoder producing constant-frame-rate MP4.
+﻿//! Hardware H.264 encoder producing constant-frame-rate MP4.
 //!
 //! Windows Graphics Capture only delivers frames when the screen changes, so the
-//! capture side just copies each frame into a small ring of GPU textures. The
-//! encoder pulls samples on its own fixed clock (like OBS's video thread): it
-//! repeats the latest texture when nothing changed and skips ahead when it falls
-//! behind. Pausing stops that clock, so paused time never reaches the file.
+//! capture side (and the webcam) just draw into a GPU "canvas" texture. Like OBS's
+//! video thread, a producer thread copies the canvas every 1/fps of recording time
+//! into a queue that the encoder drains at its own pace: a short stall in the
+//! encoder delays frames instead of losing or shifting them. Pausing stops the recording
+//! clock, so paused time never reaches the file.
 //!
 //! The MediaStreamSource + MediaTranscoder pipeline follows the approach used by
 //! the windows-capture crate (MIT). The transcoder also scales from the capture
@@ -12,9 +13,10 @@
 
 use std::fs::File;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -34,19 +36,26 @@ use windows::Storage::FileAccessMode;
 use windows::Storage::Streams::FileRandomAccessStream;
 use windows::System::Threading::{ThreadPool, WorkItemHandler, WorkItemOptions, WorkItemPriority};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-    ID3D11Device, ID3D11RenderTargetView, ID3D11Texture2D,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_QUERY_DESC, D3D11_QUERY_EVENT,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11DeviceContext, ID3D11Query,
+    ID3D11RenderTargetView, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
 use windows::Win32::System::WinRT::Direct3D11::CreateDirect3D11SurfaceFromDXGISurface;
-use windows::core::{HSTRING, Interface};
+use windows::core::{BOOL, HSTRING, Interface};
 use windows_capture::frame::Frame;
 
 use crate::audio::{CHANNELS, SAMPLE_RATE};
+use crate::camera::{self, CameraSize, Corner, PixelRect};
+use crate::i18n::tr;
 
-/// A few textures so the capture never overwrites the one the encoder is reading.
-const RING_SIZE: usize = 3;
+/// Queued copies of the canvas (200 ms at 60 fps). If the encoder falls further behind,
+/// the oldest queued frame is dropped and counted as lagged.
+const SAMPLE_TEXTURES: usize = 12;
+/// Copies kept out of reuse after the encoder takes them, because Media Foundation never
+/// reports when it is done with a sample.
+const IN_FLIGHT: usize = 4;
 const TICKS_PER_SECOND: u64 = 10_000_000;
 const AUDIO_BLOCK_ALIGN: u64 = CHANNELS as u64 * 2; // 16-bit PCM
 
@@ -99,24 +108,58 @@ pub struct EncoderSettings {
     pub fps: u32,
     pub bitrate: u32,
     pub audio: bool,
+    /// Where the webcam goes, if there is one.
+    pub overlay: Option<(Corner, CameraSize)>,
 }
 
 /// COM pointer used from several threads; D3D11 devices are free-threaded and the
-/// immediate context is only touched from the capture thread.
-struct Com<T>(T);
+/// immediate context is multithread-protected (see `capture::keep_last_frame`).
+pub struct Com<T>(pub T);
 unsafe impl<T> Send for Com<T> {}
 unsafe impl<T> Sync for Com<T> {}
 
-struct Ring {
-    textures: Vec<Com<ID3D11Texture2D>>,
-    targets: Vec<Com<ID3D11RenderTargetView>>,
-    surfaces: Vec<Com<IDirect3DSurface>>,
-    /// Index of the newest complete texture, or `usize::MAX` before the first frame.
-    latest: AtomicUsize,
+/// The picture being recorded (capture plus webcam) and the copies handed to the encoder.
+struct Canvas {
+    texture: Com<ID3D11Texture2D>,
+    target: Com<ID3D11RenderTargetView>,
+    context: Com<ID3D11DeviceContext>,
+    copies: Vec<(Com<ID3D11Texture2D>, Com<IDirect3DSurface>)>,
+    /// Signals when the GPU has finished a copy.
+    copied: Com<ID3D11Query>,
+    /// Set once the first frame has been drawn.
+    ready: AtomicBool,
+    /// Keeps each group of GPU commands (a frame with its overlay, or a copy) together.
+    lock: Mutex<()>,
+}
+
+impl Canvas {
+    /// Copies the canvas into copy `slot` and waits until the GPU has done it: the hardware
+    /// encoder reads the copy on another GPU engine, without waiting for this context, so
+    /// handing it over earlier showed up as half-drawn frames.
+    fn snapshot(&self, slot: usize) {
+        let texture = &self.copies[slot].0;
+        let ctx = &self.context.0;
+        unsafe {
+            {
+                let _gpu = self.lock.lock().unwrap();
+                ctx.CopyResource(&texture.0, &self.texture.0);
+                ctx.End(&self.copied.0);
+                ctx.Flush();
+            }
+            for _ in 0..50 {
+                let mut done = BOOL(0);
+                let data = Some((&raw mut done).cast());
+                if ctx.GetData(&self.copied.0, data, size_of::<BOOL>() as u32, 0).is_ok() && done.as_bool() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
 }
 
 struct Inner {
-    ring: Ring,
+    canvas: Canvas,
     clock: Arc<Clock>,
     /// Set when the transcoder asks for its first video sample; the clock starts then.
     started: Arc<AtomicBool>,
@@ -126,7 +169,9 @@ struct Inner {
     lagged: AtomicU64,
     stop: AtomicBool,
     fps: u64,
-    next_frame: Mutex<u64>,
+    /// Frames waiting for the encoder: (frame number, copy slot).
+    queue: Mutex<VecDeque<(u64, usize)>>,
+    queued: Condvar,
     audio_rx: Mutex<Receiver<Vec<u8>>>,
     audio_frames_sent: AtomicU64,
 }
@@ -137,7 +182,12 @@ pub struct Encoder {
     source: Com<MediaStreamSource>,
     tokens: (i64, i64),
     transcode: Option<JoinHandle<Result<(), String>>>,
+    producer: Option<JoinHandle<()>>,
     input: (u32, u32),
+    device: Com<ID3D11Device>,
+    overlay: Option<(Corner, CameraSize)>,
+    /// The newest webcam picture, scaled, and where it goes: (x, y, width, height).
+    overlay_texture: Mutex<Option<(Com<ID3D11Texture2D>, PixelRect)>>,
 }
 
 impl Encoder {
@@ -158,7 +208,7 @@ impl Encoder {
         clock: Arc<Clock>,
         started: Arc<AtomicBool>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let ring = create_ring(device, s.input)?;
+        let canvas = create_canvas(device, s.input)?;
 
         // Output profile: what ends up in the file.
         let video = VideoEncodingProperties::new()?;
@@ -188,20 +238,22 @@ impl Encoder {
         } else {
             MediaStreamSource::CreateFromDescriptor(&video_desc)?
         };
-        // No read-ahead: with a buffer the pipeline stalls video requests while it fills
-        // the audio buffer, which showed up as ~30% lagged frames at 1080p60.
-        source.SetBufferTime(Duration::ZERO.into())?;
+        // Measured on an RTX 4060 (static and moving screens, with and without a webcam):
+        // with no read-ahead the pipeline now and then encodes a black frame; with 30 ms it
+        // stalls video requests for longer than the frame queue holds. 10 ms avoids both.
+        source.SetBufferTime(Duration::from_millis(10).into())?;
 
         let (audio_tx, audio_rx) = mpsc::channel();
         let inner = Arc::new(Inner {
-            ring,
+            canvas,
             clock,
             started,
             encoded: AtomicU64::new(0),
             lagged: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             fps: s.fps.max(1) as u64,
-            next_frame: Mutex::new(0),
+            queue: Mutex::new(VecDeque::new()),
+            queued: Condvar::new(),
             audio_rx: Mutex::new(audio_rx),
             audio_frames_sent: AtomicU64::new(0),
         });
@@ -248,10 +300,14 @@ impl Encoder {
         if !prepared.CanTranscode()? {
             let reason = prepared.FailureReason()?;
             let _ = std::fs::remove_file(&s.path);
-            return Err(format!("el sistema no puede codificar con esta configuración ({reason:?})").into());
+            return Err(tr!("el sistema no puede codificar con esta configuración ({:?})", "the system cannot encode with these settings ({:?})", reason).into());
         }
         // The transcoder and output stream must outlive the transcode operation.
         let job = Com((transcoder, stream, prepared));
+        let producer = thread::Builder::new().name("video-frames".into()).spawn({
+            let inner = inner.clone();
+            move || produce_frames(&inner)
+        })?;
         let transcode = thread::Builder::new().name("transcode".into()).spawn(move || {
             let job = job;
             job.0.2.TranscodeAsync().and_then(|op| op.join()).map_err(|e| e.to_string())
@@ -263,31 +319,82 @@ impl Encoder {
             source: Com(source),
             tokens: (starting, requested),
             transcode: Some(transcode),
+            producer: Some(producer),
             input: s.input,
+            device: Com(device.clone()),
+            overlay: s.overlay,
+            overlay_texture: Mutex::new(None),
         })
     }
 
-    /// Copies a captured frame into the next ring texture (capture thread only).
-    pub fn push_frame(&self, frame: &Frame) {
-        let ring = &self.inner.ring;
-        let latest = ring.latest.load(Ordering::Acquire);
-        let idx = if latest == usize::MAX { 0 } else { (latest + 1) % RING_SIZE };
-        let ctx = frame.device_context();
-        let dst = &ring.textures[idx].0;
+    /// Draws the part of a captured frame starting at `origin` onto the canvas, with the
+    /// webcam on top (capture thread only).
+    pub fn push_frame(&self, frame: &Frame, origin: (u32, u32)) {
+        let canvas = &self.inner.canvas;
+        let (ctx, dst, source) = (&canvas.context.0, &canvas.texture.0, frame.as_raw_texture());
         let (w, h) = (frame.width(), frame.height());
+        let _gpu = canvas.lock.lock().unwrap();
         unsafe {
-            if (w, h) == self.input {
-                ctx.CopyResource(dst, frame.as_raw_texture());
+            if origin == (0, 0) && (w, h) == self.input {
+                ctx.CopyResource(dst, source);
             } else {
-                // A resized window: crop or pad with black at the original size.
-                ctx.ClearRenderTargetView(&ring.targets[idx].0, &[0.0, 0.0, 0.0, 1.0]);
-                let (cw, ch) = (w.min(self.input.0), h.min(self.input.1));
-                let region = D3D11_BOX { left: 0, top: 0, front: 0, right: cw, bottom: ch, back: 1 };
-                ctx.CopySubresourceRegion(dst, 0, 0, 0, 0, frame.as_raw_texture(), 0, Some(&region));
+                // A region, or a resized window: crop, padding with black what is missing.
+                let (left, top) = origin;
+                let (right, bottom) = ((left + self.input.0).min(w), (top + self.input.1).min(h));
+                if (right.saturating_sub(left), bottom.saturating_sub(top)) != self.input {
+                    ctx.ClearRenderTargetView(&canvas.target.0, &[0.0, 0.0, 0.0, 1.0]);
+                }
+                if right > left && bottom > top {
+                    let region = D3D11_BOX { left, top, front: 0, right, bottom, back: 1 };
+                    ctx.CopySubresourceRegion(dst, 0, 0, 0, 0, source, 0, Some(&region));
+                }
+            }
+            if let Some((texture, (x, y, _, _))) = self.overlay_texture.lock().unwrap().as_ref() {
+                ctx.CopySubresourceRegion(dst, 0, *x, *y, 0, &texture.0, 0, None);
             }
             ctx.Flush();
         }
-        ring.latest.store(idx, Ordering::Release);
+        canvas.ready.store(true, Ordering::Release);
+    }
+
+    /// Where a `camera`-sized webcam picture goes on the recording, if there is an overlay.
+    pub fn overlay_rect(&self, camera: (u32, u32)) -> Option<PixelRect> {
+        self.overlay.map(|(corner, size)| camera::overlay_rect(self.input, camera, corner, size))
+    }
+
+    /// Takes a webcam picture already scaled to `rect` (see `overlay_rect`) and draws it onto
+    /// the canvas right away, so the camera keeps moving while the screen does not.
+    pub fn push_overlay(&self, rect: PixelRect, pixels: &[u8]) {
+        let (x, y, w, h) = rect;
+        let canvas = &self.inner.canvas;
+        let ctx = &canvas.context.0;
+        let mut overlay = self.overlay_texture.lock().unwrap();
+        let _gpu = canvas.lock.lock().unwrap();
+        unsafe {
+            if overlay.as_ref().is_none_or(|(_, r)| *r != rect) {
+                let desc = D3D11_TEXTURE2D_DESC {
+                    Width: w,
+                    Height: h,
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    Usage: D3D11_USAGE_DEFAULT,
+                    ..Default::default()
+                };
+                let mut texture = None;
+                if self.device.0.CreateTexture2D(&desc, None, Some(&mut texture)).is_err() {
+                    return;
+                }
+                *overlay = Some((Com(texture.expect("CreateTexture2D returned no texture")), rect));
+            }
+            let texture = &overlay.as_ref().expect("set above").0.0;
+            ctx.UpdateSubresource(texture, 0, None, pixels.as_ptr().cast(), w * 4, 0);
+            if canvas.ready.load(Ordering::Acquire) {
+                ctx.CopySubresourceRegion(&canvas.texture.0, 0, x, y, 0, texture, 0, None);
+            }
+            ctx.Flush();
+        }
     }
 
     pub fn push_audio(&self, pcm: Vec<u8>) {
@@ -305,6 +412,9 @@ impl Encoder {
     pub fn finish(mut self) -> Result<(), String> {
         self.audio_tx = None;
         self.inner.stop.store(true, Ordering::Release);
+        if let Some(p) = self.producer.take() {
+            let _ = p.join();
+        }
         let result = self.transcode.take().map_or(Ok(()), |t| t.join().unwrap_or(Err("transcode panicked".into())));
         let _ = self.source.0.RemoveStarting(self.tokens.0);
         let _ = self.source.0.RemoveSampleRequested(self.tokens.1);
@@ -316,13 +426,16 @@ impl Drop for Encoder {
     fn drop(&mut self) {
         self.audio_tx = None;
         self.inner.stop.store(true, Ordering::Release);
+        if let Some(p) = self.producer.take() {
+            let _ = p.join();
+        }
         if let Some(t) = self.transcode.take() {
             let _ = t.join();
         }
     }
 }
 
-fn create_ring(device: &ID3D11Device, (w, h): (u32, u32)) -> windows::core::Result<Ring> {
+fn create_canvas(device: &ID3D11Device, (w, h): (u32, u32)) -> windows::core::Result<Canvas> {
     let desc = D3D11_TEXTURE2D_DESC {
         Width: w,
         Height: h,
@@ -335,28 +448,34 @@ fn create_ring(device: &ID3D11Device, (w, h): (u32, u32)) -> windows::core::Resu
         CPUAccessFlags: 0,
         MiscFlags: 0,
     };
-    let mut ring = Ring {
-        textures: Vec::new(),
-        targets: Vec::new(),
-        surfaces: Vec::new(),
-        latest: AtomicUsize::new(usize::MAX),
-    };
-    for _ in 0..RING_SIZE {
+    let texture = || -> windows::core::Result<ID3D11Texture2D> {
         let mut texture = None;
-        let mut target = None;
-        unsafe {
-            device.CreateTexture2D(&desc, None, Some(&mut texture))?;
-            let texture = texture.as_ref().expect("CreateTexture2D returned no texture");
-            device.CreateRenderTargetView(texture, None, Some(&mut target))?;
-        }
-        let texture = texture.expect("CreateTexture2D returned no texture");
-        let surface: IDirect3DSurface =
-            unsafe { CreateDirect3D11SurfaceFromDXGISurface(&texture.cast::<IDXGISurface>()?)? }.cast()?;
-        ring.surfaces.push(Com(surface));
-        ring.targets.push(Com(target.expect("CreateRenderTargetView returned no view")));
-        ring.textures.push(Com(texture));
+        unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture))? };
+        Ok(texture.expect("CreateTexture2D returned no texture"))
+    };
+    let canvas = texture()?;
+    let mut target = None;
+    let mut copied = None;
+    unsafe {
+        device.CreateRenderTargetView(&canvas, None, Some(&mut target))?;
+        device.CreateQuery(&D3D11_QUERY_DESC { Query: D3D11_QUERY_EVENT, MiscFlags: 0 }, Some(&mut copied))?;
     }
-    Ok(ring)
+    let mut copies = Vec::with_capacity(SAMPLE_TEXTURES);
+    for _ in 0..SAMPLE_TEXTURES {
+        let copy = texture()?;
+        let surface: IDirect3DSurface =
+            unsafe { CreateDirect3D11SurfaceFromDXGISurface(&copy.cast::<IDXGISurface>()?)? }.cast()?;
+        copies.push((Com(copy), Com(surface)));
+    }
+    Ok(Canvas {
+        texture: Com(canvas),
+        target: Com(target.expect("CreateRenderTargetView returned no view")),
+        context: Com(unsafe { device.GetImmediateContext()? }),
+        copies,
+        copied: Com(copied.expect("CreateQuery returned no query")),
+        ready: AtomicBool::new(false),
+        lock: Mutex::new(()),
+    })
 }
 
 /// Answers one sample request; `None` (end of stream) once stopped.
@@ -365,41 +484,67 @@ fn fulfil(inner: &Inner, request: &MediaStreamSourceSampleRequest, is_audio: boo
     request.SetSample(sample.as_ref())
 }
 
-fn next_video(inner: &Inner) -> windows::core::Result<Option<MediaStreamSample>> {
-    let mut n = inner.next_frame.lock().unwrap();
+/// The video thread: every 1/fps of recording time, copies the canvas into the queue.
+fn produce_frames(inner: &Inner) {
     let fps = inner.fps;
+    let mut n = 0u64;
+    while !inner.stop.load(Ordering::Acquire) {
+        let now = inner.clock.elapsed();
+        let due = Duration::from_nanos(n * 1_000_000_000 / fps);
+        if !inner.started.load(Ordering::Acquire) || !inner.canvas.ready.load(Ordering::Acquire) || now < due {
+            thread::sleep(due.saturating_sub(now).clamp(Duration::from_millis(1), Duration::from_millis(5)));
+            continue;
+        }
+        // Descheduled for more than a frame: skip ahead rather than drift from real time.
+        let current = (now.as_nanos() * fps as u128 / 1_000_000_000) as u64;
+        if current > n + 1 {
+            inner.lagged.fetch_add(current - n, Ordering::Relaxed);
+            n = current;
+        }
+        {
+            // The slot is about to be overwritten: it must not still be queued or in flight.
+            let mut queue = inner.queue.lock().unwrap();
+            while queue.len() > SAMPLE_TEXTURES - IN_FLIGHT {
+                queue.pop_front();
+                inner.lagged.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let slot = n as usize % SAMPLE_TEXTURES;
+        inner.canvas.snapshot(slot);
+        inner.queue.lock().unwrap().push_back((n, slot));
+        inner.queued.notify_one();
+        n += 1;
+    }
+    inner.queued.notify_all();
+}
+
+/// The next queued frame; once stopped, the remaining ones and then `None` (end of stream).
+fn next_video(inner: &Inner) -> windows::core::Result<Option<MediaStreamSample>> {
     // The transcoder can take a while to spin up; time starts with its first request
     // so that start-up latency is not counted as lag.
     if !inner.started.load(Ordering::Acquire) {
         inner.clock.restart();
         inner.started.store(true, Ordering::Release);
     }
-    loop {
+    let mut queue = inner.queue.lock().unwrap();
+    let (n, slot) = loop {
+        if let Some(frame) = queue.pop_front() {
+            break frame;
+        }
         if inner.stop.load(Ordering::Acquire) {
             return Ok(None);
         }
-        let now = inner.clock.elapsed();
-        let due = Duration::from_nanos(*n * 1_000_000_000 / fps);
-        let latest = inner.ring.latest.load(Ordering::Acquire);
-        if now >= due && latest != usize::MAX {
-            // Fell behind by more than a frame: skip ahead rather than drift from real time.
-            let current = (now.as_nanos() * fps as u128 / 1_000_000_000) as u64;
-            if current > *n + 1 {
-                inner.lagged.fetch_add(current - *n, Ordering::Relaxed);
-                *n = current;
-            }
-            let sample = MediaStreamSample::CreateFromDirect3D11Surface(
-                &inner.ring.surfaces[latest].0,
-                TimeSpan { Duration: (*n * TICKS_PER_SECOND / fps) as i64 },
-            )?;
-            sample.SetDuration(TimeSpan { Duration: (TICKS_PER_SECOND / fps) as i64 })?;
-            *n += 1;
-            inner.encoded.fetch_add(1, Ordering::Relaxed);
-            return Ok(Some(sample));
-        }
-        let wait = due.saturating_sub(now).clamp(Duration::from_millis(1), Duration::from_millis(5));
-        thread::sleep(wait);
-    }
+        queue = inner.queued.wait_timeout(queue, Duration::from_millis(20)).unwrap().0;
+    };
+    drop(queue);
+    let fps = inner.fps;
+    let sample = MediaStreamSample::CreateFromDirect3D11Surface(
+        &inner.canvas.copies[slot].1.0,
+        TimeSpan { Duration: (n * TICKS_PER_SECOND / fps) as i64 },
+    )?;
+    sample.SetDuration(TimeSpan { Duration: (TICKS_PER_SECOND / fps) as i64 })?;
+    inner.encoded.fetch_add(1, Ordering::Relaxed);
+    Ok(Some(sample))
 }
 
 fn next_audio(inner: &Inner) -> windows::core::Result<Option<MediaStreamSample>> {

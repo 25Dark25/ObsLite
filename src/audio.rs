@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use nnnoiseless::DenoiseState;
 use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 
 use crate::encoder::Clock;
@@ -65,6 +66,7 @@ pub fn list_devices(kind: InputKind) -> Vec<Device> {
 pub struct InputShared {
     gain: AtomicU32,
     peak: AtomicU32,
+    denoise: AtomicBool,
     stop: AtomicBool,
     buffer: Mutex<VecDeque<f32>>,
     error: Mutex<Option<String>>,
@@ -75,6 +77,7 @@ impl InputShared {
         Self {
             gain: AtomicU32::new(gain.to_bits()),
             peak: AtomicU32::new(0),
+            denoise: AtomicBool::new(false),
             stop: AtomicBool::new(false),
             buffer: Mutex::new(VecDeque::with_capacity(MAX_BUFFERED)),
             error: Mutex::new(None),
@@ -83,6 +86,10 @@ impl InputShared {
 
     pub fn set_gain(&self, gain: f32) {
         self.gain.store(gain.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn set_denoise(&self, on: bool) {
+        self.denoise.store(on, Ordering::Relaxed);
     }
 
     fn gain(&self) -> f32 {
@@ -148,18 +155,21 @@ fn capture_loop(kind: InputKind, device_id: Option<&str>, shared: &InputShared) 
     client.start_stream()?;
 
     let mut raw: VecDeque<u8> = VecDeque::new();
+    let mut denoiser: Option<Denoiser> = None;
     while !shared.stop.load(Ordering::Relaxed) {
         capture.read_from_device_to_deque(&mut raw)?;
         let usable = raw.len() / 4 * 4;
         if usable > 0 {
             let bytes: Vec<u8> = raw.drain(..usable).collect();
-            let mut peak = 0f32;
-            let mut buf = shared.buffer.lock().unwrap();
-            for chunk in bytes.as_chunks::<4>().0 {
-                let s = f32::from_le_bytes(*chunk);
-                peak = peak.max(s.abs());
-                buf.push_back(s);
+            let mut samples: Vec<f32> = bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
+            if shared.denoise.load(Ordering::Relaxed) {
+                samples = denoiser.get_or_insert_with(Denoiser::new).process(&samples);
+            } else {
+                denoiser = None;
             }
+            let peak = samples.iter().fold(0f32, |p, s| p.max(s.abs()));
+            let mut buf = shared.buffer.lock().unwrap();
+            buf.extend(samples);
             let excess = buf.len().saturating_sub(MAX_BUFFERED);
             buf.drain(..excess);
             shared.peak.store(peak.to_bits(), Ordering::Relaxed);
@@ -170,6 +180,39 @@ fn capture_loop(kind: InputKind, device_id: Option<&str>, shared: &InputShared) 
     }
     client.stop_stream()?;
     Ok(())
+}
+
+/// RNNoise noise suppression (as in OBS's filter). It works on mono 10 ms frames at 48 kHz,
+/// so stereo input is downmixed and the result duplicated to both channels.
+struct Denoiser {
+    state: Box<DenoiseState<'static>>,
+    pending: Vec<f32>,
+    /// RNNoise's first frame contains artifacts; it is replaced by silence.
+    first: bool,
+}
+
+impl Denoiser {
+    fn new() -> Self {
+        Self { state: DenoiseState::new(), pending: Vec::new(), first: true }
+    }
+
+    /// Interleaved stereo in, interleaved stereo out, delayed by under one frame.
+    fn process(&mut self, stereo: &[f32]) -> Vec<f32> {
+        // RNNoise expects 16-bit sample values.
+        self.pending.extend(stereo.as_chunks::<2>().0.iter().map(|[l, r]| (l + r) * 0.5 * 32768.0));
+        let mut out = Vec::with_capacity(stereo.len() + DenoiseState::FRAME_SIZE * 2);
+        let mut frame = [0f32; DenoiseState::FRAME_SIZE];
+        for input in self.pending.as_chunks::<{ DenoiseState::FRAME_SIZE }>().0 {
+            self.state.process_frame(&mut frame, input);
+            if std::mem::take(&mut self.first) {
+                frame.fill(0.0);
+            }
+            out.extend(frame.iter().flat_map(|s| [s / 32768.0; 2]));
+        }
+        let done = self.pending.len() / DenoiseState::FRAME_SIZE * DenoiseState::FRAME_SIZE;
+        self.pending.drain(..done);
+        out
+    }
 }
 
 /// Mixes the given inputs into 16-bit PCM following the recording clock.
@@ -271,6 +314,22 @@ mod tests {
         mix_block(&[a.clone(), b], 4, &mut out);
         assert_eq!(out, vec![0.6, 0.6, 0.1, 0.1]);
         assert!(a.buffer.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn denoiser_keeps_the_stream_length_in_whole_frames() {
+        let mut d = Denoiser::new();
+        let frame = DenoiseState::FRAME_SIZE;
+        assert_eq!(d.process(&vec![0.0; 300 * 2]).len(), 0); // under one frame: held back
+        assert_eq!(d.process(&vec![0.0; 700 * 2]).len(), 2 * frame * 2); // 1000 mono samples: two frames
+        assert_eq!(d.pending.len(), 1000 - 2 * frame);
+    }
+
+    #[test]
+    fn denoiser_keeps_silence_silent() {
+        let output = Denoiser::new().process(&vec![0.0; SAMPLE_RATE as usize * 2]);
+        assert!(!output.is_empty());
+        assert!(output.iter().all(|s| s.abs() < 1e-4));
     }
 
     #[test]

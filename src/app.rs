@@ -15,16 +15,18 @@ use eframe::egui::{
     self, Align, Align2, Button, Color32, ComboBox, CornerRadius, FontId, Layout, Margin, Rect, RichText, Sense,
     Slider, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2,
 };
-use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
 use crate::audio::{self, Device, Input, InputKind, Mixer};
+use crate::camera::{self, Camera, CameraConfig, CameraDevice, CameraFrame, CameraSize, Corner};
 use crate::capture::{self, RecordConfig, Session, SessionOptions, Source, SourceId};
-use crate::config::{Config, Quality, Resolution};
+use crate::config::{Config, Hotkeys, Quality, Region, Resolution};
+use crate::hotkeys;
+use crate::i18n::{self, Language, tr};
+use crate::tray::{Tray, TrayCommand, TrayState};
 
 const PREVIEW_FPS: u32 = 5;
-const RECORD_KEY: &str = "Ctrl+Alt+R";
-const PAUSE_KEY: &str = "Ctrl+Alt+P";
 const DOCK_HEIGHT: f32 = 236.0;
 
 // OBS "Yami" theme palette.
@@ -48,6 +50,8 @@ const GREEN_DIM: Color32 = Color32::from_rgb(0x17, 0x64, 0x1E);
 enum Action {
     ToggleRecording,
     TogglePause,
+    Screenshot,
+    ToggleMicMute,
 }
 
 enum RecState {
@@ -64,16 +68,19 @@ struct Status {
 
 #[derive(Clone, Copy, PartialEq)]
 enum SettingsPage {
+    General,
     Output,
     Audio,
     Video,
     Hotkeys,
 }
 
-/// The Settings dialog edits a copy; "Aceptar" applies it, "Cancelar" discards it.
+/// The Settings dialog edits a copy; tr!("Aceptar", "OK") applies it, tr!("Cancelar", "Cancel") discards it.
 struct SettingsDialog {
     draft: Config,
     page: SettingsPage,
+    /// The hotkey row waiting for a key combination.
+    capturing: Option<usize>,
 }
 
 /// Process CPU usage as a share of all cores, like the OBS status bar.
@@ -90,24 +97,43 @@ pub struct App {
     mic_devices: Vec<Device>,
     preview: Option<Session>,
     rec: RecState,
+    /// A screenshot being written to disk.
+    screenshot: Option<Receiver<Result<PathBuf, String>>>,
     system: Option<Input>,
     mic: Option<Input>,
+    cameras: Vec<CameraDevice>,
+    camera: Option<Camera>,
+    camera_texture: Option<TextureHandle>,
+    camera_seq: Option<u64>,
     meters: [f32; 2],
     texture: Option<TextureHandle>,
     texture_seq: Option<u64>,
+    /// Choosing a region on the preview, and the drag in progress (start, end).
+    picking_region: bool,
+    region_drag: Option<(egui::Pos2, egui::Pos2)>,
     status: Option<Status>,
     settings: Option<SettingsDialog>,
     cpu: CpuMeter,
     actions: Arc<Mutex<Vec<Action>>>,
-    _hotkeys: Option<GlobalHotKeyManager>,
+    hotkey_manager: Option<GlobalHotKeyManager>,
+    /// Registered hotkeys and their actions, shared with the hotkey event handler.
+    bindings: Arc<Mutex<Vec<(HotKey, Action)>>>,
+    /// The main window, for excluding it from capture.
+    hwnd: Option<isize>,
+    tray: Option<Tray>,
+    tray_commands: Arc<Mutex<Vec<TrayCommand>>>,
+    /// Minimized to the tray.
+    hidden: bool,
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         apply_theme(&cc.egui_ctx);
         let config = Config::load();
+        i18n::set(config.language.unwrap_or_else(Language::system));
         let actions = Arc::new(Mutex::new(Vec::new()));
-        let (hotkeys, hotkey_error) = match register_hotkeys(&cc.egui_ctx, actions.clone()) {
+        let bindings = Arc::new(Mutex::new(Vec::new()));
+        let (hotkey_manager, hotkey_error) = match hotkey_manager(&cc.egui_ctx, actions.clone(), bindings.clone()) {
             Ok(manager) => (Some(manager), None),
             Err(e) => (None, Some(e)),
         };
@@ -115,6 +141,10 @@ impl App {
         let mut app = Self {
             system: None,
             mic: None,
+            cameras: Vec::new(),
+            camera: None,
+            camera_texture: None,
+            camera_seq: None,
             config,
             sources: Vec::new(),
             selected: None,
@@ -122,22 +152,38 @@ impl App {
             mic_devices: Vec::new(),
             preview: None,
             rec: RecState::Idle,
+            screenshot: None,
             meters: [0.0; 2],
             texture: None,
             texture_seq: None,
+            picking_region: false,
+            region_drag: None,
             status: None,
             settings: None,
             cpu: CpuMeter { last: None, percent: 0.0 },
             actions,
-            _hotkeys: hotkeys,
+            hotkey_manager,
+            bindings,
+            hwnd: main_window(cc),
+            tray: None,
+            tray_commands: Arc::new(Mutex::new(Vec::new())),
+            hidden: false,
         };
+        let commands = app.tray_commands.clone();
+        match Tray::new(&cc.egui_ctx, crate::ICON_RGBA, 64, move |c| commands.lock().unwrap().push(c)) {
+            Ok(tray) => app.tray = Some(tray),
+            Err(e) => app.set_status(tr!("Icono de la bandeja no disponible: {}", "Tray icon unavailable: {}", e), None, true),
+        }
+        app.apply_capture_visibility();
         app.refresh_devices();
         app.restart_input(InputKind::System);
         app.restart_input(InputKind::Microphone);
         app.refresh_sources();
         app.restart_preview(&cc.egui_ctx);
+        app.restart_camera(&cc.egui_ctx);
+        app.bind_hotkeys();
         if let Some(e) = hotkey_error {
-            app.set_status(format!("Atajos globales no disponibles: {e}"), None, true);
+            app.set_status(tr!("Atajos globales no disponibles: {}", "Global hotkeys unavailable: {}", e), None, true);
         }
         app
     }
@@ -195,6 +241,8 @@ impl App {
 
     fn select_source(&mut self, ctx: &egui::Context, id: SourceId) {
         self.selected = Some(id);
+        // A region belongs to the source it was drawn on.
+        self.config.region = None;
         self.config.source_label = self.selected_source().map(|s| s.label.clone());
         self.restart_preview(ctx);
     }
@@ -219,6 +267,23 @@ impl App {
         };
         *slot = None; // release the device before reopening it
         *slot = enabled.then(|| Input::start(kind, device, gain));
+        if kind == InputKind::Microphone
+            && let Some(mic) = &self.mic
+        {
+            mic.shared.set_denoise(self.config.mic_denoise);
+        }
+    }
+
+    fn restart_camera(&mut self, ctx: &egui::Context) {
+        (self.camera, self.camera_texture, self.camera_seq) = (None, None, None);
+        if let Some(c) = &self.config.camera {
+            self.camera = Some(Camera::start(c.device.clone(), Some(ctx.clone())));
+        }
+    }
+
+    /// The camera overlay, when a camera is configured and running.
+    fn overlay(&self) -> Option<(Corner, CameraSize)> {
+        self.camera.as_ref().and(self.config.camera.as_ref()).map(|c| (c.corner, c.size))
     }
 
     fn restart_preview(&mut self, ctx: &egui::Context) {
@@ -237,7 +302,7 @@ impl App {
         };
         match Session::start(opts, Some(ctx.clone())) {
             Ok(s) => self.preview = Some(s),
-            Err(e) => self.source_lost(format!("No se pudo capturar la fuente: {e}")),
+            Err(e) => self.source_lost(tr!("No se pudo capturar la fuente: {}", "Could not capture the source: {}", e)),
         }
     }
 
@@ -266,15 +331,22 @@ impl App {
                     clock.set_paused(!clock.is_paused());
                 }
             }
+            Action::Screenshot => self.take_screenshot(ctx),
+            Action::ToggleMicMute => {
+                self.config.mic_muted = !self.config.mic_muted;
+                if let Some(mic) = &self.mic {
+                    mic.shared.set_gain(channel_gain(self.config.mic_volume, self.config.mic_muted));
+                }
+            }
         }
     }
 
     fn start_recording(&mut self, ctx: &egui::Context) {
         let Some(source) = self.selected else {
-            return self.set_status("Añade una fuente con el botón + del panel Fuentes.", None, true);
+            return self.set_status(tr!("Añade una fuente con el botón + del panel Fuentes.", "Add a source with the + button in the Sources dock."), None, true);
         };
         if let Err(e) = std::fs::create_dir_all(&self.config.output_dir) {
-            return self.set_status(format!("No se puede usar la ruta de grabación: {e}"), None, true);
+            return self.set_status(tr!("No se puede usar la ruta de grabación: {}", "Cannot use the recording path: {}", e), None, true);
         }
         // One capture session at a time: the recording session also feeds the preview.
         self.preview = None;
@@ -292,13 +364,15 @@ impl App {
                 quality: self.config.quality,
                 resolution: self.config.resolution,
                 audio: !inputs.is_empty(),
+                region: self.config.region,
+                overlay: self.overlay(),
             }),
         };
         let session = match Session::start(opts, Some(ctx.clone())) {
             Ok(s) => s,
             Err(e) => {
                 self.restart_preview(ctx);
-                return self.set_status(format!("No se pudo iniciar la grabación: {e}"), None, true);
+                return self.set_status(tr!("No se pudo iniciar la grabación: {}", "Could not start recording: {}", e), None, true);
             }
         };
         let mixer = (!inputs.is_empty()).then(|| {
@@ -309,6 +383,19 @@ impl App {
                 }
             })
         });
+        if let Some(camera) = &self.camera {
+            let shared = session.shared.clone();
+            *camera.shared.sink.lock().unwrap() = Some(Box::new(move |frame: &CameraFrame| {
+                // Scale outside the encoder lock: audio and screen frames wait on it, and audio
+                // arriving late made the encoder emit black frames.
+                let size = (frame.width, frame.height);
+                let Some(rect) = shared.encoder.lock().unwrap().as_ref().and_then(|e| e.overlay_rect(size)) else { return };
+                let pixels = camera::resize(&frame.bgra, size, (rect.2, rect.3));
+                if let Some(enc) = shared.encoder.lock().unwrap().as_ref() {
+                    enc.push_overlay(rect, &pixels);
+                }
+            }));
+        }
         self.rec = RecState::Recording { session, mixer, path };
         self.status = None;
     }
@@ -318,6 +405,9 @@ impl App {
             return;
         };
         drop(mixer);
+        if let Some(camera) = &self.camera {
+            *camera.shared.sink.lock().unwrap() = None;
+        }
         let (encoder, stop_error) = session.stop();
         let (tx, rx) = mpsc::channel();
         let ctx2 = ctx.clone();
@@ -325,13 +415,71 @@ impl App {
         thread::spawn(move || {
             let result = match encoder {
                 Some(enc) => enc.finish().map(|()| path),
-                None => Err(stop_error.unwrap_or_else(|| "no se capturó ningún fotograma".into())),
+                None => Err(stop_error.unwrap_or_else(|| tr!("no se capturó ningún fotograma", "no frames were captured").into())),
             };
             let _ = tx.send(result);
             ctx2.request_repaint();
         });
         self.rec = RecState::Saving(rx);
-        self.set_status(reason.unwrap_or_else(|| "Guardando grabación…".into()), None, false);
+        self.set_status(reason.unwrap_or_else(|| tr!("Guardando grabación…", "Saving recording…").into()), None, false);
+    }
+
+    fn show_window(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.hidden) {
+            self.set_taskbar_button(true);
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    fn set_taskbar_button(&self, visible: bool) {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx};
+        use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
+        let Some(hwnd) = self.hwnd else { return };
+        unsafe {
+            // Already initialized as STA by winit on this thread; this only makes sure.
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let Ok(list) = CoCreateInstance::<_, ITaskbarList>(&TaskbarList, None, CLSCTX_INPROC_SERVER) else { return };
+            if list.HrInit().is_ok() {
+                let hwnd = HWND(hwnd as *mut _);
+                let _ = if visible { list.AddTab(hwnd) } else { list.DeleteTab(hwnd) };
+            }
+        }
+    }
+
+    /// Saves the newest frame of the current source as a PNG in the recordings folder.
+    fn take_screenshot(&mut self, ctx: &egui::Context) {
+        let Some(session) = self.recording_session().or(self.preview.as_ref()) else {
+            return self.set_status(tr!("Añade una fuente con el botón + del panel Fuentes.", "Add a source with the + button in the Sources dock."), None, true);
+        };
+        let (mut width, mut height, mut rgba) = match session.snapshot() {
+            Ok(image) => image,
+            Err(e) => return self.set_status(tr!("No se pudo hacer la captura: {}", "Could not take the screenshot: {}", e), None, true),
+        };
+        if let Some(region) = self.config.region.and_then(|r| r.fit((width, height))) {
+            rgba = capture::crop_rgba(&rgba, width, region);
+            (width, height) = (region.width, region.height);
+        }
+        if let (Some((corner, size)), Some(camera)) = (self.overlay(), self.camera.as_ref())
+            && let Some(frame) = camera.shared.latest.lock().unwrap().clone()
+        {
+            paste_camera(&mut rgba, width, height, &frame, corner, size);
+        }
+        let name = format!("{} {}.png", tr!("Captura", "Screenshot"), chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
+        let path = self.config.output_dir.join(name);
+        let (tx, rx) = mpsc::channel();
+        let ctx = ctx.clone();
+        // PNG encoding of a large frame takes a moment; keep the UI responsive.
+        thread::spawn(move || {
+            let result = std::fs::create_dir_all(path.parent().unwrap_or(&path))
+                .map_err(|e| e.to_string())
+                .and_then(|()| capture::write_png(&path, width, height, &rgba))
+                .map(|()| path);
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+        self.screenshot = Some(rx);
     }
 
     /// Background bookkeeping; runs even while the window is minimized.
@@ -339,6 +487,31 @@ impl App {
         let actions: Vec<Action> = self.actions.lock().unwrap().drain(..).collect();
         for action in actions {
             self.handle(ctx, action);
+        }
+        let commands: Vec<TrayCommand> = self.tray_commands.lock().unwrap().drain(..).collect();
+        for command in commands {
+            match command {
+                TrayCommand::ToggleRecording => self.handle(ctx, Action::ToggleRecording),
+                TrayCommand::TogglePause => self.handle(ctx, Action::TogglePause),
+                TrayCommand::Screenshot => self.handle(ctx, Action::Screenshot),
+                TrayCommand::Show => self.show_window(ctx),
+                TrayCommand::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            }
+        }
+        // Minimize to tray: the window stays minimized (a hidden window would stop eframe from
+        // handling hotkeys and tray clicks) and only loses its taskbar button.
+        let minimized = ctx.input(|i| i.viewport().minimized);
+        if self.config.minimize_to_tray && !self.hidden && minimized == Some(true) {
+            self.set_taskbar_button(false);
+            self.hidden = true;
+        } else if self.hidden && minimized == Some(false) {
+            // Restored some other way, e.g. Alt+Tab.
+            self.set_taskbar_button(true);
+            self.hidden = false;
+        }
+        let state = TrayState { recording: self.is_recording(), paused: self.is_paused(), english: i18n::english() };
+        if let Some(tray) = &mut self.tray {
+            tray.update(state);
         }
 
         if let RecState::Saving(rx) = &self.rec
@@ -348,18 +521,44 @@ impl App {
             // Before the status: if the source is gone, its error must not hide where the file went.
             self.restart_preview(ctx);
             match result {
-                Ok(path) => self.set_status(format!("Grabación guardada en '{}'", path.display()), Some(path), false),
-                Err(e) => self.set_status(format!("Error al guardar la grabación: {e}"), None, true),
+                Ok(path) => self.set_status(tr!("Grabación guardada en '{}'", "Recording saved to '{}'", path.display()), Some(path), false),
+                Err(e) => self.set_status(tr!("Error al guardar la grabación: {}", "Error saving the recording: {}", e), None, true),
+            }
+        }
+
+        if let Some(rx) = &self.screenshot
+            && let Ok(result) = rx.try_recv()
+        {
+            self.screenshot = None;
+            match result {
+                Ok(path) => self.set_status(tr!("Captura guardada en '{}'", "Screenshot saved to '{}'", path.display()), Some(path), false),
+                Err(e) => self.set_status(tr!("No se pudo guardar la captura: {}", "Could not save the screenshot: {}", e), None, true),
             }
         }
 
         if self.recording_session().is_some_and(Session::is_finished) {
-            return self.stop_recording(ctx, Some("La fuente dejó de estar disponible; guardando…".into()));
+            return self.stop_recording(ctx, Some(tr!("La fuente dejó de estar disponible; guardando…", "The source is no longer available; saving…").into()));
         }
         if self.preview.as_ref().is_some_and(Session::is_finished) {
-            self.source_lost("La fuente ya no está disponible. Añade otra con el botón +.".into());
+            self.source_lost(tr!("La fuente ya no está disponible. Añade otra con el botón +.", "The source is no longer available. Add another one with the + button.").into());
         }
         self.cpu.update();
+    }
+
+    fn update_camera_texture(&mut self, ctx: &egui::Context) {
+        let Some(camera) = &self.camera else { return };
+        let seq = camera.shared.seq.load(Ordering::Relaxed);
+        if self.camera_seq == Some(seq) {
+            return;
+        }
+        let Some(frame) = camera.shared.latest.lock().unwrap().clone() else { return };
+        self.camera_seq = Some(seq);
+        let rgba: Vec<u8> = frame.bgra.as_chunks::<4>().0.iter().flat_map(|&[b, g, r, a]| [r, g, b, a]).collect();
+        let image = egui::ColorImage::from_rgba_unmultiplied([frame.width as usize, frame.height as usize], &rgba);
+        match &mut self.camera_texture {
+            Some(t) => t.set(image, TextureOptions::LINEAR),
+            None => self.camera_texture = Some(ctx.load_texture("camera", image, TextureOptions::LINEAR)),
+        }
     }
 
     fn update_texture(&mut self, ctx: &egui::Context) {
@@ -381,7 +580,9 @@ impl App {
 
     fn open_settings(&mut self) {
         self.refresh_devices();
-        self.settings = Some(SettingsDialog { draft: self.config.clone(), page: SettingsPage::Output });
+        self.settings = Some(SettingsDialog { draft: self.config.clone(), page: SettingsPage::General, capturing: None });
+        // Registered combinations never reach the window, so they could not be typed again.
+        self.unbind_hotkeys();
     }
 
     fn apply_settings(&mut self, new: Config) {
@@ -389,38 +590,106 @@ impl App {
         let c = &self.config;
         let system_changed = (old.system_audio, &old.system_device) != (c.system_audio, &c.system_device);
         let mic_changed = (old.mic, &old.mic_device) != (c.mic, &c.mic_device);
+        if old.language != c.language {
+            i18n::set(c.language.unwrap_or_else(Language::system));
+            // Source names are translated ("Pantalla 1" / "Display 1").
+            self.refresh_sources();
+            self.config.source_label = self.selected_source().map(|s| s.label.clone());
+        }
         if system_changed {
             self.restart_input(InputKind::System);
         }
         if mic_changed {
             self.restart_input(InputKind::Microphone);
         }
+        if let Some(mic) = &self.mic {
+            mic.shared.set_denoise(self.config.mic_denoise);
+        }
+        self.apply_capture_visibility();
         self.config.save();
+    }
+
+    /// Registers the configured hotkeys, reporting the ones another application already uses.
+    fn bind_hotkeys(&mut self) {
+        let Some(manager) = &self.hotkey_manager else { return };
+        let Hotkeys { record, pause, screenshot, mute_mic } = &self.config.hotkeys;
+        let wanted = [
+            (record, Action::ToggleRecording),
+            (pause, Action::TogglePause),
+            (screenshot, Action::Screenshot),
+            (mute_mic, Action::ToggleMicMute),
+        ];
+        let mut bindings = Vec::new();
+        let mut failed = Vec::new();
+        for (text, action) in wanted {
+            let Some(text) = text else { continue };
+            match hotkeys::parse(text) {
+                Some(hotkey) if manager.register(hotkey).is_ok() => bindings.push((hotkey, action)),
+                _ => failed.push(text.clone()),
+            }
+        }
+        *self.bindings.lock().unwrap() = bindings;
+        if !failed.is_empty() {
+            let list = failed.join(", ");
+            self.set_status(tr!("Atajos no disponibles (¿los usa otra aplicación?): {}", "Hotkeys unavailable (used by another application?): {}", list), None, true);
+        }
+    }
+
+    fn unbind_hotkeys(&mut self) {
+        let bindings = std::mem::take(&mut *self.bindings.lock().unwrap());
+        if let Some(manager) = &self.hotkey_manager {
+            let hotkeys: Vec<HotKey> = bindings.iter().map(|(hotkey, _)| *hotkey).collect();
+            let _ = manager.unregister_all(&hotkeys);
+        }
+    }
+
+    fn apply_capture_visibility(&self) {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE};
+        let Some(hwnd) = self.hwnd else { return };
+        let affinity = if self.config.hide_from_capture { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
+        // Fails before Windows 10 2004; the window then simply stays capturable.
+        let _ = unsafe { SetWindowDisplayAffinity(HWND(hwnd as *mut _), affinity) };
     }
 
     // ------------------------------------------------------------------ main window
 
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("Archivo", |ui| {
-                if ui.button("Mostrar grabaciones").clicked() {
+            ui.menu_button(tr!("Archivo", "File"), |ui| {
+                if ui.button(tr!("Hacer captura de pantalla", "Take Screenshot")).clicked() {
+                    self.take_screenshot(ui.ctx());
+                    ui.close();
+                }
+                if ui.button(tr!("Mostrar grabaciones", "Show Recordings")).clicked() {
                     let _ = std::process::Command::new("explorer").arg(&self.config.output_dir).spawn();
                     ui.close();
                 }
-                if ui.button("Ajustes").clicked() {
+                if ui.button(tr!("Ajustes", "Settings")).clicked() {
                     self.open_settings();
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Salir").clicked() {
+                if ui.button(tr!("Salir", "Exit")).clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
         });
     }
 
-    fn preview_area(&self, ui: &mut egui::Ui) {
-        let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+    fn preview_area(&mut self, ui: &mut egui::Ui) {
+        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        let source = self.recording_session().or(self.preview.as_ref()).and_then(Session::source_size);
+        let mut screenshot = false;
+        response.context_menu(|ui| {
+            if ui.button(tr!("Hacer captura de pantalla", "Take Screenshot")).clicked() {
+                screenshot = true;
+                ui.close();
+            }
+        });
+        if screenshot {
+            self.take_screenshot(ui.ctx());
+        }
         let painter = ui.painter_at(rect);
         let aspect = self.texture.as_ref().map_or(16.0 / 9.0, |t| t.size_vec2().x / t.size_vec2().y);
         let size = if rect.width() / rect.height() > aspect {
@@ -436,8 +705,56 @@ impl App {
                 painter.image(texture.id(), canvas, uv, Color32::WHITE);
             }
             None => {
-                let msg = if self.selected.is_none() { "Añade una fuente con el botón +" } else { "" };
+                let msg = if self.selected.is_none() { tr!("Añade una fuente con el botón +", "Add a source with the + button") } else { "" };
                 painter.text(canvas.center(), Align2::CENTER_CENTER, msg, FontId::proportional(15.0), TEXT_MUTED);
+            }
+        }
+        let Some(source) = source.filter(|_| self.texture.is_some()) else { return };
+        let area = self.config.region.and_then(|r| r.fit(source));
+        if let (Some((corner, size)), Some(texture)) = (self.overlay(), &self.camera_texture)
+            && !self.picking_region
+        {
+            // The overlay sits in the recorded area: the region, or the whole source.
+            let area = area.unwrap_or(Region { x: 0, y: 0, width: source.0, height: source.1 });
+            let (x, y, w, h) = camera::overlay_rect((area.width, area.height), (texture.size()[0] as u32, texture.size()[1] as u32), corner, size);
+            let rect = region_rect(Region { x: area.x + x, y: area.y + y, width: w, height: h }, canvas, source);
+            painter.image(texture.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        if self.picking_region {
+            self.pick_region(ui, &response, &painter, canvas, source);
+        } else if let Some(region) = self.config.region.and_then(|r| r.fit(source)) {
+            outline_region(&painter, canvas, region_rect(region, canvas, source));
+        }
+    }
+
+    /// Drag on the preview to choose the region to record; Escape cancels.
+    fn pick_region(&mut self, ui: &egui::Ui, response: &egui::Response, painter: &egui::Painter, canvas: Rect, source: (u32, u32)) {
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            (self.picking_region, self.region_drag) = (false, None);
+            return;
+        }
+        let pointer = response.interact_pointer_pos();
+        if response.drag_started()
+            && let Some(p) = pointer
+        {
+            self.region_drag = Some((p, p));
+        }
+        if let (Some(drag), Some(p)) = (&mut self.region_drag, pointer) {
+            drag.1 = p;
+        }
+        match self.region_drag {
+            Some((start, end)) => {
+                let selection = Rect::from_two_pos(start, end).intersect(canvas);
+                outline_region(painter, canvas, selection);
+                if response.drag_stopped() {
+                    self.config.region = region_from_rect(selection, canvas, source);
+                    (self.picking_region, self.region_drag) = (false, None);
+                }
+            }
+            None => {
+                painter.rect_filled(canvas, 0.0, Color32::from_black_alpha(90));
+                let hint = tr!("Arrastra para elegir la región que se grabará · Esc para cancelar", "Drag to choose the region to record · Esc to cancel");
+                painter.text(canvas.center(), Align2::CENTER_CENTER, hint, FontId::proportional(15.0), Color32::WHITE);
             }
         }
     }
@@ -448,9 +765,9 @@ impl App {
         let height = ui.available_height();
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
-            dock(ui, "Fuentes", vec2(width * 0.30, height), |ui| self.sources_dock(ui));
-            dock(ui, "Mezclador de audio", vec2(width * 0.44, height), |ui| self.mixer_dock(ui));
-            dock(ui, "Controles", vec2(width * 0.26, height), |ui| self.controls_dock(ui));
+            dock(ui, tr!("Fuentes", "Sources"), vec2(width * 0.30, height), |ui| self.sources_dock(ui));
+            dock(ui, tr!("Mezclador de audio", "Audio Mixer"), vec2(width * 0.44, height), |ui| self.mixer_dock(ui));
+            dock(ui, tr!("Controles", "Controls"), vec2(width * 0.26, height), |ui| self.controls_dock(ui));
         });
     }
 
@@ -460,16 +777,17 @@ impl App {
         ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
             ui.add_enabled_ui(!recording, |ui| {
                 ui.horizontal(|ui| {
+                    let mut camera_choice = None;
                     let add = ui.menu_button(RichText::new(" + ").strong(), |ui| {
                         let mut chosen = None;
-                        ui.menu_button("Captura de pantalla", |ui| {
+                        ui.menu_button(tr!("Captura de pantalla", "Display Capture"), |ui| {
                             for s in self.sources.iter().filter(|s| matches!(s.id, SourceId::Monitor(_))) {
                                 if ui.button(&s.label).clicked() {
                                     chosen = Some(s.id);
                                 }
                             }
                         });
-                        ui.menu_button("Captura de ventana", |ui| {
+                        ui.menu_button(tr!("Captura de ventana", "Window Capture"), |ui| {
                             egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
                                 for s in self.sources.iter().filter(|s| matches!(s.id, SourceId::Window(_))) {
                                     if ui.button(&s.label).clicked() {
@@ -478,20 +796,66 @@ impl App {
                                 }
                             });
                         });
+                        ui.menu_button(tr!("Dispositivo de captura de vídeo", "Video Capture Device"), |ui| {
+                            if self.cameras.is_empty() {
+                                ui.label(RichText::new(tr!("No se ha encontrado ninguna cámara", "No camera found")).color(TEXT_MUTED));
+                            }
+                            for device in &self.cameras {
+                                if ui.button(&device.name).clicked() {
+                                    camera_choice = Some(device.clone());
+                                }
+                            }
+                        });
                         chosen
                     });
                     // Windows come and go; refresh the list each time the menu opens.
                     if add.response.clicked() {
                         self.refresh_sources();
+                        self.cameras = camera::list_devices();
                     }
                     if let Some(Some(id)) = add.inner {
                         self.select_source(&ctx, id);
                         ui.close();
                     }
-                    add.response.on_hover_text("Añadir fuente");
-                    ui.menu_button("Propiedades", |ui| {
-                        if ui.checkbox(&mut self.config.cursor, "Capturar el cursor").changed() {
+                    add.response.on_hover_text(tr!("Añadir fuente", "Add source"));
+                    if let Some(device) = camera_choice {
+                        let (corner, size) = self.config.camera.as_ref().map_or((Corner::BottomRight, CameraSize::Medium), |c| (c.corner, c.size));
+                        self.config.camera = Some(CameraConfig { device: device.id, name: device.name, corner, size });
+                        self.restart_camera(&ctx);
+                        ui.close();
+                    }
+                    ui.menu_button(tr!("Propiedades", "Properties"), |ui| {
+                        if ui.checkbox(&mut self.config.cursor, tr!("Capturar el cursor", "Capture Cursor")).changed() {
                             self.restart_preview(&ctx);
+                        }
+                        ui.separator();
+                        if ui.add_enabled(self.selected.is_some(), Button::new(tr!("Seleccionar región…", "Select Region…"))).clicked() {
+                            self.picking_region = true;
+                            ui.close();
+                        }
+                        let whole = Button::new(tr!("Grabar toda la fuente", "Record Whole Source"));
+                        if ui.add_enabled(self.config.region.is_some(), whole).clicked() {
+                            self.config.region = None;
+                            ui.close();
+                        }
+                        let mut remove_camera = false;
+                        if let Some(cam) = &mut self.config.camera {
+                            ui.separator();
+                            ui.label(RichText::new(tr!("Cámara", "Camera")).strong());
+                            for corner in Corner::ALL {
+                                ui.radio_value(&mut cam.corner, corner, corner.label());
+                            }
+                            ui.separator();
+                            for size in CameraSize::ALL {
+                                ui.radio_value(&mut cam.size, size, size.label());
+                            }
+                            ui.separator();
+                            remove_camera = ui.button(tr!("Quitar cámara", "Remove Camera")).clicked();
+                        }
+                        if remove_camera {
+                            self.config.camera = None;
+                            self.restart_camera(&ctx);
+                            ui.close();
                         }
                     });
                 });
@@ -500,20 +864,33 @@ impl App {
             ui.with_layout(Layout::top_down(Align::Min), |ui| match self.selected_source() {
                 Some(source) => {
                     let kind = match source.id {
-                        SourceId::Monitor(_) => "Captura de pantalla",
-                        SourceId::Window(_) => "Captura de ventana",
+                        SourceId::Monitor(_) => tr!("Captura de pantalla", "Display Capture"),
+                        SourceId::Window(_) => tr!("Captura de ventana", "Window Capture"),
                     };
-                    list_row(ui, &format!("{kind}  ·  {}", source.label));
+                    // Before the label, which is often too long to show in full.
+                    let region = self.config.region.map_or(String::new(), |r| {
+                        format!(" ({} {}×{})", tr!("región", "region"), r.width, r.height)
+                    });
+                    list_row(ui, &format!("{kind}{region}  ·  {}", source.label));
+                    if let Some(cam) = &self.config.camera {
+                        ui.add_space(2.0);
+                        let error = self.camera.as_ref().and_then(|c| c.shared.error.lock().unwrap().clone());
+                        let text = format!("{}  ·  {}", tr!("Dispositivo de captura de vídeo", "Video Capture Device"), cam.name);
+                        let row = list_row(ui, &text);
+                        if let Some(e) = error {
+                            row.on_hover_text(tr!("Error de la cámara: {}", "Camera error: {}", e));
+                        }
+                    }
                 }
                 None => {
-                    ui.label(RichText::new("No hay ninguna fuente. Pulsa + para añadir una.").color(TEXT_MUTED));
+                    ui.label(RichText::new(tr!("No hay ninguna fuente. Pulsa + para añadir una.", "No sources. Press + to add one.")).color(TEXT_MUTED));
                 }
             });
         });
     }
 
     fn mixer_dock(&mut self, ui: &mut egui::Ui) {
-        let rows = [(InputKind::System, "Audio del escritorio"), (InputKind::Microphone, "Mic/Aux")];
+        let rows = [(InputKind::System, tr!("Audio del escritorio", "Desktop Audio")), (InputKind::Microphone, "Mic/Aux")];
         let mut any = false;
         for (i, (kind, label)) in rows.into_iter().enumerate() {
             let (volume, muted, input) = match kind {
@@ -542,7 +919,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.spacing_mut().slider_width = (ui.available_width() - 40.0).max(60.0);
                 let changed = ui.add(Slider::new(volume, 0.0..=1.0).show_value(false)).changed();
-                let tip = if *muted { "Quitar silencio" } else { "Silenciar" };
+                let tip = if *muted { tr!("Quitar silencio", "Unmute") } else { tr!("Silenciar", "Mute") };
                 let toggled = mute_button(ui, *muted).on_hover_text(tip).clicked();
                 if toggled {
                     *muted = !*muted;
@@ -554,7 +931,7 @@ impl App {
             ui.add_space(8.0);
         }
         if !any {
-            ui.label(RichText::new("No hay dispositivos de audio activos.\nActívalos en Ajustes › Audio.").color(TEXT_MUTED));
+            ui.label(RichText::new(tr!("No hay dispositivos de audio activos.\nActívalos en Ajustes › Audio.", "No active audio devices.\nEnable them in Settings › Audio.")).color(TEXT_MUTED));
         }
     }
 
@@ -566,35 +943,35 @@ impl App {
             ui.spacing_mut().item_spacing.x = 4.0;
             match &self.rec {
                 RecState::Idle => {
-                    if ui.add_sized([full, height], Button::new("Iniciar Grabación")).on_hover_text(RECORD_KEY).clicked() {
+                    if ui.add_sized([full, height], Button::new(tr!("Iniciar Grabación", "Start Recording"))).on_hover_text(hotkey_hint(&self.config.hotkeys.record)).clicked() {
                         self.handle(&ctx, Action::ToggleRecording);
                     }
                 }
                 RecState::Recording { .. } => {
-                    let stop = Button::new(RichText::new("Detener Grabación").color(Color32::WHITE)).fill(PRIMARY);
-                    if ui.add_sized([full - height - 4.0, height], stop).on_hover_text(RECORD_KEY).clicked() {
+                    let stop = Button::new(RichText::new(tr!("Detener Grabación", "Stop Recording")).color(Color32::WHITE)).fill(PRIMARY);
+                    if ui.add_sized([full - height - 4.0, height], stop).on_hover_text(hotkey_hint(&self.config.hotkeys.record)).clicked() {
                         self.handle(&ctx, Action::ToggleRecording);
                     }
                     let paused = self.is_paused();
-                    let tip = if paused { "Reanudar Grabación" } else { "Pausar Grabación" };
+                    let tip = if paused { tr!("Reanudar Grabación", "Resume Recording") } else { tr!("Pausar Grabación", "Pause Recording") };
                     if icon_button(ui, if paused { Icon::Play } else { Icon::Pause }, height, self.is_live(), paused)
-                        .on_hover_text(format!("{tip} ({PAUSE_KEY})"))
+                        .on_hover_text(format!("{tip} {}", hotkey_hint(&self.config.hotkeys.pause)))
                         .clicked()
                     {
                         self.handle(&ctx, Action::TogglePause);
                     }
                 }
                 RecState::Saving(_) => {
-                    ui.add_enabled(false, Button::new("Guardando…").min_size(vec2(full, height)));
+                    ui.add_enabled(false, Button::new(tr!("Guardando…", "Saving…")).min_size(vec2(full, height)));
                 }
             }
         });
         ui.add_space(2.0);
-        if ui.add_sized([full, height], Button::new("Ajustes")).clicked() {
+        if ui.add_sized([full, height], Button::new(tr!("Ajustes", "Settings"))).clicked() {
             self.open_settings();
         }
         ui.add_space(2.0);
-        if ui.add_sized([full, height], Button::new("Salir")).clicked() {
+        if ui.add_sized([full, height], Button::new(tr!("Salir", "Exit"))).clicked() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
@@ -607,7 +984,7 @@ impl App {
                     egui::Label::new(RichText::new(&status.text).small().color(color)).truncate().sense(Sense::click()),
                 );
                 if let Some(file) = &status.file
-                    && label.on_hover_text("Mostrar en la carpeta").clicked()
+                    && label.on_hover_text(tr!("Mostrar en la carpeta", "Show in folder")).clicked()
                 {
                     let _ = std::process::Command::new("explorer").arg("/select,").arg(file).spawn();
                 }
@@ -628,7 +1005,7 @@ impl App {
         let shared = &session.shared;
         if !shared.encoder_ready.load(Ordering::Acquire) {
             // Hardware encoder start-up takes 0.2–1 s (more when cold); nothing is recorded yet.
-            ui.label(RichText::new("Preparando…").small().color(TEXT_MUTED));
+            ui.label(RichText::new(tr!("Preparando…", "Starting…")).small().color(TEXT_MUTED));
             ui.spinner();
             return;
         }
@@ -643,8 +1020,8 @@ impl App {
             && lagged > 0
         {
             let pct = lagged as f64 * 100.0 / (encoded + lagged).max(1) as f64;
-            ui.label(RichText::new(format!("Fotogramas perdidos {lagged} ({pct:.1}%)")).small().color(YELLOW))
-                .on_hover_text("El equipo no da abasto: prueba a bajar la resolución o los FPS en Ajustes › Vídeo");
+            ui.label(RichText::new(tr!("Fotogramas perdidos {} ({:.1}%)", "Dropped frames {} ({:.1}%)", lagged, pct)).small().color(YELLOW))
+                .on_hover_text(tr!("El equipo no da abasto: prueba a bajar la resolución o los FPS en Ajustes › Vídeo", "This computer can't keep up: try a lower resolution or FPS in Settings › Video"));
         }
     }
 
@@ -658,17 +1035,18 @@ impl App {
             .frame(egui::Frame::new().fill(GREY7).stroke(Stroke::new(1.0, GREY4)).corner_radius(6).inner_margin(12))
             .show(ctx, |ui| {
                 ui.set_width(660.0);
-                ui.heading("Ajustes");
+                ui.heading(tr!("Ajustes", "Settings"));
                 ui.add_space(8.0);
                 // Fixed body size: a modal has unbounded height, so nothing may grow to fill it.
                 let body = 300.0;
                 ui.horizontal_top(|ui| {
                     ui.allocate_ui_with_layout(vec2(130.0, body), Layout::top_down(Align::Min), |ui| {
                         for (page, name) in [
-                            (SettingsPage::Output, "Salida"),
+                            (SettingsPage::General, "General"),
+                            (SettingsPage::Output, tr!("Salida", "Output")),
                             (SettingsPage::Audio, "Audio"),
-                            (SettingsPage::Video, "Vídeo"),
-                            (SettingsPage::Hotkeys, "Atajos"),
+                            (SettingsPage::Video, tr!("Vídeo", "Video")),
+                            (SettingsPage::Hotkeys, tr!("Atajos", "Hotkeys")),
                         ] {
                             let selected = dialog.page == page;
                             let button = Button::new(name)
@@ -684,7 +1062,7 @@ impl App {
                     ui.allocate_ui_with_layout(vec2(ui.available_width(), body), Layout::top_down(Align::Min), |ui| {
                         ui.set_min_height(body);
                         if recording && dialog.page != SettingsPage::Hotkeys {
-                            ui.label(RichText::new("Detén la grabación para cambiar estos ajustes.").color(YELLOW));
+                            ui.label(RichText::new(tr!("Detén la grabación para cambiar estos ajustes.", "Stop recording to change these settings.")).color(YELLOW));
                             ui.add_space(6.0);
                         }
                         ui.add_enabled_ui(!recording, |ui| {
@@ -694,94 +1072,127 @@ impl App {
                 });
                 ui.add_space(10.0);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add(Button::new("Cancelar").min_size(vec2(90.0, 26.0))).clicked() {
+                    if ui.add(Button::new(tr!("Cancelar", "Cancel")).min_size(vec2(90.0, 26.0))).clicked() {
                         decision = Some(false);
                     }
-                    let ok = Button::new(RichText::new("Aceptar").color(Color32::WHITE)).fill(PRIMARY);
+                    let ok = Button::new(RichText::new(tr!("Aceptar", "OK")).color(Color32::WHITE)).fill(PRIMARY);
                     if ui.add(ok.min_size(vec2(90.0, 26.0))).clicked() {
                         decision = Some(true);
                     }
                 });
             });
-        if response.should_close() && decision.is_none() {
+        // Escape while waiting for a hotkey cancels that, not the dialog.
+        let capturing = self.settings.as_ref().is_some_and(|d| d.capturing.is_some());
+        if response.should_close() && decision.is_none() && !capturing {
             decision = Some(false);
         }
         match decision {
             Some(true) => {
                 let draft = self.settings.take().expect("dialog is open").draft;
                 self.apply_settings(draft);
+                self.bind_hotkeys();
             }
-            Some(false) => self.settings = None,
+            Some(false) => {
+                self.settings = None;
+                self.bind_hotkeys();
+            }
             None => {}
         }
     }
 }
 
 fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Device], mic: &[Device]) {
-    let c = &mut dialog.draft;
+    let SettingsDialog { draft: c, page, capturing } = dialog;
     let grid = |id: &str| egui::Grid::new(id).num_columns(2).spacing([16.0, 10.0]);
-    match dialog.page {
+    match page {
+        SettingsPage::General => {
+            group_title(ui, "General");
+            grid("general").show(ui, |ui| {
+                ui.label(tr!("Idioma", "Language"));
+                let options = [None, Some(Language::Spanish), Some(Language::English)];
+                let name = |l: Option<Language>| {
+                    l.map_or(tr!("Automático (idioma del sistema)", "Automatic (system language)"), Language::name).to_owned()
+                };
+                combo(ui, "language", &mut c.language, &options, name, 260.0);
+                ui.end_row();
+                ui.label(tr!("Bandeja del sistema", "System Tray"));
+                ui.checkbox(&mut c.minimize_to_tray, tr!("Minimizar a la bandeja del sistema", "Minimize to the system tray"));
+                ui.end_row();
+                ui.label(tr!("Captura", "Capture"));
+                ui.checkbox(&mut c.hide_from_capture, tr!("Ocultar obs-lite de la captura de pantalla", "Hide obs-lite from screen capture"));
+                ui.end_row();
+            });
+        }
         SettingsPage::Output => {
-            group_title(ui, "Grabación");
+            group_title(ui, tr!("Grabación", "Recording"));
             grid("output").show(ui, |ui| {
-                ui.label("Ruta de grabación");
+                ui.label(tr!("Ruta de grabación", "Recording Path"));
                 ui.horizontal(|ui| {
                     let mut path = c.output_dir.display().to_string();
                     if ui.add(egui::TextEdit::singleline(&mut path).desired_width(290.0)).changed() {
                         c.output_dir = PathBuf::from(path);
                     }
-                    if ui.button("Examinar").clicked()
+                    if ui.button(tr!("Examinar", "Browse")).clicked()
                         && let Some(dir) = rfd::FileDialog::new().set_directory(&c.output_dir).pick_folder()
                     {
                         c.output_dir = dir;
                     }
                 });
                 ui.end_row();
-                ui.label("Calidad de grabación");
+                ui.label(tr!("Calidad de grabación", "Recording Quality"));
                 combo(ui, "quality", &mut c.quality, &Quality::ALL, |q| q.label().into(), 360.0);
                 ui.end_row();
-                ui.label("Formato de grabación");
+                ui.label(tr!("Formato de grabación", "Recording Format"));
                 ui.label("MP4");
                 ui.end_row();
-                ui.label("Codificador");
+                ui.label(tr!("Codificador", "Encoder"));
                 ui.label("Hardware (H.264)");
                 ui.end_row();
             });
         }
         SettingsPage::Audio => {
-            group_title(ui, "Dispositivos de audio globales");
+            group_title(ui, tr!("Dispositivos de audio globales", "Global Audio Devices"));
             grid("audio").show(ui, |ui| {
-                ui.label("Audio del escritorio");
+                ui.label(tr!("Audio del escritorio", "Desktop Audio"));
                 device_combo(ui, "sysdev", &mut c.system_audio, &mut c.system_device, system);
                 ui.end_row();
-                ui.label("Dispositivo de audio Mic/auxiliar");
+                ui.label(tr!("Dispositivo de audio Mic/auxiliar", "Mic/Auxiliary Audio"));
                 device_combo(ui, "micdev", &mut c.mic, &mut c.mic_device, mic);
+                ui.end_row();
+                ui.label("");
+                ui.checkbox(&mut c.mic_denoise, tr!("Supresión de ruido del micrófono (RNNoise)", "Microphone noise suppression (RNNoise)"));
                 ui.end_row();
             });
         }
         SettingsPage::Video => {
-            group_title(ui, "Vídeo");
+            group_title(ui, tr!("Vídeo", "Video"));
             grid("video").show(ui, |ui| {
-                ui.label("Resolución de salida (Escalada)");
+                ui.label(tr!("Resolución de salida (Escalada)", "Output (Scaled) Resolution"));
                 combo(ui, "res", &mut c.resolution, &Resolution::ALL, |r| r.label().into(), 200.0);
                 ui.end_row();
-                ui.label("Valores comunes de FPS");
+                ui.label(tr!("Valores comunes de FPS", "Common FPS Values"));
                 combo(ui, "fps", &mut c.fps, &[30, 60], |f| f.to_string(), 200.0);
                 ui.end_row();
             });
         }
         SettingsPage::Hotkeys => {
-            group_title(ui, "Atajos globales");
+            group_title(ui, tr!("Atajos globales", "Global Hotkeys"));
+            let Hotkeys { record, pause, screenshot, mute_mic } = &mut c.hotkeys;
+            let rows = [
+                (tr!("Iniciar / Detener Grabación", "Start / Stop Recording"), record),
+                (tr!("Pausar / Reanudar Grabación", "Pause / Resume Recording"), pause),
+                (tr!("Hacer captura de pantalla", "Take Screenshot"), screenshot),
+                (tr!("Silenciar / Activar Mic/Aux", "Mute / Unmute Mic/Aux"), mute_mic),
+            ];
             grid("hotkeys").show(ui, |ui| {
-                ui.label("Iniciar / Detener Grabación");
-                ui.label(RichText::new(RECORD_KEY).monospace());
-                ui.end_row();
-                ui.label("Pausar / Reanudar Grabación");
-                ui.label(RichText::new(PAUSE_KEY).monospace());
-                ui.end_row();
+                for (i, (label, slot)) in rows.into_iter().enumerate() {
+                    ui.label(label);
+                    hotkey_field(ui, i, slot, capturing);
+                    ui.end_row();
+                }
             });
             ui.add_space(6.0);
-            ui.label(RichText::new("Funcionan aunque obs-lite esté minimizado o en segundo plano.").small().color(TEXT_MUTED));
+            ui.label(RichText::new(tr!("Funcionan aunque obs-lite esté minimizado o en segundo plano.", "They work even when obs-lite is minimized or in the background.")).small().color(TEXT_MUTED));
         }
     }
 }
@@ -800,6 +1211,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.update_texture(&ctx);
+        self.update_camera_texture(&ctx);
         let bar = egui::Frame::new().fill(GREY7).inner_margin(Margin::symmetric(8, 3));
         egui::Panel::top("menu").frame(bar).show(ui, |ui| self.menu_bar(ui));
         egui::Panel::bottom("status").frame(bar.inner_margin(Margin::symmetric(10, 4))).show(ui, |ui| self.status_bar(ui));
@@ -867,6 +1279,50 @@ fn channel_gain(volume: f32, muted: bool) -> f32 {
     if muted { 0.0 } else { volume * volume }
 }
 
+/// Where `region` of a `source`-sized image falls on the preview `canvas`.
+fn region_rect(region: Region, canvas: Rect, source: (u32, u32)) -> Rect {
+    let scale = vec2(canvas.width() / source.0 as f32, canvas.height() / source.1 as f32);
+    let min = canvas.min + vec2(region.x as f32, region.y as f32) * scale;
+    Rect::from_min_size(min, vec2(region.width as f32, region.height as f32) * scale)
+}
+
+/// The source region under `selection` on the preview `canvas`.
+fn region_from_rect(selection: Rect, canvas: Rect, source: (u32, u32)) -> Option<Region> {
+    let scale = vec2(source.0 as f32 / canvas.width(), source.1 as f32 / canvas.height());
+    let min = (selection.min - canvas.min) * scale;
+    let size = selection.size() * scale;
+    let px = |v: f32| v.round().max(0.0) as u32;
+    Region { x: px(min.x), y: px(min.y), width: px(size.x), height: px(size.y) }.fit(source)
+}
+
+/// Dims the preview outside `inner` and outlines it.
+fn outline_region(painter: &egui::Painter, canvas: Rect, inner: Rect) {
+    let shade = Color32::from_black_alpha(140);
+    for part in [
+        Rect::from_min_max(canvas.min, pos2(canvas.max.x, inner.min.y)),
+        Rect::from_min_max(pos2(canvas.min.x, inner.max.y), canvas.max),
+        Rect::from_min_max(pos2(canvas.min.x, inner.min.y), pos2(inner.min.x, inner.max.y)),
+        Rect::from_min_max(pos2(inner.max.x, inner.min.y), pos2(canvas.max.x, inner.max.y)),
+    ] {
+        if part.is_positive() {
+            painter.rect_filled(part, 0.0, shade);
+        }
+    }
+    painter.rect_stroke(inner, 0.0, Stroke::new(1.5, PRIMARY_LIGHT), egui::StrokeKind::Inside);
+}
+
+/// Draws the webcam onto an RGBA screenshot where the recording would show it.
+fn paste_camera(rgba: &mut [u8], width: u32, height: u32, frame: &CameraFrame, corner: Corner, size: CameraSize) {
+    let (x, y, w, h) = camera::overlay_rect((width, height), (frame.width, frame.height), corner, size);
+    let scaled = camera::resize(&frame.bgra, (frame.width, frame.height), (w, h));
+    for (row, src) in scaled.chunks(w as usize * 4).enumerate() {
+        let start = ((y as usize + row) * width as usize + x as usize) * 4;
+        for (dst, &[b, g, r, a]) in rgba[start..start + src.len()].as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
+            *dst = [r, g, b, a];
+        }
+    }
+}
+
 /// An OBS-style dock: titled panel with a border.
 fn dock(ui: &mut egui::Ui, title: &str, size: Vec2, content: impl FnOnce(&mut egui::Ui)) {
     ui.allocate_ui_with_layout(size, Layout::top_down(Align::Min), |ui| {
@@ -887,7 +1343,7 @@ fn dock(ui: &mut egui::Ui, title: &str, size: Vec2, content: impl FnOnce(&mut eg
 }
 
 /// A selected list item, as in the OBS Sources list.
-fn list_row(ui: &mut egui::Ui, text: &str) {
+fn list_row(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
     ui.painter().rect_filled(rect, 3.0, PRIMARY);
     let clip = rect.shrink2(vec2(8.0, 0.0));
@@ -898,7 +1354,7 @@ fn list_row(ui: &mut egui::Ui, text: &str) {
         FontId::proportional(13.5),
         Color32::WHITE,
     );
-    response.on_hover_text(text);
+    response.on_hover_text(text)
 }
 
 fn group_title(ui: &mut egui::Ui, title: &str) {
@@ -958,7 +1414,7 @@ fn paint_icon(painter: &egui::Painter, icon: Icon, c: egui::Pos2, s: f32, color:
     }
 }
 
-/// Square button with a drawn icon (the pause button next to "Detener Grabación").
+/// Square button with a drawn icon (the pause button next to tr!("Detener Grabación", "Stop Recording")).
 fn icon_button(ui: &mut egui::Ui, icon: Icon, size: f32, enabled: bool, checked: bool) -> egui::Response {
     let button = Button::new("").min_size(vec2(size, size)).fill(if checked { PRIMARY } else { GREY4 });
     let response = ui.add_enabled(enabled, button);
@@ -1012,21 +1468,21 @@ fn combo<T: Copy + PartialEq>(
 
 /// OBS-style device picker: "(Por defecto)", "Deshabilitado" or a specific device.
 fn device_combo(ui: &mut egui::Ui, id: &str, enabled: &mut bool, device: &mut Option<String>, devices: &[Device]) {
-    const DEFAULT: &str = "(Por defecto)";
-    const DISABLED: &str = "Deshabilitado";
+    let default = tr!("(Por defecto)", "Default");
+    let disabled = tr!("Deshabilitado", "Disabled");
     let current = if !*enabled {
-        DISABLED.to_owned()
+        disabled.to_owned()
     } else {
         device
             .as_ref()
             .and_then(|id| devices.iter().find(|d| &d.id == id))
-            .map_or(DEFAULT.to_owned(), |d| d.name.clone())
+            .map_or(default.to_owned(), |d| d.name.clone())
     };
     ComboBox::from_id_salt(id).width(330.0).truncate().selected_text(current).show_ui(ui, |ui| {
-        if ui.selectable_label(*enabled && device.is_none(), DEFAULT).clicked() {
+        if ui.selectable_label(*enabled && device.is_none(), default).clicked() {
             (*enabled, *device) = (true, None);
         }
-        if ui.selectable_label(!*enabled, DISABLED).clicked() {
+        if ui.selectable_label(!*enabled, disabled).clicked() {
             *enabled = false;
         }
         for d in devices {
@@ -1073,27 +1529,72 @@ fn apply_theme(ctx: &egui::Context) {
     ctx.set_theme(egui::ThemePreference::Dark);
 }
 
-fn register_hotkeys(ctx: &egui::Context, actions: Arc<Mutex<Vec<Action>>>) -> Result<GlobalHotKeyManager, String> {
+/// The native handle of the main window, if eframe exposes it.
+fn main_window(cc: &eframe::CreationContext<'_>) -> Option<isize> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match cc.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(h) => Some(h.hwnd.get()),
+        _ => None,
+    }
+}
+
+/// "(Ctrl+Alt+R)" for tooltips, or nothing when unassigned.
+fn hotkey_hint(hotkey: &Option<String>) -> String {
+    hotkey.as_ref().map_or(String::new(), |h| format!("({h})"))
+}
+
+/// OBS-style hotkey field: click it, then press the combination; Escape cancels, × clears.
+fn hotkey_field(ui: &mut egui::Ui, row: usize, slot: &mut Option<String>, capturing: &mut Option<usize>) {
+    ui.horizontal(|ui| {
+        let waiting = *capturing == Some(row);
+        let text = if waiting {
+            tr!("Pulsa una combinación…", "Press a combination…").to_owned()
+        } else {
+            slot.clone().unwrap_or_else(|| tr!("(ninguno)", "(none)").to_owned())
+        };
+        let button = Button::new(RichText::new(text).monospace()).min_size(vec2(220.0, 24.0));
+        if ui.add(button.fill(if waiting { PRIMARY } else { GREY4 })).clicked() {
+            *capturing = Some(row);
+        }
+        if ui.add_enabled(slot.is_some(), Button::new("×")).on_hover_text(tr!("Quitar", "Clear")).clicked() {
+            *slot = None;
+        }
+        if waiting {
+            // Ctrl, Alt and Shift arrive as key presses of their own before the actual key.
+            let pressed = ui.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => Some(None),
+                    egui::Event::Key { key, pressed: true, modifiers, .. } => hotkeys::format(*modifiers, *key).map(Some),
+                    _ => None,
+                })
+            });
+            if let Some(text) = pressed {
+                if text.is_some() {
+                    *slot = text;
+                }
+                *capturing = None;
+            }
+        }
+    });
+}
+
+/// Creates the hotkey manager and routes presses of the bound hotkeys to `actions`.
+fn hotkey_manager(
+    ctx: &egui::Context,
+    actions: Arc<Mutex<Vec<Action>>>,
+    bindings: Arc<Mutex<Vec<(HotKey, Action)>>>,
+) -> Result<GlobalHotKeyManager, String> {
     let manager = GlobalHotKeyManager::new().map_err(|e| e.to_string())?;
-    let record = HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyR);
-    let pause = HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyP);
-    manager.register(record).map_err(|e| format!("{RECORD_KEY}: {e}"))?;
-    manager.register(pause).map_err(|e| format!("{PAUSE_KEY}: {e}"))?;
-    let (record_id, pause_id) = (record.id(), pause.id());
     let ctx = ctx.clone();
     GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
         if event.state != HotKeyState::Pressed {
             return;
         }
-        let action = if event.id == record_id {
-            Action::ToggleRecording
-        } else if event.id == pause_id {
-            Action::TogglePause
-        } else {
-            return;
-        };
-        actions.lock().unwrap().push(action);
-        ctx.request_repaint();
+        let action = bindings.lock().unwrap().iter().find(|(hotkey, _)| hotkey.id() == event.id).map(|(_, a)| *a);
+        if let Some(action) = action {
+            actions.lock().unwrap().push(action);
+            ctx.request_repaint();
+        }
     }));
     Ok(manager)
 }
@@ -1113,17 +1614,42 @@ mod tests {
             mic_devices: Vec::new(),
             preview: None,
             rec: RecState::Idle,
+            screenshot: None,
             system: None,
             mic: None,
+            cameras: Vec::new(),
+            camera: None,
+            camera_texture: None,
+            camera_seq: None,
             meters: [0.0; 2],
             texture: None,
             texture_seq: None,
+            picking_region: false,
+            region_drag: None,
             status: None,
             settings: None,
             cpu: CpuMeter { last: None, percent: 0.0 },
             actions: Arc::new(Mutex::new(Vec::new())),
-            _hotkeys: None,
+            hotkey_manager: None,
+            bindings: Arc::new(Mutex::new(Vec::new())),
+            hwnd: None,
+            tray: None,
+            tray_commands: Arc::new(Mutex::new(Vec::new())),
+            hidden: false,
         }
+    }
+
+    #[test]
+    fn a_selection_on_the_preview_maps_to_source_pixels() {
+        // A 200×100 preview of a 1920×960 source.
+        let canvas = Rect::from_min_size(pos2(100.0, 50.0), vec2(200.0, 100.0));
+        let selection = Rect::from_min_max(pos2(150.0, 75.0), pos2(250.0, 125.0));
+        let region = region_from_rect(selection, canvas, (1920, 960)).unwrap();
+        assert_eq!(region, Region { x: 480, y: 240, width: 960, height: 480 });
+        assert_eq!(region_rect(region, canvas, (1920, 960)), selection);
+        // A click without a drag selects nothing.
+        let click = Rect::from_min_max(pos2(150.0, 75.0), pos2(150.5, 75.5));
+        assert_eq!(region_from_rect(click, canvas, (1920, 960)), None);
     }
 
     #[test]

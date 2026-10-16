@@ -5,6 +5,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::camera::CameraConfig;
+use crate::i18n::{Language, tr};
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Quality {
     Low,
@@ -17,9 +20,9 @@ impl Quality {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Low => "Calidad estándar, tamaño de archivo pequeño",
-            Self::Medium => "Alta calidad, tamaño de archivo medio",
-            Self::High => "Calidad indistinguible, tamaño de archivo grande",
+            Self::Low => tr!("Calidad estándar, tamaño de archivo pequeño", "Standard Quality, Small File Size"),
+            Self::Medium => tr!("Alta calidad, tamaño de archivo medio", "High Quality, Medium File Size"),
+            Self::High => tr!("Calidad indistinguible, tamaño de archivo grande", "Indistinguishable Quality, Large File Size"),
         }
     }
 
@@ -49,7 +52,7 @@ impl Resolution {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Native => "Nativa",
+            Self::Native => tr!("Nativa", "Native"),
             Self::P1440 => "1440p",
             Self::P1080 => "1080p",
             Self::P720 => "720p",
@@ -72,9 +75,56 @@ impl Resolution {
     }
 }
 
+/// Part of the source to record, in source pixels.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct Region {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Region {
+    /// Smaller regions are almost certainly a mis-click.
+    const MIN: u32 = 16;
+
+    /// The region clipped to a source of `(w, h)`, with the even dimensions H.264 needs;
+    /// `None` if little or nothing of it is left.
+    pub fn fit(self, (w, h): (u32, u32)) -> Option<Self> {
+        if self.x >= w || self.y >= h {
+            return None;
+        }
+        let width = self.width.min(w - self.x) & !1;
+        let height = self.height.min(h - self.y) & !1;
+        (width >= Self::MIN && height >= Self::MIN).then_some(Self { width, height, ..self })
+    }
+}
+
+/// Global hotkeys as text ("Ctrl+Alt+R"); `None` means unassigned.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Hotkeys {
+    pub record: Option<String>,
+    pub pause: Option<String>,
+    pub screenshot: Option<String>,
+    pub mute_mic: Option<String>,
+}
+
+impl Default for Hotkeys {
+    fn default() -> Self {
+        Self { record: Some("Ctrl+Alt+R".into()), pause: Some("Ctrl+Alt+P".into()), screenshot: None, mute_mic: None }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// `None` follows the Windows display language.
+    pub language: Option<Language>,
+    /// Keep the obs-lite window out of every capture, including its own preview.
+    pub hide_from_capture: bool,
+    /// Minimizing hides the window; the tray icon brings it back.
+    pub minimize_to_tray: bool,
     pub output_dir: PathBuf,
     pub fps: u32,
     pub resolution: Resolution,
@@ -86,15 +136,25 @@ pub struct Config {
     pub mic: bool,
     pub mic_volume: f32,
     pub mic_muted: bool,
+    /// RNNoise noise suppression on the microphone.
+    pub mic_denoise: bool,
     /// WASAPI endpoint IDs; `None` follows the Windows default device.
     pub system_device: Option<String>,
     pub mic_device: Option<String>,
     pub source_label: Option<String>,
+    /// Record only this part of the source.
+    pub region: Option<Region>,
+    /// Webcam overlaid on the recording.
+    pub camera: Option<CameraConfig>,
+    pub hotkeys: Hotkeys,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
+            language: None,
+            hide_from_capture: true,
+            minimize_to_tray: false,
             output_dir: dirs::video_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from(".")),
             fps: 60,
             resolution: Resolution::Native,
@@ -106,9 +166,13 @@ impl Default for Config {
             mic: false,
             mic_volume: 1.0,
             mic_muted: false,
+            mic_denoise: false,
             system_device: None,
             mic_device: None,
             source_label: None,
+            region: None,
+            camera: None,
+            hotkeys: Hotkeys::default(),
         }
     }
 }
@@ -158,6 +222,15 @@ mod tests {
         assert_eq!(Resolution::P1080.apply((1280, 720)), (1280, 720));
         assert_eq!(Resolution::P720.apply((3440, 1440)), (1720, 720));
         assert_eq!(Resolution::Native.apply((1001, 777)), (1000, 776));
+    }
+
+    #[test]
+    fn region_is_clipped_to_the_source_with_even_sides() {
+        let r = Region { x: 100, y: 50, width: 301, height: 2000 };
+        assert_eq!(r.fit((1920, 1080)), Some(Region { x: 100, y: 50, width: 300, height: 1030 }));
+        assert_eq!(r.fit((300, 1080)), Some(Region { x: 100, y: 50, width: 200, height: 1030 }));
+        assert_eq!(r.fit((100, 1080)), None); // starts outside a source that shrank
+        assert_eq!(Region { x: 0, y: 0, width: 10, height: 500 }.fit((1920, 1080)), None);
     }
 
     #[test]

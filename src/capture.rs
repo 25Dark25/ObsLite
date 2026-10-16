@@ -14,10 +14,17 @@ use windows_capture::settings::{
     ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings, MinimumUpdateIntervalSettings,
     SecondaryWindowSettings, Settings,
 };
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+    D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D,
+};
+use windows::core::Interface;
 use windows_capture::window::Window;
 
-use crate::config::{Quality, Resolution};
-use crate::encoder::{Clock, Encoder, EncoderSettings};
+use crate::camera::{CameraSize, Corner};
+use crate::config::{Quality, Region, Resolution};
+use crate::encoder::{Clock, Com, Encoder, EncoderSettings};
+use crate::i18n::tr;
 
 type BoxError = Box<dyn Error + Send + Sync>;
 type Size = (u32, u32);
@@ -44,7 +51,7 @@ pub fn list_sources() -> Vec<Source> {
         let name = m.device_string().unwrap_or_default();
         out.push(Source {
             id: SourceId::Monitor(m.as_raw_hmonitor() as isize),
-            label: format!("Pantalla {} ({w}×{h}) {name}", i + 1).trim_end().to_string(),
+            label: tr!("Pantalla {} ({}×{}) {}", "Display {} ({}×{}) {}", i + 1, w, h, name).trim_end().to_string(),
         });
     }
     let own_pid = std::process::id();
@@ -65,6 +72,17 @@ pub struct RecordConfig {
     pub quality: Quality,
     pub resolution: Resolution,
     pub audio: bool,
+    pub region: Option<Region>,
+    pub overlay: Option<(Corner, CameraSize)>,
+}
+
+/// GPU copy of the newest frame. Windows Graphics Capture only delivers frames when
+/// something changes, so a screenshot reads this instead of waiting for the next one.
+pub struct LastFrame {
+    device: ID3D11Device,
+    context: ID3D11DeviceContext,
+    texture: ID3D11Texture2D,
+    size: Size,
 }
 
 pub struct PreviewFrame {
@@ -84,6 +102,7 @@ pub struct Shared {
     pub encoder: Mutex<Option<Encoder>>,
     /// Capture size and encoded size, known once the encoder exists.
     pub sizes: Mutex<Option<(Size, Size)>>,
+    last_frame: Mutex<Option<Com<LastFrame>>>,
     repaint: Option<eframe::egui::Context>,
 }
 
@@ -97,6 +116,8 @@ struct Flags {
 struct Handler {
     flags: Flags,
     last_preview: Option<Instant>,
+    /// Top-left corner of the recorded region, fixed when the encoder is created.
+    origin: (u32, u32),
 }
 
 impl GraphicsCaptureApiHandler for Handler {
@@ -104,17 +125,25 @@ impl GraphicsCaptureApiHandler for Handler {
     type Error = BoxError;
 
     fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-        Ok(Self { flags: ctx.flags, last_preview: None })
+        Ok(Self { flags: ctx.flags, last_preview: None, origin: (0, 0) })
     }
 
     fn on_frame_arrived(&mut self, frame: &mut Frame, _control: InternalCaptureControl) -> Result<(), Self::Error> {
-        let shared = &self.flags.shared;
+        let shared = self.flags.shared.clone();
         shared.frames.fetch_add(1, Ordering::Relaxed);
+        keep_last_frame(&shared, frame)?;
 
         if let Some(rec) = &self.flags.record {
             let mut encoder = shared.encoder.lock().unwrap();
             if encoder.is_none() {
-                let input = (frame.width() & !1, frame.height() & !1);
+                let full = (frame.width(), frame.height());
+                let input = match rec.region.and_then(|r| r.fit(full)) {
+                    Some(r) => {
+                        self.origin = (r.x, r.y);
+                        (r.width, r.height)
+                    }
+                    None => (full.0 & !1, full.1 & !1),
+                };
                 let output = rec.resolution.apply(input);
                 let fps = self.flags.fps;
                 let created = Encoder::new(
@@ -126,6 +155,7 @@ impl GraphicsCaptureApiHandler for Handler {
                         fps,
                         bitrate: rec.quality.bitrate(output.0, output.1, fps),
                         audio: rec.audio,
+                        overlay: rec.overlay,
                     },
                     shared.clock.clone(),
                     shared.encoder_ready.clone(),
@@ -134,7 +164,7 @@ impl GraphicsCaptureApiHandler for Handler {
                 *shared.sizes.lock().unwrap() = Some((input, output));
             }
             if let Some(enc) = encoder.as_ref() {
-                enc.push_frame(frame);
+                enc.push_frame(frame, self.origin);
             }
         }
 
@@ -210,6 +240,7 @@ impl Session {
             encoder_ready: Arc::new(AtomicBool::new(false)),
             encoder: Mutex::new(None),
             sizes: Mutex::new(None),
+            last_frame: Mutex::new(None),
             repaint,
         });
         let control = match start_with_border(&opts, &shared, DrawBorderSettings::WithoutBorder) {
@@ -223,6 +254,20 @@ impl Session {
     /// The capture thread exited (source closed or handler error).
     pub fn is_finished(&self) -> bool {
         self.control.as_ref().is_none_or(CaptureControl::is_finished)
+    }
+
+    /// Size of the source, once a frame has arrived.
+    pub fn source_size(&self) -> Option<(u32, u32)> {
+        self.shared.last_frame.lock().unwrap().as_ref().map(|l| l.0.size)
+    }
+
+    /// The newest captured frame as RGBA pixels: (width, height, pixels).
+    pub fn snapshot(&self) -> Result<(u32, u32, Vec<u8>), String> {
+        let last = self.shared.last_frame.lock().unwrap();
+        let Some(Com(last)) = last.as_ref() else {
+            return Err(tr!("todavía no hay imagen de la fuente", "there is no image from the source yet").into());
+        };
+        read_back(last).map_err(|e| e.to_string())
     }
 
     /// Stops capturing and hands back the encoder (if recording) so it can be finalized.
@@ -246,6 +291,80 @@ impl Drop for Session {
             let _ = control.stop();
         }
     }
+}
+
+fn keep_last_frame(shared: &Shared, frame: &Frame) -> windows::core::Result<()> {
+    let source = frame.as_raw_texture();
+    let mut desc = D3D11_TEXTURE2D_DESC::default();
+    unsafe { source.GetDesc(&mut desc) };
+    let mut last = shared.last_frame.lock().unwrap();
+    if last.as_ref().is_none_or(|l| l.0.size != (desc.Width, desc.Height)) {
+        let size = (desc.Width, desc.Height);
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        (desc.BindFlags, desc.CPUAccessFlags, desc.MiscFlags) = (0, 0, 0);
+        let mut texture = None;
+        unsafe {
+            frame.device().CreateTexture2D(&desc, None, Some(&mut texture))?;
+            // The UI thread reads the copy back through the same immediate context.
+            let _ = frame.device_context().cast::<ID3D11Multithread>()?.SetMultithreadProtected(true);
+        }
+        let texture = texture.expect("CreateTexture2D returned no texture");
+        let (device, context) = (frame.device().clone(), frame.device_context().clone());
+        *last = Some(Com(LastFrame { device, context, texture, size }));
+    }
+    let last = &last.as_ref().expect("set above").0;
+    unsafe { last.context.CopyResource(&last.texture, source) };
+    Ok(())
+}
+
+fn read_back(last: &LastFrame) -> windows::core::Result<(u32, u32, Vec<u8>)> {
+    let mut desc = D3D11_TEXTURE2D_DESC::default();
+    unsafe { last.texture.GetDesc(&mut desc) };
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+    (desc.BindFlags, desc.MiscFlags) = (0, 0);
+    let mut staging = None;
+    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+    unsafe {
+        last.device.CreateTexture2D(&desc, None, Some(&mut staging))?;
+        let staging = staging.expect("CreateTexture2D returned no texture");
+        last.context.CopyResource(&staging, &last.texture);
+        last.context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
+        let (w, h, pitch) = (desc.Width as usize, desc.Height as usize, mapped.RowPitch as usize);
+        let bgra = std::slice::from_raw_parts(mapped.pData as *const u8, pitch * h);
+        let rgba = bgra_to_rgba(bgra, w, h, pitch);
+        last.context.Unmap(&staging, 0);
+        Ok((desc.Width, desc.Height, rgba))
+    }
+}
+
+/// Converts BGRA rows (`pitch` bytes apart) into tightly packed opaque RGBA.
+fn bgra_to_rgba(bgra: &[u8], width: usize, height: usize, pitch: usize) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for row in bgra.chunks(pitch).take(height) {
+        for px in row[..width * 4].as_chunks::<4>().0 {
+            rgba.extend_from_slice(&[px[2], px[1], px[0], 255]);
+        }
+    }
+    rgba
+}
+
+/// Cuts `region` out of a packed RGBA image that is `width` pixels wide.
+pub fn crop_rgba(rgba: &[u8], width: u32, region: Region) -> Vec<u8> {
+    let (x, w) = (region.x as usize * 4, region.width as usize * 4);
+    let rows = rgba.chunks(width as usize * 4).skip(region.y as usize).take(region.height as usize);
+    rows.flat_map(|row| &row[x..x + w]).copied().collect()
+}
+
+/// Writes an RGBA image as PNG.
+pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
+    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
+    writer.write_image_data(rgba).map_err(|e| e.to_string())?;
+    writer.finish().map_err(|e| e.to_string())
 }
 
 fn start_with_border(
@@ -284,4 +403,41 @@ fn start_with_border(
         )),
     };
     result.map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bgra_rows_with_padding_become_packed_rgba() {
+        // 2×2 image, rows padded to 12 bytes.
+        let bgra = [1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 9, 10, 11, 12, 13, 14, 15, 16, 0, 0, 0, 0];
+        assert_eq!(
+            bgra_to_rgba(&bgra, 2, 2, 12),
+            [3, 2, 1, 255, 7, 6, 5, 255, 11, 10, 9, 255, 15, 14, 13, 255]
+        );
+    }
+
+    #[test]
+    fn crop_keeps_only_the_region() {
+        // 3×2 image whose pixels are numbered 0..6 in the red channel.
+        let rgba: Vec<u8> = (0..6).flat_map(|i| [i, 0, 0, 255]).collect();
+        let region = Region { x: 1, y: 0, width: 2, height: 2 };
+        assert_eq!(crop_rgba(&rgba, 3, region), [1, 0, 0, 255, 2, 0, 0, 255, 4, 0, 0, 255, 5, 0, 0, 255]);
+    }
+
+    #[test]
+    fn png_round_trips() {
+        let path = std::env::temp_dir().join(format!("obs-lite-test-{}.png", std::process::id()));
+        let rgba = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255];
+        write_png(&path, 2, 2, &rgba).unwrap();
+        let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&path).unwrap()));
+        let mut reader = decoder.read_info().unwrap();
+        let mut out = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut out).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!((info.width, info.height), (2, 2));
+        assert_eq!(out, rgba);
+    }
 }

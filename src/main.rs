@@ -1,10 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod i18n;
+
 mod app;
 mod audio;
+mod camera;
 mod capture;
 mod config;
 mod encoder;
+mod hotkeys;
+mod tray;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -70,6 +75,8 @@ fn selftest(args: &[String]) -> Result<(), String> {
                 quality: config::Quality::Medium,
                 resolution,
                 audio: true,
+                region: None,
+                overlay: None,
             }),
         },
         None,
