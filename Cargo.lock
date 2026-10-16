@@ -1446,6 +1446,7 @@ dependencies = [
  "dirs",
  "eframe",
  "global-hotkey",
+ "raw-window-handle",
  "rfd",
  "serde",
  "serde_json",

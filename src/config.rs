@@ -79,6 +79,8 @@ impl Resolution {
 pub struct Config {
     /// `None` follows the Windows display language.
     pub language: Option<Language>,
+    /// Keep the obs-lite window out of every capture, including its own preview.
+    pub hide_from_capture: bool,
     pub output_dir: PathBuf,
     pub fps: u32,
     pub resolution: Resolution,
@@ -100,6 +102,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             language: None,
+            hide_from_capture: true,
             output_dir: dirs::video_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from(".")),
             fps: 60,
             resolution: Resolution::Native,

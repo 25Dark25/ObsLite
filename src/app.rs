@@ -102,6 +102,8 @@ pub struct App {
     cpu: CpuMeter,
     actions: Arc<Mutex<Vec<Action>>>,
     _hotkeys: Option<GlobalHotKeyManager>,
+    /// The main window, for excluding it from capture.
+    hwnd: Option<isize>,
 }
 
 impl App {
@@ -133,7 +135,9 @@ impl App {
             cpu: CpuMeter { last: None, percent: 0.0 },
             actions,
             _hotkeys: hotkeys,
+            hwnd: main_window(cc),
         };
+        app.apply_capture_visibility();
         app.refresh_devices();
         app.restart_input(InputKind::System);
         app.restart_input(InputKind::Microphone);
@@ -404,7 +408,17 @@ impl App {
         if mic_changed {
             self.restart_input(InputKind::Microphone);
         }
+        self.apply_capture_visibility();
         self.config.save();
+    }
+
+    fn apply_capture_visibility(&self) {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE};
+        let Some(hwnd) = self.hwnd else { return };
+        let affinity = if self.config.hide_from_capture { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
+        // Fails before Windows 10 2004; the window then simply stays capturable.
+        let _ = unsafe { SetWindowDisplayAffinity(HWND(hwnd as *mut _), affinity) };
     }
 
     // ------------------------------------------------------------------ main window
@@ -740,6 +754,9 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
                     l.map_or(tr!("Automático (idioma del sistema)", "Automatic (system language)"), Language::name).to_owned()
                 };
                 combo(ui, "language", &mut c.language, &options, name, 260.0);
+                ui.end_row();
+                ui.label(tr!("Captura", "Capture"));
+                ui.checkbox(&mut c.hide_from_capture, tr!("Ocultar obs-lite de la captura de pantalla", "Hide obs-lite from screen capture"));
                 ui.end_row();
             });
         }
@@ -1095,6 +1112,15 @@ fn apply_theme(ctx: &egui::Context) {
     ctx.set_theme(egui::ThemePreference::Dark);
 }
 
+/// The native handle of the main window, if eframe exposes it.
+fn main_window(cc: &eframe::CreationContext<'_>) -> Option<isize> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match cc.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(h) => Some(h.hwnd.get()),
+        _ => None,
+    }
+}
+
 fn register_hotkeys(ctx: &egui::Context, actions: Arc<Mutex<Vec<Action>>>) -> Result<GlobalHotKeyManager, String> {
     let manager = GlobalHotKeyManager::new().map_err(|e| e.to_string())?;
     let record = HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyR);
@@ -1145,6 +1171,7 @@ mod tests {
             cpu: CpuMeter { last: None, percent: 0.0 },
             actions: Arc::new(Mutex::new(Vec::new())),
             _hotkeys: None,
+            hwnd: None,
         }
     }
 
