@@ -268,8 +268,9 @@ impl Encoder {
         })
     }
 
-    /// Copies a captured frame into the next ring texture (capture thread only).
-    pub fn push_frame(&self, frame: &Frame) {
+    /// Copies the part of a captured frame starting at `origin` into the next ring texture
+    /// (capture thread only).
+    pub fn push_frame(&self, frame: &Frame, origin: (u32, u32)) {
         let ring = &self.inner.ring;
         let latest = ring.latest.load(Ordering::Acquire);
         let idx = if latest == usize::MAX { 0 } else { (latest + 1) % RING_SIZE };
@@ -277,14 +278,17 @@ impl Encoder {
         let dst = &ring.textures[idx].0;
         let (w, h) = (frame.width(), frame.height());
         unsafe {
-            if (w, h) == self.input {
+            if origin == (0, 0) && (w, h) == self.input {
                 ctx.CopyResource(dst, frame.as_raw_texture());
             } else {
-                // A resized window: crop or pad with black at the original size.
+                // A region, or a resized window: crop, padding with black what is missing.
                 ctx.ClearRenderTargetView(&ring.targets[idx].0, &[0.0, 0.0, 0.0, 1.0]);
-                let (cw, ch) = (w.min(self.input.0), h.min(self.input.1));
-                let region = D3D11_BOX { left: 0, top: 0, front: 0, right: cw, bottom: ch, back: 1 };
-                ctx.CopySubresourceRegion(dst, 0, 0, 0, 0, frame.as_raw_texture(), 0, Some(&region));
+                let (left, top) = origin;
+                let (right, bottom) = ((left + self.input.0).min(w), (top + self.input.1).min(h));
+                if right > left && bottom > top {
+                    let region = D3D11_BOX { left, top, front: 0, right, bottom, back: 1 };
+                    ctx.CopySubresourceRegion(dst, 0, 0, 0, 0, frame.as_raw_texture(), 0, Some(&region));
+                }
             }
             ctx.Flush();
         }

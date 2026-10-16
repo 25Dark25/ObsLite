@@ -20,7 +20,7 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
 use crate::audio::{self, Device, Input, InputKind, Mixer};
 use crate::capture::{self, RecordConfig, Session, SessionOptions, Source, SourceId};
-use crate::config::{Config, Hotkeys, Quality, Resolution};
+use crate::config::{Config, Hotkeys, Quality, Region, Resolution};
 use crate::hotkeys;
 use crate::i18n::{self, Language, tr};
 
@@ -102,6 +102,9 @@ pub struct App {
     meters: [f32; 2],
     texture: Option<TextureHandle>,
     texture_seq: Option<u64>,
+    /// Choosing a region on the preview, and the drag in progress (start, end).
+    picking_region: bool,
+    region_drag: Option<(egui::Pos2, egui::Pos2)>,
     status: Option<Status>,
     settings: Option<SettingsDialog>,
     cpu: CpuMeter,
@@ -139,6 +142,8 @@ impl App {
             meters: [0.0; 2],
             texture: None,
             texture_seq: None,
+            picking_region: false,
+            region_drag: None,
             status: None,
             settings: None,
             cpu: CpuMeter { last: None, percent: 0.0 },
@@ -213,6 +218,8 @@ impl App {
 
     fn select_source(&mut self, ctx: &egui::Context, id: SourceId) {
         self.selected = Some(id);
+        // A region belongs to the source it was drawn on.
+        self.config.region = None;
         self.config.source_label = self.selected_source().map(|s| s.label.clone());
         self.restart_preview(ctx);
     }
@@ -317,6 +324,7 @@ impl App {
                 quality: self.config.quality,
                 resolution: self.config.resolution,
                 audio: !inputs.is_empty(),
+                region: self.config.region,
             }),
         };
         let session = match Session::start(opts, Some(ctx.clone())) {
@@ -364,10 +372,14 @@ impl App {
         let Some(session) = self.recording_session().or(self.preview.as_ref()) else {
             return self.set_status(tr!("Añade una fuente con el botón + del panel Fuentes.", "Add a source with the + button in the Sources dock."), None, true);
         };
-        let (width, height, rgba) = match session.snapshot() {
+        let (mut width, mut height, mut rgba) = match session.snapshot() {
             Ok(image) => image,
             Err(e) => return self.set_status(tr!("No se pudo hacer la captura: {}", "Could not take the screenshot: {}", e), None, true),
         };
+        if let Some(region) = self.config.region.and_then(|r| r.fit((width, height))) {
+            rgba = capture::crop_rgba(&rgba, width, region);
+            (width, height) = (region.width, region.height);
+        }
         let name = format!("{} {}.png", tr!("Captura", "Screenshot"), chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
         let path = self.config.output_dir.join(name);
         let (tx, rx) = mpsc::channel();
@@ -536,7 +548,8 @@ impl App {
     }
 
     fn preview_area(&mut self, ui: &mut egui::Ui) {
-        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click());
+        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        let source = self.recording_session().or(self.preview.as_ref()).and_then(Session::source_size);
         let mut screenshot = false;
         response.context_menu(|ui| {
             if ui.button(tr!("Hacer captura de pantalla", "Take Screenshot")).clicked() {
@@ -564,6 +577,44 @@ impl App {
             None => {
                 let msg = if self.selected.is_none() { tr!("Añade una fuente con el botón +", "Add a source with the + button") } else { "" };
                 painter.text(canvas.center(), Align2::CENTER_CENTER, msg, FontId::proportional(15.0), TEXT_MUTED);
+            }
+        }
+        let Some(source) = source.filter(|_| self.texture.is_some()) else { return };
+        if self.picking_region {
+            self.pick_region(ui, &response, &painter, canvas, source);
+        } else if let Some(region) = self.config.region.and_then(|r| r.fit(source)) {
+            outline_region(&painter, canvas, region_rect(region, canvas, source));
+        }
+    }
+
+    /// Drag on the preview to choose the region to record; Escape cancels.
+    fn pick_region(&mut self, ui: &egui::Ui, response: &egui::Response, painter: &egui::Painter, canvas: Rect, source: (u32, u32)) {
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            (self.picking_region, self.region_drag) = (false, None);
+            return;
+        }
+        let pointer = response.interact_pointer_pos();
+        if response.drag_started()
+            && let Some(p) = pointer
+        {
+            self.region_drag = Some((p, p));
+        }
+        if let (Some(drag), Some(p)) = (&mut self.region_drag, pointer) {
+            drag.1 = p;
+        }
+        match self.region_drag {
+            Some((start, end)) => {
+                let selection = Rect::from_two_pos(start, end).intersect(canvas);
+                outline_region(painter, canvas, selection);
+                if response.drag_stopped() {
+                    self.config.region = region_from_rect(selection, canvas, source);
+                    (self.picking_region, self.region_drag) = (false, None);
+                }
+            }
+            None => {
+                painter.rect_filled(canvas, 0.0, Color32::from_black_alpha(90));
+                let hint = tr!("Arrastra para elegir la región que se grabará · Esc para cancelar", "Drag to choose the region to record · Esc to cancel");
+                painter.text(canvas.center(), Align2::CENTER_CENTER, hint, FontId::proportional(15.0), Color32::WHITE);
             }
         }
     }
@@ -619,6 +670,16 @@ impl App {
                         if ui.checkbox(&mut self.config.cursor, tr!("Capturar el cursor", "Capture Cursor")).changed() {
                             self.restart_preview(&ctx);
                         }
+                        ui.separator();
+                        if ui.add_enabled(self.selected.is_some(), Button::new(tr!("Seleccionar región…", "Select Region…"))).clicked() {
+                            self.picking_region = true;
+                            ui.close();
+                        }
+                        let whole = Button::new(tr!("Grabar toda la fuente", "Record Whole Source"));
+                        if ui.add_enabled(self.config.region.is_some(), whole).clicked() {
+                            self.config.region = None;
+                            ui.close();
+                        }
                     });
                 });
             });
@@ -629,7 +690,11 @@ impl App {
                         SourceId::Monitor(_) => tr!("Captura de pantalla", "Display Capture"),
                         SourceId::Window(_) => tr!("Captura de ventana", "Window Capture"),
                     };
-                    list_row(ui, &format!("{kind}  ·  {}", source.label));
+                    // Before the label, which is often too long to show in full.
+                    let region = self.config.region.map_or(String::new(), |r| {
+                        format!(" ({} {}×{})", tr!("región", "region"), r.width, r.height)
+                    });
+                    list_row(ui, &format!("{kind}{region}  ·  {}", source.label));
                 }
                 None => {
                     ui.label(RichText::new(tr!("No hay ninguna fuente. Pulsa + para añadir una.", "No sources. Press + to add one.")).color(TEXT_MUTED));
@@ -1021,6 +1086,38 @@ fn channel_gain(volume: f32, muted: bool) -> f32 {
     if muted { 0.0 } else { volume * volume }
 }
 
+/// Where `region` of a `source`-sized image falls on the preview `canvas`.
+fn region_rect(region: Region, canvas: Rect, source: (u32, u32)) -> Rect {
+    let scale = vec2(canvas.width() / source.0 as f32, canvas.height() / source.1 as f32);
+    let min = canvas.min + vec2(region.x as f32, region.y as f32) * scale;
+    Rect::from_min_size(min, vec2(region.width as f32, region.height as f32) * scale)
+}
+
+/// The source region under `selection` on the preview `canvas`.
+fn region_from_rect(selection: Rect, canvas: Rect, source: (u32, u32)) -> Option<Region> {
+    let scale = vec2(source.0 as f32 / canvas.width(), source.1 as f32 / canvas.height());
+    let min = (selection.min - canvas.min) * scale;
+    let size = selection.size() * scale;
+    let px = |v: f32| v.round().max(0.0) as u32;
+    Region { x: px(min.x), y: px(min.y), width: px(size.x), height: px(size.y) }.fit(source)
+}
+
+/// Dims the preview outside `inner` and outlines it.
+fn outline_region(painter: &egui::Painter, canvas: Rect, inner: Rect) {
+    let shade = Color32::from_black_alpha(140);
+    for part in [
+        Rect::from_min_max(canvas.min, pos2(canvas.max.x, inner.min.y)),
+        Rect::from_min_max(pos2(canvas.min.x, inner.max.y), canvas.max),
+        Rect::from_min_max(pos2(canvas.min.x, inner.min.y), pos2(inner.min.x, inner.max.y)),
+        Rect::from_min_max(pos2(inner.max.x, inner.min.y), pos2(canvas.max.x, inner.max.y)),
+    ] {
+        if part.is_positive() {
+            painter.rect_filled(part, 0.0, shade);
+        }
+    }
+    painter.rect_stroke(inner, 0.0, Stroke::new(1.5, PRIMARY_LIGHT), egui::StrokeKind::Inside);
+}
+
 /// An OBS-style dock: titled panel with a border.
 fn dock(ui: &mut egui::Ui, title: &str, size: Vec2, content: impl FnOnce(&mut egui::Ui)) {
     ui.allocate_ui_with_layout(size, Layout::top_down(Align::Min), |ui| {
@@ -1318,6 +1415,8 @@ mod tests {
             meters: [0.0; 2],
             texture: None,
             texture_seq: None,
+            picking_region: false,
+            region_drag: None,
             status: None,
             settings: None,
             cpu: CpuMeter { last: None, percent: 0.0 },
@@ -1326,6 +1425,19 @@ mod tests {
             bindings: Arc::new(Mutex::new(Vec::new())),
             hwnd: None,
         }
+    }
+
+    #[test]
+    fn a_selection_on_the_preview_maps_to_source_pixels() {
+        // A 200×100 preview of a 1920×960 source.
+        let canvas = Rect::from_min_size(pos2(100.0, 50.0), vec2(200.0, 100.0));
+        let selection = Rect::from_min_max(pos2(150.0, 75.0), pos2(250.0, 125.0));
+        let region = region_from_rect(selection, canvas, (1920, 960)).unwrap();
+        assert_eq!(region, Region { x: 480, y: 240, width: 960, height: 480 });
+        assert_eq!(region_rect(region, canvas, (1920, 960)), selection);
+        // A click without a drag selects nothing.
+        let click = Rect::from_min_max(pos2(150.0, 75.0), pos2(150.5, 75.5));
+        assert_eq!(region_from_rect(click, canvas, (1920, 960)), None);
     }
 
     #[test]

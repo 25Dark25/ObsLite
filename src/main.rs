@@ -73,6 +73,7 @@ fn selftest(args: &[String]) -> Result<(), String> {
                 quality: config::Quality::Medium,
                 resolution,
                 audio: true,
+                region: None,
             }),
         },
         None,

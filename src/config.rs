@@ -74,6 +74,31 @@ impl Resolution {
     }
 }
 
+/// Part of the source to record, in source pixels.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct Region {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Region {
+    /// Smaller regions are almost certainly a mis-click.
+    const MIN: u32 = 16;
+
+    /// The region clipped to a source of `(w, h)`, with the even dimensions H.264 needs;
+    /// `None` if little or nothing of it is left.
+    pub fn fit(self, (w, h): (u32, u32)) -> Option<Self> {
+        if self.x >= w || self.y >= h {
+            return None;
+        }
+        let width = self.width.min(w - self.x) & !1;
+        let height = self.height.min(h - self.y) & !1;
+        (width >= Self::MIN && height >= Self::MIN).then_some(Self { width, height, ..self })
+    }
+}
+
 /// Global hotkeys as text ("Ctrl+Alt+R"); `None` means unassigned.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -112,6 +137,8 @@ pub struct Config {
     pub system_device: Option<String>,
     pub mic_device: Option<String>,
     pub source_label: Option<String>,
+    /// Record only this part of the source.
+    pub region: Option<Region>,
     pub hotkeys: Hotkeys,
 }
 
@@ -134,6 +161,7 @@ impl Default for Config {
             system_device: None,
             mic_device: None,
             source_label: None,
+            region: None,
             hotkeys: Hotkeys::default(),
         }
     }
@@ -184,6 +212,15 @@ mod tests {
         assert_eq!(Resolution::P1080.apply((1280, 720)), (1280, 720));
         assert_eq!(Resolution::P720.apply((3440, 1440)), (1720, 720));
         assert_eq!(Resolution::Native.apply((1001, 777)), (1000, 776));
+    }
+
+    #[test]
+    fn region_is_clipped_to_the_source_with_even_sides() {
+        let r = Region { x: 100, y: 50, width: 301, height: 2000 };
+        assert_eq!(r.fit((1920, 1080)), Some(Region { x: 100, y: 50, width: 300, height: 1030 }));
+        assert_eq!(r.fit((300, 1080)), Some(Region { x: 100, y: 50, width: 200, height: 1030 }));
+        assert_eq!(r.fit((100, 1080)), None); // starts outside a source that shrank
+        assert_eq!(Region { x: 0, y: 0, width: 10, height: 500 }.fit((1920, 1080)), None);
     }
 
     #[test]

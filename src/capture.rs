@@ -21,7 +21,7 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::core::Interface;
 use windows_capture::window::Window;
 
-use crate::config::{Quality, Resolution};
+use crate::config::{Quality, Region, Resolution};
 use crate::encoder::{Clock, Com, Encoder, EncoderSettings};
 use crate::i18n::tr;
 
@@ -71,6 +71,7 @@ pub struct RecordConfig {
     pub quality: Quality,
     pub resolution: Resolution,
     pub audio: bool,
+    pub region: Option<Region>,
 }
 
 /// GPU copy of the newest frame. Windows Graphics Capture only delivers frames when
@@ -113,6 +114,8 @@ struct Flags {
 struct Handler {
     flags: Flags,
     last_preview: Option<Instant>,
+    /// Top-left corner of the recorded region, fixed when the encoder is created.
+    origin: (u32, u32),
 }
 
 impl GraphicsCaptureApiHandler for Handler {
@@ -120,18 +123,25 @@ impl GraphicsCaptureApiHandler for Handler {
     type Error = BoxError;
 
     fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-        Ok(Self { flags: ctx.flags, last_preview: None })
+        Ok(Self { flags: ctx.flags, last_preview: None, origin: (0, 0) })
     }
 
     fn on_frame_arrived(&mut self, frame: &mut Frame, _control: InternalCaptureControl) -> Result<(), Self::Error> {
-        let shared = &self.flags.shared;
+        let shared = self.flags.shared.clone();
         shared.frames.fetch_add(1, Ordering::Relaxed);
-        keep_last_frame(shared, frame)?;
+        keep_last_frame(&shared, frame)?;
 
         if let Some(rec) = &self.flags.record {
             let mut encoder = shared.encoder.lock().unwrap();
             if encoder.is_none() {
-                let input = (frame.width() & !1, frame.height() & !1);
+                let full = (frame.width(), frame.height());
+                let input = match rec.region.and_then(|r| r.fit(full)) {
+                    Some(r) => {
+                        self.origin = (r.x, r.y);
+                        (r.width, r.height)
+                    }
+                    None => (full.0 & !1, full.1 & !1),
+                };
                 let output = rec.resolution.apply(input);
                 let fps = self.flags.fps;
                 let created = Encoder::new(
@@ -151,7 +161,7 @@ impl GraphicsCaptureApiHandler for Handler {
                 *shared.sizes.lock().unwrap() = Some((input, output));
             }
             if let Some(enc) = encoder.as_ref() {
-                enc.push_frame(frame);
+                enc.push_frame(frame, self.origin);
             }
         }
 
@@ -243,6 +253,11 @@ impl Session {
         self.control.as_ref().is_none_or(CaptureControl::is_finished)
     }
 
+    /// Size of the source, once a frame has arrived.
+    pub fn source_size(&self) -> Option<(u32, u32)> {
+        self.shared.last_frame.lock().unwrap().as_ref().map(|l| l.0.size)
+    }
+
     /// The newest captured frame as RGBA pixels: (width, height, pixels).
     pub fn snapshot(&self) -> Result<(u32, u32, Vec<u8>), String> {
         let last = self.shared.last_frame.lock().unwrap();
@@ -331,6 +346,13 @@ fn bgra_to_rgba(bgra: &[u8], width: usize, height: usize, pitch: usize) -> Vec<u
     rgba
 }
 
+/// Cuts `region` out of a packed RGBA image that is `width` pixels wide.
+pub fn crop_rgba(rgba: &[u8], width: u32, region: Region) -> Vec<u8> {
+    let (x, w) = (region.x as usize * 4, region.width as usize * 4);
+    let rows = rgba.chunks(width as usize * 4).skip(region.y as usize).take(region.height as usize);
+    rows.flat_map(|row| &row[x..x + w]).copied().collect()
+}
+
 /// Writes an RGBA image as PNG.
 pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
     let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
@@ -392,6 +414,14 @@ mod tests {
             bgra_to_rgba(&bgra, 2, 2, 12),
             [3, 2, 1, 255, 7, 6, 5, 255, 11, 10, 9, 255, 15, 14, 13, 255]
         );
+    }
+
+    #[test]
+    fn crop_keeps_only_the_region() {
+        // 3×2 image whose pixels are numbered 0..6 in the red channel.
+        let rgba: Vec<u8> = (0..6).flat_map(|i| [i, 0, 0, 255]).collect();
+        let region = Region { x: 1, y: 0, width: 2, height: 2 };
+        assert_eq!(crop_rgba(&rgba, 3, region), [1, 0, 0, 255, 2, 0, 0, 255, 4, 0, 0, 255, 5, 0, 0, 255]);
     }
 
     #[test]
