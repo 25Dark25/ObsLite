@@ -74,6 +74,22 @@ impl Resolution {
     }
 }
 
+/// Global hotkeys as text ("Ctrl+Alt+R"); `None` means unassigned.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Hotkeys {
+    pub record: Option<String>,
+    pub pause: Option<String>,
+    pub screenshot: Option<String>,
+    pub mute_mic: Option<String>,
+}
+
+impl Default for Hotkeys {
+    fn default() -> Self {
+        Self { record: Some("Ctrl+Alt+R".into()), pause: Some("Ctrl+Alt+P".into()), screenshot: None, mute_mic: None }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -96,6 +112,7 @@ pub struct Config {
     pub system_device: Option<String>,
     pub mic_device: Option<String>,
     pub source_label: Option<String>,
+    pub hotkeys: Hotkeys,
 }
 
 impl Default for Config {
@@ -117,6 +134,7 @@ impl Default for Config {
             system_device: None,
             mic_device: None,
             source_label: None,
+            hotkeys: Hotkeys::default(),
         }
     }
 }

@@ -7,6 +7,7 @@ mod audio;
 mod capture;
 mod config;
 mod encoder;
+mod hotkeys;
 
 use std::path::PathBuf;
 use std::time::Duration;

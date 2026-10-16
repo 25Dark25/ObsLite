@@ -15,17 +15,16 @@ use eframe::egui::{
     self, Align, Align2, Button, Color32, ComboBox, CornerRadius, FontId, Layout, Margin, Rect, RichText, Sense,
     Slider, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2,
 };
-use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
 use crate::audio::{self, Device, Input, InputKind, Mixer};
 use crate::capture::{self, RecordConfig, Session, SessionOptions, Source, SourceId};
-use crate::config::{Config, Quality, Resolution};
+use crate::config::{Config, Hotkeys, Quality, Resolution};
+use crate::hotkeys;
 use crate::i18n::{self, Language, tr};
 
 const PREVIEW_FPS: u32 = 5;
-const RECORD_KEY: &str = "Ctrl+Alt+R";
-const PAUSE_KEY: &str = "Ctrl+Alt+P";
 const DOCK_HEIGHT: f32 = 236.0;
 
 // OBS "Yami" theme palette.
@@ -49,6 +48,8 @@ const GREEN_DIM: Color32 = Color32::from_rgb(0x17, 0x64, 0x1E);
 enum Action {
     ToggleRecording,
     TogglePause,
+    Screenshot,
+    ToggleMicMute,
 }
 
 enum RecState {
@@ -76,6 +77,8 @@ enum SettingsPage {
 struct SettingsDialog {
     draft: Config,
     page: SettingsPage,
+    /// The hotkey row waiting for a key combination.
+    capturing: Option<usize>,
 }
 
 /// Process CPU usage as a share of all cores, like the OBS status bar.
@@ -103,7 +106,9 @@ pub struct App {
     settings: Option<SettingsDialog>,
     cpu: CpuMeter,
     actions: Arc<Mutex<Vec<Action>>>,
-    _hotkeys: Option<GlobalHotKeyManager>,
+    hotkey_manager: Option<GlobalHotKeyManager>,
+    /// Registered hotkeys and their actions, shared with the hotkey event handler.
+    bindings: Arc<Mutex<Vec<(HotKey, Action)>>>,
     /// The main window, for excluding it from capture.
     hwnd: Option<isize>,
 }
@@ -114,7 +119,8 @@ impl App {
         let config = Config::load();
         i18n::set(config.language.unwrap_or_else(Language::system));
         let actions = Arc::new(Mutex::new(Vec::new()));
-        let (hotkeys, hotkey_error) = match register_hotkeys(&cc.egui_ctx, actions.clone()) {
+        let bindings = Arc::new(Mutex::new(Vec::new()));
+        let (hotkey_manager, hotkey_error) = match hotkey_manager(&cc.egui_ctx, actions.clone(), bindings.clone()) {
             Ok(manager) => (Some(manager), None),
             Err(e) => (None, Some(e)),
         };
@@ -137,7 +143,8 @@ impl App {
             settings: None,
             cpu: CpuMeter { last: None, percent: 0.0 },
             actions,
-            _hotkeys: hotkeys,
+            hotkey_manager,
+            bindings,
             hwnd: main_window(cc),
         };
         app.apply_capture_visibility();
@@ -146,6 +153,7 @@ impl App {
         app.restart_input(InputKind::Microphone);
         app.refresh_sources();
         app.restart_preview(&cc.egui_ctx);
+        app.bind_hotkeys();
         if let Some(e) = hotkey_error {
             app.set_status(tr!("Atajos globales no disponibles: {}", "Global hotkeys unavailable: {}", e), None, true);
         }
@@ -274,6 +282,13 @@ impl App {
                 {
                     let clock = &session.shared.clock;
                     clock.set_paused(!clock.is_paused());
+                }
+            }
+            Action::Screenshot => self.take_screenshot(ctx),
+            Action::ToggleMicMute => {
+                self.config.mic_muted = !self.config.mic_muted;
+                if let Some(mic) = &self.mic {
+                    mic.shared.set_gain(channel_gain(self.config.mic_volume, self.config.mic_muted));
                 }
             }
         }
@@ -426,7 +441,9 @@ impl App {
 
     fn open_settings(&mut self) {
         self.refresh_devices();
-        self.settings = Some(SettingsDialog { draft: self.config.clone(), page: SettingsPage::General });
+        self.settings = Some(SettingsDialog { draft: self.config.clone(), page: SettingsPage::General, capturing: None });
+        // Registered combinations never reach the window, so they could not be typed again.
+        self.unbind_hotkeys();
     }
 
     fn apply_settings(&mut self, new: Config) {
@@ -448,6 +465,40 @@ impl App {
         }
         self.apply_capture_visibility();
         self.config.save();
+    }
+
+    /// Registers the configured hotkeys, reporting the ones another application already uses.
+    fn bind_hotkeys(&mut self) {
+        let Some(manager) = &self.hotkey_manager else { return };
+        let Hotkeys { record, pause, screenshot, mute_mic } = &self.config.hotkeys;
+        let wanted = [
+            (record, Action::ToggleRecording),
+            (pause, Action::TogglePause),
+            (screenshot, Action::Screenshot),
+            (mute_mic, Action::ToggleMicMute),
+        ];
+        let mut bindings = Vec::new();
+        let mut failed = Vec::new();
+        for (text, action) in wanted {
+            let Some(text) = text else { continue };
+            match hotkeys::parse(text) {
+                Some(hotkey) if manager.register(hotkey).is_ok() => bindings.push((hotkey, action)),
+                _ => failed.push(text.clone()),
+            }
+        }
+        *self.bindings.lock().unwrap() = bindings;
+        if !failed.is_empty() {
+            let list = failed.join(", ");
+            self.set_status(tr!("Atajos no disponibles (¿los usa otra aplicación?): {}", "Hotkeys unavailable (used by another application?): {}", list), None, true);
+        }
+    }
+
+    fn unbind_hotkeys(&mut self) {
+        let bindings = std::mem::take(&mut *self.bindings.lock().unwrap());
+        if let Some(manager) = &self.hotkey_manager {
+            let hotkeys: Vec<HotKey> = bindings.iter().map(|(hotkey, _)| *hotkey).collect();
+            let _ = manager.unregister_all(&hotkeys);
+        }
     }
 
     fn apply_capture_visibility(&self) {
@@ -641,19 +692,19 @@ impl App {
             ui.spacing_mut().item_spacing.x = 4.0;
             match &self.rec {
                 RecState::Idle => {
-                    if ui.add_sized([full, height], Button::new(tr!("Iniciar Grabación", "Start Recording"))).on_hover_text(RECORD_KEY).clicked() {
+                    if ui.add_sized([full, height], Button::new(tr!("Iniciar Grabación", "Start Recording"))).on_hover_text(hotkey_hint(&self.config.hotkeys.record)).clicked() {
                         self.handle(&ctx, Action::ToggleRecording);
                     }
                 }
                 RecState::Recording { .. } => {
                     let stop = Button::new(RichText::new(tr!("Detener Grabación", "Stop Recording")).color(Color32::WHITE)).fill(PRIMARY);
-                    if ui.add_sized([full - height - 4.0, height], stop).on_hover_text(RECORD_KEY).clicked() {
+                    if ui.add_sized([full - height - 4.0, height], stop).on_hover_text(hotkey_hint(&self.config.hotkeys.record)).clicked() {
                         self.handle(&ctx, Action::ToggleRecording);
                     }
                     let paused = self.is_paused();
                     let tip = if paused { tr!("Reanudar Grabación", "Resume Recording") } else { tr!("Pausar Grabación", "Pause Recording") };
                     if icon_button(ui, if paused { Icon::Play } else { Icon::Pause }, height, self.is_live(), paused)
-                        .on_hover_text(format!("{tip} ({PAUSE_KEY})"))
+                        .on_hover_text(format!("{tip} {}", hotkey_hint(&self.config.hotkeys.pause)))
                         .clicked()
                     {
                         self.handle(&ctx, Action::TogglePause);
@@ -779,24 +830,30 @@ impl App {
                     }
                 });
             });
-        if response.should_close() && decision.is_none() {
+        // Escape while waiting for a hotkey cancels that, not the dialog.
+        let capturing = self.settings.as_ref().is_some_and(|d| d.capturing.is_some());
+        if response.should_close() && decision.is_none() && !capturing {
             decision = Some(false);
         }
         match decision {
             Some(true) => {
                 let draft = self.settings.take().expect("dialog is open").draft;
                 self.apply_settings(draft);
+                self.bind_hotkeys();
             }
-            Some(false) => self.settings = None,
+            Some(false) => {
+                self.settings = None;
+                self.bind_hotkeys();
+            }
             None => {}
         }
     }
 }
 
 fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Device], mic: &[Device]) {
-    let c = &mut dialog.draft;
+    let SettingsDialog { draft: c, page, capturing } = dialog;
     let grid = |id: &str| egui::Grid::new(id).num_columns(2).spacing([16.0, 10.0]);
-    match dialog.page {
+    match page {
         SettingsPage::General => {
             group_title(ui, "General");
             grid("general").show(ui, |ui| {
@@ -863,13 +920,19 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
         }
         SettingsPage::Hotkeys => {
             group_title(ui, tr!("Atajos globales", "Global Hotkeys"));
+            let Hotkeys { record, pause, screenshot, mute_mic } = &mut c.hotkeys;
+            let rows = [
+                (tr!("Iniciar / Detener Grabación", "Start / Stop Recording"), record),
+                (tr!("Pausar / Reanudar Grabación", "Pause / Resume Recording"), pause),
+                (tr!("Hacer captura de pantalla", "Take Screenshot"), screenshot),
+                (tr!("Silenciar / Activar Mic/Aux", "Mute / Unmute Mic/Aux"), mute_mic),
+            ];
             grid("hotkeys").show(ui, |ui| {
-                ui.label(tr!("Iniciar / Detener Grabación", "Start / Stop Recording"));
-                ui.label(RichText::new(RECORD_KEY).monospace());
-                ui.end_row();
-                ui.label(tr!("Pausar / Reanudar Grabación", "Pause / Resume Recording"));
-                ui.label(RichText::new(PAUSE_KEY).monospace());
-                ui.end_row();
+                for (i, (label, slot)) in rows.into_iter().enumerate() {
+                    ui.label(label);
+                    hotkey_field(ui, i, slot, capturing);
+                    ui.end_row();
+                }
             });
             ui.add_space(6.0);
             ui.label(RichText::new(tr!("Funcionan aunque obs-lite esté minimizado o en segundo plano.", "They work even when obs-lite is minimized or in the background.")).small().color(TEXT_MUTED));
@@ -1173,27 +1236,63 @@ fn main_window(cc: &eframe::CreationContext<'_>) -> Option<isize> {
     }
 }
 
-fn register_hotkeys(ctx: &egui::Context, actions: Arc<Mutex<Vec<Action>>>) -> Result<GlobalHotKeyManager, String> {
+/// "(Ctrl+Alt+R)" for tooltips, or nothing when unassigned.
+fn hotkey_hint(hotkey: &Option<String>) -> String {
+    hotkey.as_ref().map_or(String::new(), |h| format!("({h})"))
+}
+
+/// OBS-style hotkey field: click it, then press the combination; Escape cancels, × clears.
+fn hotkey_field(ui: &mut egui::Ui, row: usize, slot: &mut Option<String>, capturing: &mut Option<usize>) {
+    ui.horizontal(|ui| {
+        let waiting = *capturing == Some(row);
+        let text = if waiting {
+            tr!("Pulsa una combinación…", "Press a combination…").to_owned()
+        } else {
+            slot.clone().unwrap_or_else(|| tr!("(ninguno)", "(none)").to_owned())
+        };
+        let button = Button::new(RichText::new(text).monospace()).min_size(vec2(220.0, 24.0));
+        if ui.add(button.fill(if waiting { PRIMARY } else { GREY4 })).clicked() {
+            *capturing = Some(row);
+        }
+        if ui.add_enabled(slot.is_some(), Button::new("×")).on_hover_text(tr!("Quitar", "Clear")).clicked() {
+            *slot = None;
+        }
+        if waiting {
+            // Ctrl, Alt and Shift arrive as key presses of their own before the actual key.
+            let pressed = ui.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => Some(None),
+                    egui::Event::Key { key, pressed: true, modifiers, .. } => hotkeys::format(*modifiers, *key).map(Some),
+                    _ => None,
+                })
+            });
+            if let Some(text) = pressed {
+                if text.is_some() {
+                    *slot = text;
+                }
+                *capturing = None;
+            }
+        }
+    });
+}
+
+/// Creates the hotkey manager and routes presses of the bound hotkeys to `actions`.
+fn hotkey_manager(
+    ctx: &egui::Context,
+    actions: Arc<Mutex<Vec<Action>>>,
+    bindings: Arc<Mutex<Vec<(HotKey, Action)>>>,
+) -> Result<GlobalHotKeyManager, String> {
     let manager = GlobalHotKeyManager::new().map_err(|e| e.to_string())?;
-    let record = HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyR);
-    let pause = HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyP);
-    manager.register(record).map_err(|e| format!("{RECORD_KEY}: {e}"))?;
-    manager.register(pause).map_err(|e| format!("{PAUSE_KEY}: {e}"))?;
-    let (record_id, pause_id) = (record.id(), pause.id());
     let ctx = ctx.clone();
     GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
         if event.state != HotKeyState::Pressed {
             return;
         }
-        let action = if event.id == record_id {
-            Action::ToggleRecording
-        } else if event.id == pause_id {
-            Action::TogglePause
-        } else {
-            return;
-        };
-        actions.lock().unwrap().push(action);
-        ctx.request_repaint();
+        let action = bindings.lock().unwrap().iter().find(|(hotkey, _)| hotkey.id() == event.id).map(|(_, a)| *a);
+        if let Some(action) = action {
+            actions.lock().unwrap().push(action);
+            ctx.request_repaint();
+        }
     }));
     Ok(manager)
 }
@@ -1223,7 +1322,8 @@ mod tests {
             settings: None,
             cpu: CpuMeter { last: None, percent: 0.0 },
             actions: Arc::new(Mutex::new(Vec::new())),
-            _hotkeys: None,
+            hotkey_manager: None,
+            bindings: Arc::new(Mutex::new(Vec::new())),
             hwnd: None,
         }
     }
