@@ -1,6 +1,6 @@
 # obs-lite
 
-Lightweight screen recorder for Windows: a single ~5.8 MB `.exe`, with no bundled runtime or browser.
+Lightweight screen recorder for Windows: a single ~7 MB `.exe`, with no bundled runtime or browser.
 The interface follows OBS Studio, so OBS users find everything where they expect it.
 
 | | Idle (preview + audio) | Recording 1080p60 + audio |
@@ -31,20 +31,26 @@ Measured on Windows 11 with an RTX 4060 Laptop GPU; your numbers will vary.
 
 ## Interface
 
-Same layout as OBS Studio, its dark *Yami* palette and its Spanish wording:
+Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spanish or English
+(it follows the Windows display language; change it in Settings › General):
 
-- **Preview** on top and, below it, the **Fuentes** (Sources), **Mezclador de audio** (Audio Mixer)
-  and **Controles** (Controls) docks.
-- **Fuentes › +**: *Captura de pantalla* (display capture) or *Captura de ventana* (window capture).
-  *Propiedades*: capture the cursor.
-- **Mixer**: desktop audio and *Mic/Aux*, each with a meter, volume slider and mute button
+- **Preview** on top and, below it, the **Sources**, **Audio Mixer** and **Controls** docks.
+  Right-click the preview to take a screenshot.
+- **Sources › +**: *Display Capture*, *Window Capture* or *Video Capture Device* (a webcam shown in a
+  corner of the recording). **Properties**: capture the cursor, *Select Region…* to record only part
+  of the source, and the webcam's corner and size.
+- **Audio Mixer**: desktop audio and *Mic/Aux*, each with a meter, volume slider and mute button
   (mute also works while recording).
-- **Controls**: *Iniciar Grabación* (with a pause button next to it while recording), *Ajustes*
-  (Settings) and *Salir* (Exit).
-- **Settings**: *Salida* (recording path and quality), *Audio* (global devices), *Vídeo*
-  (scaled output resolution and FPS) and *Atajos* (hotkeys). *Aceptar* applies, *Cancelar* discards.
+- **Controls**: *Start Recording* (with a pause button next to it while recording), *Settings* and
+  *Exit*.
+- **Settings**: *General* (language, minimize to tray, hide obs-lite from capture), *Output*
+  (recording path and quality), *Audio* (devices, microphone noise suppression), *Video* (scaled
+  output resolution and FPS) and *Hotkeys* (click a field and press the combination). *OK* applies,
+  *Cancel* discards.
 - **Status bar**: messages, CPU usage, dropped frames and the recording indicator with elapsed time.
-- **Archivo › Mostrar grabaciones** opens the output folder.
+- **File**: *Take Screenshot* and *Show Recordings*.
+- **System tray icon**: grey when idle, in colour while recording. Its menu starts/stops and pauses
+  recording, takes a screenshot, shows the window or exits; a left click shows the window.
 
 ## Features
 
@@ -57,8 +63,16 @@ Same layout as OBS Studio, its dark *Yami* palette and its Spanish wording:
   as dropped frames.
 - **Pause and resume** without gaps: paused time never reaches the file, in video or audio.
 - **Hardware scaling** to 1440p, 1080p or 720p (downscale only, aspect ratio preserved).
-- **Global hotkeys**: `Ctrl+Alt+R` starts/stops recording and `Ctrl+Alt+P` pauses/resumes,
-  from any application.
+- **Region recording**: drag a rectangle on the preview to record only that part (cropped on the GPU).
+- **Webcam overlay** (picture-in-picture) in any corner, in three sizes.
+- **Screenshots** as full-resolution PNG, with the region and webcam applied.
+- **Microphone noise suppression** with RNNoise, like OBS's filter.
+- **Configurable global hotkeys** for start/stop, pause/resume, screenshot and muting Mic/Aux, from
+  any application. Defaults: `Ctrl+Alt+R` and `Ctrl+Alt+P`.
+- **Hidden from capture**: like OBS's option, the obs-lite window never appears in recordings or
+  in its own preview.
+- **System tray icon**, with an option to minimize to the tray.
+- **Spanish and English** interface.
 - Low-cost preview (5 fps).
 
 ## Configuration
@@ -66,8 +80,9 @@ Same layout as OBS Studio, its dark *Yami* palette and its Spanish wording:
 Everything is set from the interface (*Ajustes* and the docks) and saved in
 `%APPDATA%\obs-lite\settings.json`. Delete that file to go back to the defaults: first display,
 cursor captured, desktop audio on, microphone off, 60 fps, native resolution, medium quality,
-output to the *Videos* folder. Recordings are named after their start time
-(`2026-10-16 13-45-02.mp4`).
+output to the *Videos* folder, hotkeys `Ctrl+Alt+R` and `Ctrl+Alt+P`, obs-lite hidden from capture.
+Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and screenshots likewise
+(`Screenshot 2026-10-16 13-45-02.png`, or `Captura …` in Spanish).
 
 ## Known limitations
 
@@ -76,7 +91,12 @@ output to the *Videos* folder. Recordings are named after their start time
 - An MP4 cannot be recovered if the process dies mid-recording.
 - While the Windows session is locked, Windows delivers no new frames.
 - If a window is resized while recording, the image is cropped or padded with black.
-- No streaming, scenes, multiple sources at once, filters or other codecs: obs-lite only records.
+- One display or window source plus an optional webcam. No streaming, scenes, video filters or other
+  codecs: obs-lite only records.
+- Minimize to tray keeps the window minimized and removes its taskbar button (a hidden window would
+  stop handling hotkeys); it still appears in Alt+Tab.
+- Noise suppression downmixes the microphone to mono.
+- Hotkeys need Ctrl or Alt (F-keys excepted), and are off while Settings is open.
 
 ## Verifying a release
 

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- English interface, following the Windows display language or chosen in Settings › General.
+- Option to hide obs-lite from screen capture, like OBS Studio's (on by default).
+- PNG screenshots of the source at full resolution: File menu, preview context menu or hotkey.
+- Configurable global hotkeys, including taking a screenshot and muting Mic/Aux.
+- Recording a region of the source, chosen by dragging on the preview.
+- Microphone noise suppression (RNNoise).
+- System tray icon showing the recording state, with an option to minimize to the tray.
+- Webcam overlay (Video Capture Device source) in a chosen corner and size.
+
+### Fixed
+
+- A `settings.json` saved with a UTF-8 BOM is no longer replaced by the defaults.
+
 ## [0.1.0] - 2026-10-16
 
 ### Added

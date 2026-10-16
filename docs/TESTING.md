@@ -21,6 +21,21 @@ cargo test --locked
 | `app::mute_silences_regardless_of_volume` | Mute wins over any volume. |
 | `app::volume_uses_a_squared_curve` | The volume slider maps to gain as `volume²`. |
 | `app::exit_waits_for_the_recording_being_saved` | Closing the app while a recording is being saved waits for the MP4 to be finalized. |
+| `i18n::every_spanish_variant_is_spanish` | The UI is Spanish for every Spanish Windows locale and English otherwise. |
+| `hotkeys::text_round_trips_to_a_registrable_hotkey` | "Ctrl+Alt+R" in the settings becomes the right registered hotkey and back. |
+| `hotkeys::keys_that_would_break_typing_are_rejected` | A hotkey needs Ctrl or Alt unless it is an F-key. |
+| `hotkeys::a_modifier_alone_is_not_a_hotkey` | Pressing Ctrl or Alt alone does not end hotkey capture. |
+| `hotkeys::invalid_text_is_rejected` | Malformed hotkeys in the settings are ignored. |
+| `capture::bgra_rows_with_padding_become_packed_rgba` | Screenshot read-back handles padded GPU rows. |
+| `capture::png_round_trips` | Screenshots are valid PNG with the right pixels. |
+| `capture::crop_keeps_only_the_region` | Screenshots are cropped to the region. |
+| `config::region_is_clipped_to_the_source_with_even_sides` | A region survives the source changing size and keeps even sides for H.264. |
+| `app::a_selection_on_the_preview_maps_to_source_pixels` | A rectangle dragged on the preview becomes the right region, and a click selects nothing. |
+| `audio::denoiser_keeps_the_stream_length_in_whole_frames` | Noise suppression neither loses nor invents samples. |
+| `audio::denoiser_keeps_silence_silent` | Noise suppression adds nothing to silence. |
+| `camera::overlay_sits_in_the_corner_with_the_camera_aspect` | The webcam overlay's position and size. |
+| `camera::resize_keeps_flat_colour_and_identity` | The webcam scaling. |
+| `tray::idle_icon_is_grey_with_the_same_alpha` | The idle tray icon. |
 | `app::saved_message_survives_a_source_that_is_gone` | When the recorded window is closed, the "saved" message and file link stay, and the source is deselected. |
 
 ## Manual
@@ -42,6 +57,18 @@ provide, so the pipeline is tested by hand before each release. Build with
 7. **Exit while recording**: close the window during a recording; the file must play.
 8. **Settings**: change values and press *Cancelar* (nothing changes), then *Aceptar* (they apply
    and survive a restart).
+9. **Language**: switch between Español and English in *General*; the whole UI and the source names
+   change at once.
+10. **Hide from capture**: with the option on, a screenshot of the desktop must not show the window.
+11. **Screenshot**: from the preview's context menu, the File menu and a hotkey; check the PNG.
+12. **Hotkeys**: assign a combination to each action, press them with another application focused.
+13. **Region**: select a region, record a few seconds and take a screenshot; both must be the
+    region's size and content.
+14. **Noise suppression**: compare the microphone's noise floor in a quiet room with it off and on.
+15. **Tray**: minimize to tray, record with the hotkeys, start/stop from the tray menu, restore with
+    a left click.
+16. **Webcam**: add it, record a static screen for a few seconds (the camera must keep moving), try
+    each corner and size, take a screenshot, remove it (the camera light must go off).
 
 Check each MP4's duration, resolution, frame rate and audio track in its *Properties › Details*
 tab or with `ffprobe`.
@@ -63,5 +90,18 @@ and 8 on commit `b6cdad1` plus the settings BOM fix:
 | 8. Settings *Aceptar* / *Cancelar* | *Cancelar* kept 30 fps after picking 60; *Aceptar* wrote `fps: 30` to `settings.json` at once and the next recording was 30 fps |
 | Release workflow artifact (`b6cdad1`), `--selftest 3` | Hashes match the run log; 2.73 s, 1080p60, 0 dropped frames |
 | Resource use | Idle ~85 MB private / 0.3 % CPU; recording 1080p60 ~180 MB / 1.1 % CPU |
+
+2026-10-16, Windows 11, RTX 4060 Laptop GPU, Rust 1.99, `features` branch (steps 9–16):
+
+| Step | Result |
+|---|---|
+| 9. Language | English and Spanish switch live; source label "Pantalla 1" / "Display 1" follows |
+| 10. Hide from capture | A GDI screenshot of the desktop shows what is behind the window |
+| 11. Screenshot | Context menu and `Ctrl+Alt+S`: 1920×1080 PNG with correct colours |
+| 12. Hotkeys | `Ctrl+Alt+S` and `Ctrl+Alt+M` assigned by pressing them; both worked; a stray "Ctrl+ControlLeft" capture was found and fixed (test added) |
+| 13. Region | 840×504 region: recording 840×504 at 60 fps, screenshot 840×504 with the selected content |
+| 14. Noise suppression | Built-in microphone, quiet room: noise floor about −76 dBFS off, −105 dBFS on |
+| 15. Tray | Taskbar button removed when minimized; hotkey recording while minimized (3.82 s); tray menu start/stop (5.44 s); left click restores |
+| 16. Webcam | Camera capture checked alone: 31 frames in 3 s at 1280×720, no error. **Not yet checked in the running app** (the session was locked) |
 
 Not tested at all: Intel and AMD encoders, Windows 10, multiple monitors, HDR displays.
