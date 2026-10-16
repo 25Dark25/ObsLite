@@ -18,6 +18,7 @@ use windows_capture::window::Window;
 
 use crate::config::{Quality, Resolution};
 use crate::encoder::{Clock, Encoder, EncoderSettings};
+use crate::i18n::tr;
 
 type BoxError = Box<dyn Error + Send + Sync>;
 type Size = (u32, u32);
@@ -44,7 +45,7 @@ pub fn list_sources() -> Vec<Source> {
         let name = m.device_string().unwrap_or_default();
         out.push(Source {
             id: SourceId::Monitor(m.as_raw_hmonitor() as isize),
-            label: format!("Pantalla {} ({w}×{h}) {name}", i + 1).trim_end().to_string(),
+            label: tr!("Pantalla {} ({}×{}) {}", "Display {} ({}×{}) {}", i + 1, w, h, name).trim_end().to_string(),
         });
     }
     let own_pid = std::process::id();

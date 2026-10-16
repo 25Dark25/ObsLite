@@ -44,6 +44,7 @@ use windows::core::{HSTRING, Interface};
 use windows_capture::frame::Frame;
 
 use crate::audio::{CHANNELS, SAMPLE_RATE};
+use crate::i18n::tr;
 
 /// A few textures so the capture never overwrites the one the encoder is reading.
 const RING_SIZE: usize = 3;
@@ -248,7 +249,7 @@ impl Encoder {
         if !prepared.CanTranscode()? {
             let reason = prepared.FailureReason()?;
             let _ = std::fs::remove_file(&s.path);
-            return Err(format!("el sistema no puede codificar con esta configuración ({reason:?})").into());
+            return Err(tr!("el sistema no puede codificar con esta configuración ({:?})", "the system cannot encode with these settings ({:?})", reason).into());
         }
         // The transcoder and output stream must outlive the transcode operation.
         let job = Com((transcoder, stream, prepared));

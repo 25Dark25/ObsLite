@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::{Language, tr};
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Quality {
     Low,
@@ -17,9 +19,9 @@ impl Quality {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Low => "Calidad estándar, tamaño de archivo pequeño",
-            Self::Medium => "Alta calidad, tamaño de archivo medio",
-            Self::High => "Calidad indistinguible, tamaño de archivo grande",
+            Self::Low => tr!("Calidad estándar, tamaño de archivo pequeño", "Standard Quality, Small File Size"),
+            Self::Medium => tr!("Alta calidad, tamaño de archivo medio", "High Quality, Medium File Size"),
+            Self::High => tr!("Calidad indistinguible, tamaño de archivo grande", "Indistinguishable Quality, Large File Size"),
         }
     }
 
@@ -49,7 +51,7 @@ impl Resolution {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Native => "Nativa",
+            Self::Native => tr!("Nativa", "Native"),
             Self::P1440 => "1440p",
             Self::P1080 => "1080p",
             Self::P720 => "720p",
@@ -75,6 +77,8 @@ impl Resolution {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// `None` follows the Windows display language.
+    pub language: Option<Language>,
     pub output_dir: PathBuf,
     pub fps: u32,
     pub resolution: Resolution,
@@ -95,6 +99,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            language: None,
             output_dir: dirs::video_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from(".")),
             fps: 60,
             resolution: Resolution::Native,

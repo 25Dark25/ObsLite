@@ -21,6 +21,7 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use crate::audio::{self, Device, Input, InputKind, Mixer};
 use crate::capture::{self, RecordConfig, Session, SessionOptions, Source, SourceId};
 use crate::config::{Config, Quality, Resolution};
+use crate::i18n::{self, Language, tr};
 
 const PREVIEW_FPS: u32 = 5;
 const RECORD_KEY: &str = "Ctrl+Alt+R";
@@ -64,13 +65,14 @@ struct Status {
 
 #[derive(Clone, Copy, PartialEq)]
 enum SettingsPage {
+    General,
     Output,
     Audio,
     Video,
     Hotkeys,
 }
 
-/// The Settings dialog edits a copy; "Aceptar" applies it, "Cancelar" discards it.
+/// The Settings dialog edits a copy; tr!("Aceptar", "OK") applies it, tr!("Cancelar", "Cancel") discards it.
 struct SettingsDialog {
     draft: Config,
     page: SettingsPage,
@@ -106,6 +108,7 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         apply_theme(&cc.egui_ctx);
         let config = Config::load();
+        i18n::set(config.language.unwrap_or_else(Language::system));
         let actions = Arc::new(Mutex::new(Vec::new()));
         let (hotkeys, hotkey_error) = match register_hotkeys(&cc.egui_ctx, actions.clone()) {
             Ok(manager) => (Some(manager), None),
@@ -137,7 +140,7 @@ impl App {
         app.refresh_sources();
         app.restart_preview(&cc.egui_ctx);
         if let Some(e) = hotkey_error {
-            app.set_status(format!("Atajos globales no disponibles: {e}"), None, true);
+            app.set_status(tr!("Atajos globales no disponibles: {}", "Global hotkeys unavailable: {}", e), None, true);
         }
         app
     }
@@ -237,7 +240,7 @@ impl App {
         };
         match Session::start(opts, Some(ctx.clone())) {
             Ok(s) => self.preview = Some(s),
-            Err(e) => self.source_lost(format!("No se pudo capturar la fuente: {e}")),
+            Err(e) => self.source_lost(tr!("No se pudo capturar la fuente: {}", "Could not capture the source: {}", e)),
         }
     }
 
@@ -271,10 +274,10 @@ impl App {
 
     fn start_recording(&mut self, ctx: &egui::Context) {
         let Some(source) = self.selected else {
-            return self.set_status("Añade una fuente con el botón + del panel Fuentes.", None, true);
+            return self.set_status(tr!("Añade una fuente con el botón + del panel Fuentes.", "Add a source with the + button in the Sources dock."), None, true);
         };
         if let Err(e) = std::fs::create_dir_all(&self.config.output_dir) {
-            return self.set_status(format!("No se puede usar la ruta de grabación: {e}"), None, true);
+            return self.set_status(tr!("No se puede usar la ruta de grabación: {}", "Cannot use the recording path: {}", e), None, true);
         }
         // One capture session at a time: the recording session also feeds the preview.
         self.preview = None;
@@ -298,7 +301,7 @@ impl App {
             Ok(s) => s,
             Err(e) => {
                 self.restart_preview(ctx);
-                return self.set_status(format!("No se pudo iniciar la grabación: {e}"), None, true);
+                return self.set_status(tr!("No se pudo iniciar la grabación: {}", "Could not start recording: {}", e), None, true);
             }
         };
         let mixer = (!inputs.is_empty()).then(|| {
@@ -325,13 +328,13 @@ impl App {
         thread::spawn(move || {
             let result = match encoder {
                 Some(enc) => enc.finish().map(|()| path),
-                None => Err(stop_error.unwrap_or_else(|| "no se capturó ningún fotograma".into())),
+                None => Err(stop_error.unwrap_or_else(|| tr!("no se capturó ningún fotograma", "no frames were captured").into())),
             };
             let _ = tx.send(result);
             ctx2.request_repaint();
         });
         self.rec = RecState::Saving(rx);
-        self.set_status(reason.unwrap_or_else(|| "Guardando grabación…".into()), None, false);
+        self.set_status(reason.unwrap_or_else(|| tr!("Guardando grabación…", "Saving recording…").into()), None, false);
     }
 
     /// Background bookkeeping; runs even while the window is minimized.
@@ -348,16 +351,16 @@ impl App {
             // Before the status: if the source is gone, its error must not hide where the file went.
             self.restart_preview(ctx);
             match result {
-                Ok(path) => self.set_status(format!("Grabación guardada en '{}'", path.display()), Some(path), false),
-                Err(e) => self.set_status(format!("Error al guardar la grabación: {e}"), None, true),
+                Ok(path) => self.set_status(tr!("Grabación guardada en '{}'", "Recording saved to '{}'", path.display()), Some(path), false),
+                Err(e) => self.set_status(tr!("Error al guardar la grabación: {}", "Error saving the recording: {}", e), None, true),
             }
         }
 
         if self.recording_session().is_some_and(Session::is_finished) {
-            return self.stop_recording(ctx, Some("La fuente dejó de estar disponible; guardando…".into()));
+            return self.stop_recording(ctx, Some(tr!("La fuente dejó de estar disponible; guardando…", "The source is no longer available; saving…").into()));
         }
         if self.preview.as_ref().is_some_and(Session::is_finished) {
-            self.source_lost("La fuente ya no está disponible. Añade otra con el botón +.".into());
+            self.source_lost(tr!("La fuente ya no está disponible. Añade otra con el botón +.", "The source is no longer available. Add another one with the + button.").into());
         }
         self.cpu.update();
     }
@@ -381,7 +384,7 @@ impl App {
 
     fn open_settings(&mut self) {
         self.refresh_devices();
-        self.settings = Some(SettingsDialog { draft: self.config.clone(), page: SettingsPage::Output });
+        self.settings = Some(SettingsDialog { draft: self.config.clone(), page: SettingsPage::General });
     }
 
     fn apply_settings(&mut self, new: Config) {
@@ -389,6 +392,12 @@ impl App {
         let c = &self.config;
         let system_changed = (old.system_audio, &old.system_device) != (c.system_audio, &c.system_device);
         let mic_changed = (old.mic, &old.mic_device) != (c.mic, &c.mic_device);
+        if old.language != c.language {
+            i18n::set(c.language.unwrap_or_else(Language::system));
+            // Source names are translated ("Pantalla 1" / "Display 1").
+            self.refresh_sources();
+            self.config.source_label = self.selected_source().map(|s| s.label.clone());
+        }
         if system_changed {
             self.restart_input(InputKind::System);
         }
@@ -402,17 +411,17 @@ impl App {
 
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("Archivo", |ui| {
-                if ui.button("Mostrar grabaciones").clicked() {
+            ui.menu_button(tr!("Archivo", "File"), |ui| {
+                if ui.button(tr!("Mostrar grabaciones", "Show Recordings")).clicked() {
                     let _ = std::process::Command::new("explorer").arg(&self.config.output_dir).spawn();
                     ui.close();
                 }
-                if ui.button("Ajustes").clicked() {
+                if ui.button(tr!("Ajustes", "Settings")).clicked() {
                     self.open_settings();
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Salir").clicked() {
+                if ui.button(tr!("Salir", "Exit")).clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
@@ -436,7 +445,7 @@ impl App {
                 painter.image(texture.id(), canvas, uv, Color32::WHITE);
             }
             None => {
-                let msg = if self.selected.is_none() { "Añade una fuente con el botón +" } else { "" };
+                let msg = if self.selected.is_none() { tr!("Añade una fuente con el botón +", "Add a source with the + button") } else { "" };
                 painter.text(canvas.center(), Align2::CENTER_CENTER, msg, FontId::proportional(15.0), TEXT_MUTED);
             }
         }
@@ -448,9 +457,9 @@ impl App {
         let height = ui.available_height();
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
-            dock(ui, "Fuentes", vec2(width * 0.30, height), |ui| self.sources_dock(ui));
-            dock(ui, "Mezclador de audio", vec2(width * 0.44, height), |ui| self.mixer_dock(ui));
-            dock(ui, "Controles", vec2(width * 0.26, height), |ui| self.controls_dock(ui));
+            dock(ui, tr!("Fuentes", "Sources"), vec2(width * 0.30, height), |ui| self.sources_dock(ui));
+            dock(ui, tr!("Mezclador de audio", "Audio Mixer"), vec2(width * 0.44, height), |ui| self.mixer_dock(ui));
+            dock(ui, tr!("Controles", "Controls"), vec2(width * 0.26, height), |ui| self.controls_dock(ui));
         });
     }
 
@@ -462,14 +471,14 @@ impl App {
                 ui.horizontal(|ui| {
                     let add = ui.menu_button(RichText::new(" + ").strong(), |ui| {
                         let mut chosen = None;
-                        ui.menu_button("Captura de pantalla", |ui| {
+                        ui.menu_button(tr!("Captura de pantalla", "Display Capture"), |ui| {
                             for s in self.sources.iter().filter(|s| matches!(s.id, SourceId::Monitor(_))) {
                                 if ui.button(&s.label).clicked() {
                                     chosen = Some(s.id);
                                 }
                             }
                         });
-                        ui.menu_button("Captura de ventana", |ui| {
+                        ui.menu_button(tr!("Captura de ventana", "Window Capture"), |ui| {
                             egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
                                 for s in self.sources.iter().filter(|s| matches!(s.id, SourceId::Window(_))) {
                                     if ui.button(&s.label).clicked() {
@@ -488,9 +497,9 @@ impl App {
                         self.select_source(&ctx, id);
                         ui.close();
                     }
-                    add.response.on_hover_text("Añadir fuente");
-                    ui.menu_button("Propiedades", |ui| {
-                        if ui.checkbox(&mut self.config.cursor, "Capturar el cursor").changed() {
+                    add.response.on_hover_text(tr!("Añadir fuente", "Add source"));
+                    ui.menu_button(tr!("Propiedades", "Properties"), |ui| {
+                        if ui.checkbox(&mut self.config.cursor, tr!("Capturar el cursor", "Capture Cursor")).changed() {
                             self.restart_preview(&ctx);
                         }
                     });
@@ -500,20 +509,20 @@ impl App {
             ui.with_layout(Layout::top_down(Align::Min), |ui| match self.selected_source() {
                 Some(source) => {
                     let kind = match source.id {
-                        SourceId::Monitor(_) => "Captura de pantalla",
-                        SourceId::Window(_) => "Captura de ventana",
+                        SourceId::Monitor(_) => tr!("Captura de pantalla", "Display Capture"),
+                        SourceId::Window(_) => tr!("Captura de ventana", "Window Capture"),
                     };
                     list_row(ui, &format!("{kind}  ·  {}", source.label));
                 }
                 None => {
-                    ui.label(RichText::new("No hay ninguna fuente. Pulsa + para añadir una.").color(TEXT_MUTED));
+                    ui.label(RichText::new(tr!("No hay ninguna fuente. Pulsa + para añadir una.", "No sources. Press + to add one.")).color(TEXT_MUTED));
                 }
             });
         });
     }
 
     fn mixer_dock(&mut self, ui: &mut egui::Ui) {
-        let rows = [(InputKind::System, "Audio del escritorio"), (InputKind::Microphone, "Mic/Aux")];
+        let rows = [(InputKind::System, tr!("Audio del escritorio", "Desktop Audio")), (InputKind::Microphone, "Mic/Aux")];
         let mut any = false;
         for (i, (kind, label)) in rows.into_iter().enumerate() {
             let (volume, muted, input) = match kind {
@@ -542,7 +551,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.spacing_mut().slider_width = (ui.available_width() - 40.0).max(60.0);
                 let changed = ui.add(Slider::new(volume, 0.0..=1.0).show_value(false)).changed();
-                let tip = if *muted { "Quitar silencio" } else { "Silenciar" };
+                let tip = if *muted { tr!("Quitar silencio", "Unmute") } else { tr!("Silenciar", "Mute") };
                 let toggled = mute_button(ui, *muted).on_hover_text(tip).clicked();
                 if toggled {
                     *muted = !*muted;
@@ -554,7 +563,7 @@ impl App {
             ui.add_space(8.0);
         }
         if !any {
-            ui.label(RichText::new("No hay dispositivos de audio activos.\nActívalos en Ajustes › Audio.").color(TEXT_MUTED));
+            ui.label(RichText::new(tr!("No hay dispositivos de audio activos.\nActívalos en Ajustes › Audio.", "No active audio devices.\nEnable them in Settings › Audio.")).color(TEXT_MUTED));
         }
     }
 
@@ -566,17 +575,17 @@ impl App {
             ui.spacing_mut().item_spacing.x = 4.0;
             match &self.rec {
                 RecState::Idle => {
-                    if ui.add_sized([full, height], Button::new("Iniciar Grabación")).on_hover_text(RECORD_KEY).clicked() {
+                    if ui.add_sized([full, height], Button::new(tr!("Iniciar Grabación", "Start Recording"))).on_hover_text(RECORD_KEY).clicked() {
                         self.handle(&ctx, Action::ToggleRecording);
                     }
                 }
                 RecState::Recording { .. } => {
-                    let stop = Button::new(RichText::new("Detener Grabación").color(Color32::WHITE)).fill(PRIMARY);
+                    let stop = Button::new(RichText::new(tr!("Detener Grabación", "Stop Recording")).color(Color32::WHITE)).fill(PRIMARY);
                     if ui.add_sized([full - height - 4.0, height], stop).on_hover_text(RECORD_KEY).clicked() {
                         self.handle(&ctx, Action::ToggleRecording);
                     }
                     let paused = self.is_paused();
-                    let tip = if paused { "Reanudar Grabación" } else { "Pausar Grabación" };
+                    let tip = if paused { tr!("Reanudar Grabación", "Resume Recording") } else { tr!("Pausar Grabación", "Pause Recording") };
                     if icon_button(ui, if paused { Icon::Play } else { Icon::Pause }, height, self.is_live(), paused)
                         .on_hover_text(format!("{tip} ({PAUSE_KEY})"))
                         .clicked()
@@ -585,16 +594,16 @@ impl App {
                     }
                 }
                 RecState::Saving(_) => {
-                    ui.add_enabled(false, Button::new("Guardando…").min_size(vec2(full, height)));
+                    ui.add_enabled(false, Button::new(tr!("Guardando…", "Saving…")).min_size(vec2(full, height)));
                 }
             }
         });
         ui.add_space(2.0);
-        if ui.add_sized([full, height], Button::new("Ajustes")).clicked() {
+        if ui.add_sized([full, height], Button::new(tr!("Ajustes", "Settings"))).clicked() {
             self.open_settings();
         }
         ui.add_space(2.0);
-        if ui.add_sized([full, height], Button::new("Salir")).clicked() {
+        if ui.add_sized([full, height], Button::new(tr!("Salir", "Exit"))).clicked() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
@@ -607,7 +616,7 @@ impl App {
                     egui::Label::new(RichText::new(&status.text).small().color(color)).truncate().sense(Sense::click()),
                 );
                 if let Some(file) = &status.file
-                    && label.on_hover_text("Mostrar en la carpeta").clicked()
+                    && label.on_hover_text(tr!("Mostrar en la carpeta", "Show in folder")).clicked()
                 {
                     let _ = std::process::Command::new("explorer").arg("/select,").arg(file).spawn();
                 }
@@ -628,7 +637,7 @@ impl App {
         let shared = &session.shared;
         if !shared.encoder_ready.load(Ordering::Acquire) {
             // Hardware encoder start-up takes 0.2–1 s (more when cold); nothing is recorded yet.
-            ui.label(RichText::new("Preparando…").small().color(TEXT_MUTED));
+            ui.label(RichText::new(tr!("Preparando…", "Starting…")).small().color(TEXT_MUTED));
             ui.spinner();
             return;
         }
@@ -643,8 +652,8 @@ impl App {
             && lagged > 0
         {
             let pct = lagged as f64 * 100.0 / (encoded + lagged).max(1) as f64;
-            ui.label(RichText::new(format!("Fotogramas perdidos {lagged} ({pct:.1}%)")).small().color(YELLOW))
-                .on_hover_text("El equipo no da abasto: prueba a bajar la resolución o los FPS en Ajustes › Vídeo");
+            ui.label(RichText::new(tr!("Fotogramas perdidos {} ({:.1}%)", "Dropped frames {} ({:.1}%)", lagged, pct)).small().color(YELLOW))
+                .on_hover_text(tr!("El equipo no da abasto: prueba a bajar la resolución o los FPS en Ajustes › Vídeo", "This computer can't keep up: try a lower resolution or FPS in Settings › Video"));
         }
     }
 
@@ -658,17 +667,18 @@ impl App {
             .frame(egui::Frame::new().fill(GREY7).stroke(Stroke::new(1.0, GREY4)).corner_radius(6).inner_margin(12))
             .show(ctx, |ui| {
                 ui.set_width(660.0);
-                ui.heading("Ajustes");
+                ui.heading(tr!("Ajustes", "Settings"));
                 ui.add_space(8.0);
                 // Fixed body size: a modal has unbounded height, so nothing may grow to fill it.
                 let body = 300.0;
                 ui.horizontal_top(|ui| {
                     ui.allocate_ui_with_layout(vec2(130.0, body), Layout::top_down(Align::Min), |ui| {
                         for (page, name) in [
-                            (SettingsPage::Output, "Salida"),
+                            (SettingsPage::General, "General"),
+                            (SettingsPage::Output, tr!("Salida", "Output")),
                             (SettingsPage::Audio, "Audio"),
-                            (SettingsPage::Video, "Vídeo"),
-                            (SettingsPage::Hotkeys, "Atajos"),
+                            (SettingsPage::Video, tr!("Vídeo", "Video")),
+                            (SettingsPage::Hotkeys, tr!("Atajos", "Hotkeys")),
                         ] {
                             let selected = dialog.page == page;
                             let button = Button::new(name)
@@ -684,7 +694,7 @@ impl App {
                     ui.allocate_ui_with_layout(vec2(ui.available_width(), body), Layout::top_down(Align::Min), |ui| {
                         ui.set_min_height(body);
                         if recording && dialog.page != SettingsPage::Hotkeys {
-                            ui.label(RichText::new("Detén la grabación para cambiar estos ajustes.").color(YELLOW));
+                            ui.label(RichText::new(tr!("Detén la grabación para cambiar estos ajustes.", "Stop recording to change these settings.")).color(YELLOW));
                             ui.add_space(6.0);
                         }
                         ui.add_enabled_ui(!recording, |ui| {
@@ -694,10 +704,10 @@ impl App {
                 });
                 ui.add_space(10.0);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add(Button::new("Cancelar").min_size(vec2(90.0, 26.0))).clicked() {
+                    if ui.add(Button::new(tr!("Cancelar", "Cancel")).min_size(vec2(90.0, 26.0))).clicked() {
                         decision = Some(false);
                     }
-                    let ok = Button::new(RichText::new("Aceptar").color(Color32::WHITE)).fill(PRIMARY);
+                    let ok = Button::new(RichText::new(tr!("Aceptar", "OK")).color(Color32::WHITE)).fill(PRIMARY);
                     if ui.add(ok.min_size(vec2(90.0, 26.0))).clicked() {
                         decision = Some(true);
                     }
@@ -721,67 +731,79 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
     let c = &mut dialog.draft;
     let grid = |id: &str| egui::Grid::new(id).num_columns(2).spacing([16.0, 10.0]);
     match dialog.page {
+        SettingsPage::General => {
+            group_title(ui, "General");
+            grid("general").show(ui, |ui| {
+                ui.label(tr!("Idioma", "Language"));
+                let options = [None, Some(Language::Spanish), Some(Language::English)];
+                let name = |l: Option<Language>| {
+                    l.map_or(tr!("Automático (idioma del sistema)", "Automatic (system language)"), Language::name).to_owned()
+                };
+                combo(ui, "language", &mut c.language, &options, name, 260.0);
+                ui.end_row();
+            });
+        }
         SettingsPage::Output => {
-            group_title(ui, "Grabación");
+            group_title(ui, tr!("Grabación", "Recording"));
             grid("output").show(ui, |ui| {
-                ui.label("Ruta de grabación");
+                ui.label(tr!("Ruta de grabación", "Recording Path"));
                 ui.horizontal(|ui| {
                     let mut path = c.output_dir.display().to_string();
                     if ui.add(egui::TextEdit::singleline(&mut path).desired_width(290.0)).changed() {
                         c.output_dir = PathBuf::from(path);
                     }
-                    if ui.button("Examinar").clicked()
+                    if ui.button(tr!("Examinar", "Browse")).clicked()
                         && let Some(dir) = rfd::FileDialog::new().set_directory(&c.output_dir).pick_folder()
                     {
                         c.output_dir = dir;
                     }
                 });
                 ui.end_row();
-                ui.label("Calidad de grabación");
+                ui.label(tr!("Calidad de grabación", "Recording Quality"));
                 combo(ui, "quality", &mut c.quality, &Quality::ALL, |q| q.label().into(), 360.0);
                 ui.end_row();
-                ui.label("Formato de grabación");
+                ui.label(tr!("Formato de grabación", "Recording Format"));
                 ui.label("MP4");
                 ui.end_row();
-                ui.label("Codificador");
+                ui.label(tr!("Codificador", "Encoder"));
                 ui.label("Hardware (H.264)");
                 ui.end_row();
             });
         }
         SettingsPage::Audio => {
-            group_title(ui, "Dispositivos de audio globales");
+            group_title(ui, tr!("Dispositivos de audio globales", "Global Audio Devices"));
             grid("audio").show(ui, |ui| {
-                ui.label("Audio del escritorio");
+                ui.label(tr!("Audio del escritorio", "Desktop Audio"));
                 device_combo(ui, "sysdev", &mut c.system_audio, &mut c.system_device, system);
                 ui.end_row();
-                ui.label("Dispositivo de audio Mic/auxiliar");
+                ui.label(tr!("Dispositivo de audio Mic/auxiliar", "Mic/Auxiliary Audio"));
                 device_combo(ui, "micdev", &mut c.mic, &mut c.mic_device, mic);
                 ui.end_row();
             });
         }
         SettingsPage::Video => {
-            group_title(ui, "Vídeo");
+            group_title(ui, tr!("Vídeo", "Video"));
             grid("video").show(ui, |ui| {
-                ui.label("Resolución de salida (Escalada)");
+                ui.label(tr!("Resolución de salida (Escalada)", "Output (Scaled) Resolution"));
                 combo(ui, "res", &mut c.resolution, &Resolution::ALL, |r| r.label().into(), 200.0);
                 ui.end_row();
-                ui.label("Valores comunes de FPS");
+                ui.label(tr!("Valores comunes de FPS", "Common FPS Values"));
                 combo(ui, "fps", &mut c.fps, &[30, 60], |f| f.to_string(), 200.0);
                 ui.end_row();
             });
         }
         SettingsPage::Hotkeys => {
-            group_title(ui, "Atajos globales");
+            group_title(ui, tr!("Atajos globales", "Global Hotkeys"));
             grid("hotkeys").show(ui, |ui| {
-                ui.label("Iniciar / Detener Grabación");
+                ui.label(tr!("Iniciar / Detener Grabación", "Start / Stop Recording"));
                 ui.label(RichText::new(RECORD_KEY).monospace());
                 ui.end_row();
-                ui.label("Pausar / Reanudar Grabación");
+                ui.label(tr!("Pausar / Reanudar Grabación", "Pause / Resume Recording"));
                 ui.label(RichText::new(PAUSE_KEY).monospace());
                 ui.end_row();
             });
             ui.add_space(6.0);
-            ui.label(RichText::new("Funcionan aunque obs-lite esté minimizado o en segundo plano.").small().color(TEXT_MUTED));
+            ui.label(RichText::new(tr!("Funcionan aunque obs-lite esté minimizado o en segundo plano.", "They work even when obs-lite is minimized or in the background.")).small().color(TEXT_MUTED));
         }
     }
 }
@@ -958,7 +980,7 @@ fn paint_icon(painter: &egui::Painter, icon: Icon, c: egui::Pos2, s: f32, color:
     }
 }
 
-/// Square button with a drawn icon (the pause button next to "Detener Grabación").
+/// Square button with a drawn icon (the pause button next to tr!("Detener Grabación", "Stop Recording")).
 fn icon_button(ui: &mut egui::Ui, icon: Icon, size: f32, enabled: bool, checked: bool) -> egui::Response {
     let button = Button::new("").min_size(vec2(size, size)).fill(if checked { PRIMARY } else { GREY4 });
     let response = ui.add_enabled(enabled, button);
@@ -1012,21 +1034,21 @@ fn combo<T: Copy + PartialEq>(
 
 /// OBS-style device picker: "(Por defecto)", "Deshabilitado" or a specific device.
 fn device_combo(ui: &mut egui::Ui, id: &str, enabled: &mut bool, device: &mut Option<String>, devices: &[Device]) {
-    const DEFAULT: &str = "(Por defecto)";
-    const DISABLED: &str = "Deshabilitado";
+    let default = tr!("(Por defecto)", "Default");
+    let disabled = tr!("Deshabilitado", "Disabled");
     let current = if !*enabled {
-        DISABLED.to_owned()
+        disabled.to_owned()
     } else {
         device
             .as_ref()
             .and_then(|id| devices.iter().find(|d| &d.id == id))
-            .map_or(DEFAULT.to_owned(), |d| d.name.clone())
+            .map_or(default.to_owned(), |d| d.name.clone())
     };
     ComboBox::from_id_salt(id).width(330.0).truncate().selected_text(current).show_ui(ui, |ui| {
-        if ui.selectable_label(*enabled && device.is_none(), DEFAULT).clicked() {
+        if ui.selectable_label(*enabled && device.is_none(), default).clicked() {
             (*enabled, *device) = (true, None);
         }
-        if ui.selectable_label(!*enabled, DISABLED).clicked() {
+        if ui.selectable_label(!*enabled, disabled).clicked() {
             *enabled = false;
         }
         for d in devices {
