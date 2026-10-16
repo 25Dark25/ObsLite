@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-17
+
 ### Added
 
 - English interface, following the Windows display language or chosen in Settings › General.
@@ -41,5 +43,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Minimum supported Rust version: 1.95.
 - Releases ship `THIRD-PARTY-LICENSES.html` with the licenses of the bundled crates.
 
-[Unreleased]: https://github.com/25Dark25/obs-lite/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/25Dark25/obs-lite/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/25Dark25/obs-lite/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/25Dark25/obs-lite/releases/tag/v0.1.0
