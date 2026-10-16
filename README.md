@@ -23,9 +23,9 @@ Measured on Windows 11 with an RTX 4060 Laptop GPU; your numbers will vary.
 
 ## Quick start
 
-1. Download `obs-lite.exe` from [Releases](https://github.com/25Dark25/obs-lite/releases) and
-   [verify it](#verifying-a-release).
-2. Run it. There is nothing to install.
+1. Download `obs-lite-X.Y.Z-windows-x64.zip` from [Releases](https://github.com/25Dark25/obs-lite/releases)
+   and [verify it](#verifying-a-release).
+2. Unzip it anywhere and run `obs-lite.exe`. There is nothing to install.
 3. Press *Iniciar Grabación* (or `Ctrl+Alt+R`). By default it records the first display Windows
    reports and desktop audio at 60 fps to your *Videos* folder.
 
@@ -80,7 +80,7 @@ output to the *Videos* folder. Recordings are named after their start time
 
 ## Verifying a release
 
-Releases are signed with this OpenPGP key:
+Each release zip has a detached signature (`.asc`) made with this OpenPGP key:
 
 ```
 A7FC EDEA D7E6 C343 7312  284A 442D A687 E0FF 73EE
@@ -94,17 +94,17 @@ A7FC EDEA D7E6 C343 7312  284A 442D A687 E0FF 73EE
    gpg --fingerprint A7FCEDEAD7E6C3437312284A442DA687E0FF73EE
    ```
 
-2. Verify the detached signature of each file you downloaded, then its hash against
-   `SHA256SUMS` (also signed):
+2. Verify the signature of the zip:
 
    ```sh
-   gpg --verify obs-lite.exe.asc obs-lite.exe
-   gpg --verify SHA256SUMS.asc SHA256SUMS
-   sha256sum --check --ignore-missing SHA256SUMS
+   gpg --verify obs-lite-0.1.0-windows-x64.zip.asc obs-lite-0.1.0-windows-x64.zip
    ```
 
-   On Windows without `sha256sum`, compare the output of
-   `Get-FileHash obs-lite.exe -Algorithm SHA256` with the line in `SHA256SUMS`.
+   The output must say `Good signature` and show the fingerprint above.
+
+3. Optionally, compare the zip's SHA-256 with the one in the release notes:
+   `sha256sum obs-lite-0.1.0-windows-x64.zip`, or on Windows
+   `Get-FileHash obs-lite-0.1.0-windows-x64.zip -Algorithm SHA256`.
 
 `gpg` ships with [Gpg4win](https://gpg4win.org/) and with Git for Windows.
 
