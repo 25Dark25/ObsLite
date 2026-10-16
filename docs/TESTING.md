@@ -48,7 +48,8 @@ tab or with `ffprobe`.
 
 ### Last results
 
-2026-10-16, commit `96413f0`, Windows 11, RTX 4060 Laptop GPU, Rust 1.99:
+2026-10-16, Windows 11, RTX 4060 Laptop GPU, Rust 1.99. Steps 1–4 and 6 on commit `96413f0`; steps 5, 7
+and 8 on commit `b6cdad1` plus the settings BOM fix:
 
 | Step | Result |
 |---|---|
@@ -56,10 +57,11 @@ tab or with `ffprobe`.
 | 1. Self-test with pause, 720p | 3.65 s, 1280×720, 60 fps |
 | 2. Interface flow | Valid file; status bar shows the saved path |
 | 4. Hotkeys: record, pause 2 s, resume, stop | 5.63 s file (pause excluded) |
-| 5. Window shrunk, grown, then closed | Recording stopped on close; valid 6.52 s file, 0 dropped frames |
+| 5. Window shrunk, grown, then closed | Recording stopped on close; valid file (7.03 s, 626×392, 30 fps); status bar kept *Grabación guardada en …*; source deselected |
 | 6. Every desktop and microphone device (2 + 2) | No errors; signal on the active devices |
-| 7. Exit while recording | File finalized; app exits in 0.2 s |
-| 8. Settings *Aceptar* / *Cancelar* | **Not tested** (dialog checked visually only) |
+| 7. Exit while recording, and right after *Detener* (while saving) | File finalized in both cases (3.67 s, 1080p30); app exits in 0.2 s |
+| 8. Settings *Aceptar* / *Cancelar* | *Cancelar* kept 30 fps after picking 60; *Aceptar* wrote `fps: 30` to `settings.json` at once and the next recording was 30 fps |
+| Release workflow artifact (`b6cdad1`), `--selftest 3` | Hashes match the run log; 2.73 s, 1080p60, 0 dropped frames |
 | Resource use | Idle ~85 MB private / 0.3 % CPU; recording 1080p60 ~180 MB / 1.1 % CPU |
 
 Not tested at all: Intel and AMD encoders, Windows 10, multiple monitors, HDR displays.
