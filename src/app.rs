@@ -237,8 +237,18 @@ impl App {
         };
         match Session::start(opts, Some(ctx.clone())) {
             Ok(s) => self.preview = Some(s),
-            Err(e) => self.set_status(format!("No se pudo capturar la fuente: {e}"), None, true),
+            Err(e) => self.source_lost(format!("No se pudo capturar la fuente: {e}")),
         }
+    }
+
+    /// The selected source cannot be captured (e.g. its window was closed): stop showing
+    /// it as the source and drop its last frame from the preview.
+    fn source_lost(&mut self, message: String) {
+        self.preview = None;
+        self.selected = None;
+        self.texture = None;
+        self.texture_seq = None;
+        self.set_status(message, None, true);
     }
 
     fn handle(&mut self, ctx: &egui::Context, action: Action) {
@@ -287,8 +297,8 @@ impl App {
         let session = match Session::start(opts, Some(ctx.clone())) {
             Ok(s) => s,
             Err(e) => {
-                self.set_status(format!("No se pudo iniciar la grabación: {e}"), None, true);
-                return self.restart_preview(ctx);
+                self.restart_preview(ctx);
+                return self.set_status(format!("No se pudo iniciar la grabación: {e}"), None, true);
             }
         };
         let mixer = (!inputs.is_empty()).then(|| {
@@ -335,19 +345,19 @@ impl App {
             && let Ok(result) = rx.try_recv()
         {
             self.rec = RecState::Idle;
+            // Before the status: if the source is gone, its error must not hide where the file went.
+            self.restart_preview(ctx);
             match result {
                 Ok(path) => self.set_status(format!("Grabación guardada en '{}'", path.display()), Some(path), false),
                 Err(e) => self.set_status(format!("Error al guardar la grabación: {e}"), None, true),
             }
-            self.restart_preview(ctx);
         }
 
         if self.recording_session().is_some_and(Session::is_finished) {
             return self.stop_recording(ctx, Some("La fuente dejó de estar disponible; guardando…".into()));
         }
         if self.preview.as_ref().is_some_and(Session::is_finished) {
-            self.preview = None;
-            self.set_status("La fuente ya no está disponible. Añade otra con el botón +.", None, true);
+            self.source_lost("La fuente ya no está disponible. Añade otra con el botón +.".into());
         }
         self.cpu.update();
     }
@@ -1094,6 +1104,28 @@ mod tests {
 
     use super::*;
 
+    fn test_app() -> App {
+        App {
+            config: Config::default(),
+            sources: Vec::new(),
+            selected: None,
+            system_devices: Vec::new(),
+            mic_devices: Vec::new(),
+            preview: None,
+            rec: RecState::Idle,
+            system: None,
+            mic: None,
+            meters: [0.0; 2],
+            texture: None,
+            texture_seq: None,
+            status: None,
+            settings: None,
+            cpu: CpuMeter { last: None, percent: 0.0 },
+            actions: Arc::new(Mutex::new(Vec::new())),
+            _hotkeys: None,
+        }
+    }
+
     #[test]
     fn exit_waits_for_the_recording_being_saved() {
         let (tx, rx) = mpsc::channel();
@@ -1109,6 +1141,22 @@ mod tests {
         finish_on_exit(RecState::Saving(rx));
         assert!(saved.load(Ordering::SeqCst), "exited before the recording was finalized");
         saver.join().unwrap();
+    }
+
+    #[test]
+    fn saved_message_survives_a_source_that_is_gone() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        // The recorded window was closed: its handle no longer exists.
+        app.selected = Some(SourceId::Window(0));
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok(PathBuf::from("rec.mp4"))).unwrap();
+        app.rec = RecState::Saving(rx);
+        app.poll(&ctx);
+        let status = app.status.as_ref().expect("status");
+        assert!(status.text.starts_with("Grabación guardada"), "status: {}", status.text);
+        assert_eq!(status.file.as_deref(), Some(std::path::Path::new("rec.mp4")));
+        assert!(app.selected.is_none(), "the closed window is still shown as the source");
     }
 
     #[test]
