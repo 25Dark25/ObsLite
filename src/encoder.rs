@@ -44,6 +44,7 @@ use windows::core::{HSTRING, Interface};
 use windows_capture::frame::Frame;
 
 use crate::audio::{CHANNELS, SAMPLE_RATE};
+use crate::camera::{self, CameraFrame, CameraSize, Corner, PixelRect};
 use crate::i18n::tr;
 
 /// A few textures so the capture never overwrites the one the encoder is reading.
@@ -100,6 +101,8 @@ pub struct EncoderSettings {
     pub fps: u32,
     pub bitrate: u32,
     pub audio: bool,
+    /// Where the webcam goes, if there is one.
+    pub overlay: Option<(Corner, CameraSize)>,
 }
 
 /// COM pointer used from several threads; D3D11 devices are free-threaded and the
@@ -139,6 +142,10 @@ pub struct Encoder {
     tokens: (i64, i64),
     transcode: Option<JoinHandle<Result<(), String>>>,
     input: (u32, u32),
+    device: Com<ID3D11Device>,
+    overlay: Option<(Corner, CameraSize)>,
+    /// The newest webcam picture, scaled, and where it goes: (x, y, width, height).
+    overlay_texture: Mutex<Option<(Com<ID3D11Texture2D>, PixelRect)>>,
 }
 
 impl Encoder {
@@ -265,6 +272,9 @@ impl Encoder {
             tokens: (starting, requested),
             transcode: Some(transcode),
             input: s.input,
+            device: Com(device.clone()),
+            overlay: s.overlay,
+            overlay_texture: Mutex::new(None),
         })
     }
 
@@ -290,9 +300,53 @@ impl Encoder {
                     ctx.CopySubresourceRegion(dst, 0, 0, 0, 0, frame.as_raw_texture(), 0, Some(&region));
                 }
             }
+            if let Some((texture, (x, y, _, _))) = self.overlay_texture.lock().unwrap().as_ref() {
+                ctx.CopySubresourceRegion(dst, 0, *x, *y, 0, &texture.0, 0, None);
+            }
             ctx.Flush();
         }
         ring.latest.store(idx, Ordering::Release);
+    }
+
+    /// Takes a new webcam picture for the overlay. It is also drawn onto a copy of the latest
+    /// frame right away, so the camera keeps moving while the screen does not.
+    pub fn push_camera(&self, frame: &CameraFrame) {
+        let Some((corner, size)) = self.overlay else { return };
+        let rect = camera::overlay_rect(self.input, (frame.width, frame.height), corner, size);
+        let (x, y, w, h) = rect;
+        let pixels = camera::resize(&frame.bgra, (frame.width, frame.height), (w, h));
+        let mut overlay = self.overlay_texture.lock().unwrap();
+        unsafe {
+            let Ok(ctx) = self.device.0.GetImmediateContext() else { return };
+            if overlay.as_ref().is_none_or(|(_, r)| *r != rect) {
+                let desc = D3D11_TEXTURE2D_DESC {
+                    Width: w,
+                    Height: h,
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    Usage: D3D11_USAGE_DEFAULT,
+                    ..Default::default()
+                };
+                let mut texture = None;
+                if self.device.0.CreateTexture2D(&desc, None, Some(&mut texture)).is_err() {
+                    return;
+                }
+                *overlay = Some((Com(texture.expect("CreateTexture2D returned no texture")), rect));
+            }
+            let texture = &overlay.as_ref().expect("set above").0.0;
+            ctx.UpdateSubresource(texture, 0, None, pixels.as_ptr().cast(), w * 4, 0);
+            let ring = &self.inner.ring;
+            let latest = ring.latest.load(Ordering::Acquire);
+            if latest != usize::MAX {
+                let idx = (latest + 1) % RING_SIZE;
+                ctx.CopyResource(&ring.textures[idx].0, &ring.textures[latest].0);
+                ctx.CopySubresourceRegion(&ring.textures[idx].0, 0, x, y, 0, texture, 0, None);
+                ctx.Flush();
+                ring.latest.store(idx, Ordering::Release);
+            }
+        }
     }
 
     pub fn push_audio(&self, pcm: Vec<u8>) {

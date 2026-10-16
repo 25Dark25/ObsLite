@@ -21,6 +21,7 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::core::Interface;
 use windows_capture::window::Window;
 
+use crate::camera::{CameraSize, Corner};
 use crate::config::{Quality, Region, Resolution};
 use crate::encoder::{Clock, Com, Encoder, EncoderSettings};
 use crate::i18n::tr;
@@ -72,6 +73,7 @@ pub struct RecordConfig {
     pub resolution: Resolution,
     pub audio: bool,
     pub region: Option<Region>,
+    pub overlay: Option<(Corner, CameraSize)>,
 }
 
 /// GPU copy of the newest frame. Windows Graphics Capture only delivers frames when
@@ -153,6 +155,7 @@ impl GraphicsCaptureApiHandler for Handler {
                         fps,
                         bitrate: rec.quality.bitrate(output.0, output.1, fps),
                         audio: rec.audio,
+                        overlay: rec.overlay,
                     },
                     shared.clock.clone(),
                     shared.encoder_ready.clone(),

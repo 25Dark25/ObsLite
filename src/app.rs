@@ -19,6 +19,7 @@ use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
 use crate::audio::{self, Device, Input, InputKind, Mixer};
+use crate::camera::{self, Camera, CameraConfig, CameraDevice, CameraFrame, CameraSize, Corner};
 use crate::capture::{self, RecordConfig, Session, SessionOptions, Source, SourceId};
 use crate::config::{Config, Hotkeys, Quality, Region, Resolution};
 use crate::hotkeys;
@@ -100,6 +101,10 @@ pub struct App {
     screenshot: Option<Receiver<Result<PathBuf, String>>>,
     system: Option<Input>,
     mic: Option<Input>,
+    cameras: Vec<CameraDevice>,
+    camera: Option<Camera>,
+    camera_texture: Option<TextureHandle>,
+    camera_seq: Option<u64>,
     meters: [f32; 2],
     texture: Option<TextureHandle>,
     texture_seq: Option<u64>,
@@ -136,6 +141,10 @@ impl App {
         let mut app = Self {
             system: None,
             mic: None,
+            cameras: Vec::new(),
+            camera: None,
+            camera_texture: None,
+            camera_seq: None,
             config,
             sources: Vec::new(),
             selected: None,
@@ -171,6 +180,7 @@ impl App {
         app.restart_input(InputKind::Microphone);
         app.refresh_sources();
         app.restart_preview(&cc.egui_ctx);
+        app.restart_camera(&cc.egui_ctx);
         app.bind_hotkeys();
         if let Some(e) = hotkey_error {
             app.set_status(tr!("Atajos globales no disponibles: {}", "Global hotkeys unavailable: {}", e), None, true);
@@ -264,6 +274,18 @@ impl App {
         }
     }
 
+    fn restart_camera(&mut self, ctx: &egui::Context) {
+        (self.camera, self.camera_texture, self.camera_seq) = (None, None, None);
+        if let Some(c) = &self.config.camera {
+            self.camera = Some(Camera::start(c.device.clone(), Some(ctx.clone())));
+        }
+    }
+
+    /// The camera overlay, when a camera is configured and running.
+    fn overlay(&self) -> Option<(Corner, CameraSize)> {
+        self.camera.as_ref().and(self.config.camera.as_ref()).map(|c| (c.corner, c.size))
+    }
+
     fn restart_preview(&mut self, ctx: &egui::Context) {
         self.preview = None;
         self.texture_seq = None;
@@ -343,6 +365,7 @@ impl App {
                 resolution: self.config.resolution,
                 audio: !inputs.is_empty(),
                 region: self.config.region,
+                overlay: self.overlay(),
             }),
         };
         let session = match Session::start(opts, Some(ctx.clone())) {
@@ -360,6 +383,14 @@ impl App {
                 }
             })
         });
+        if let Some(camera) = &self.camera {
+            let shared = session.shared.clone();
+            *camera.shared.sink.lock().unwrap() = Some(Box::new(move |frame: &CameraFrame| {
+                if let Some(enc) = shared.encoder.lock().unwrap().as_ref() {
+                    enc.push_camera(frame);
+                }
+            }));
+        }
         self.rec = RecState::Recording { session, mixer, path };
         self.status = None;
     }
@@ -369,6 +400,9 @@ impl App {
             return;
         };
         drop(mixer);
+        if let Some(camera) = &self.camera {
+            *camera.shared.sink.lock().unwrap() = None;
+        }
         let (encoder, stop_error) = session.stop();
         let (tx, rx) = mpsc::channel();
         let ctx2 = ctx.clone();
@@ -421,6 +455,11 @@ impl App {
         if let Some(region) = self.config.region.and_then(|r| r.fit((width, height))) {
             rgba = capture::crop_rgba(&rgba, width, region);
             (width, height) = (region.width, region.height);
+        }
+        if let (Some((corner, size)), Some(camera)) = (self.overlay(), self.camera.as_ref())
+            && let Some(frame) = camera.shared.latest.lock().unwrap().clone()
+        {
+            paste_camera(&mut rgba, width, height, &frame, corner, size);
         }
         let name = format!("{} {}.png", tr!("Captura", "Screenshot"), chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
         let path = self.config.output_dir.join(name);
@@ -499,6 +538,22 @@ impl App {
             self.source_lost(tr!("La fuente ya no está disponible. Añade otra con el botón +.", "The source is no longer available. Add another one with the + button.").into());
         }
         self.cpu.update();
+    }
+
+    fn update_camera_texture(&mut self, ctx: &egui::Context) {
+        let Some(camera) = &self.camera else { return };
+        let seq = camera.shared.seq.load(Ordering::Relaxed);
+        if self.camera_seq == Some(seq) {
+            return;
+        }
+        let Some(frame) = camera.shared.latest.lock().unwrap().clone() else { return };
+        self.camera_seq = Some(seq);
+        let rgba: Vec<u8> = frame.bgra.as_chunks::<4>().0.iter().flat_map(|&[b, g, r, a]| [r, g, b, a]).collect();
+        let image = egui::ColorImage::from_rgba_unmultiplied([frame.width as usize, frame.height as usize], &rgba);
+        match &mut self.camera_texture {
+            Some(t) => t.set(image, TextureOptions::LINEAR),
+            None => self.camera_texture = Some(ctx.load_texture("camera", image, TextureOptions::LINEAR)),
+        }
     }
 
     fn update_texture(&mut self, ctx: &egui::Context) {
@@ -650,6 +705,16 @@ impl App {
             }
         }
         let Some(source) = source.filter(|_| self.texture.is_some()) else { return };
+        let area = self.config.region.and_then(|r| r.fit(source));
+        if let (Some((corner, size)), Some(texture)) = (self.overlay(), &self.camera_texture)
+            && !self.picking_region
+        {
+            // The overlay sits in the recorded area: the region, or the whole source.
+            let area = area.unwrap_or(Region { x: 0, y: 0, width: source.0, height: source.1 });
+            let (x, y, w, h) = camera::overlay_rect((area.width, area.height), (texture.size()[0] as u32, texture.size()[1] as u32), corner, size);
+            let rect = region_rect(Region { x: area.x + x, y: area.y + y, width: w, height: h }, canvas, source);
+            painter.image(texture.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
         if self.picking_region {
             self.pick_region(ui, &response, &painter, canvas, source);
         } else if let Some(region) = self.config.region.and_then(|r| r.fit(source)) {
@@ -707,6 +772,7 @@ impl App {
         ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
             ui.add_enabled_ui(!recording, |ui| {
                 ui.horizontal(|ui| {
+                    let mut camera_choice = None;
                     let add = ui.menu_button(RichText::new(" + ").strong(), |ui| {
                         let mut chosen = None;
                         ui.menu_button(tr!("Captura de pantalla", "Display Capture"), |ui| {
@@ -725,17 +791,34 @@ impl App {
                                 }
                             });
                         });
+                        ui.menu_button(tr!("Dispositivo de captura de vídeo", "Video Capture Device"), |ui| {
+                            if self.cameras.is_empty() {
+                                ui.label(RichText::new(tr!("No se ha encontrado ninguna cámara", "No camera found")).color(TEXT_MUTED));
+                            }
+                            for device in &self.cameras {
+                                if ui.button(&device.name).clicked() {
+                                    camera_choice = Some(device.clone());
+                                }
+                            }
+                        });
                         chosen
                     });
                     // Windows come and go; refresh the list each time the menu opens.
                     if add.response.clicked() {
                         self.refresh_sources();
+                        self.cameras = camera::list_devices();
                     }
                     if let Some(Some(id)) = add.inner {
                         self.select_source(&ctx, id);
                         ui.close();
                     }
                     add.response.on_hover_text(tr!("Añadir fuente", "Add source"));
+                    if let Some(device) = camera_choice {
+                        let (corner, size) = self.config.camera.as_ref().map_or((Corner::BottomRight, CameraSize::Medium), |c| (c.corner, c.size));
+                        self.config.camera = Some(CameraConfig { device: device.id, name: device.name, corner, size });
+                        self.restart_camera(&ctx);
+                        ui.close();
+                    }
                     ui.menu_button(tr!("Propiedades", "Properties"), |ui| {
                         if ui.checkbox(&mut self.config.cursor, tr!("Capturar el cursor", "Capture Cursor")).changed() {
                             self.restart_preview(&ctx);
@@ -748,6 +831,25 @@ impl App {
                         let whole = Button::new(tr!("Grabar toda la fuente", "Record Whole Source"));
                         if ui.add_enabled(self.config.region.is_some(), whole).clicked() {
                             self.config.region = None;
+                            ui.close();
+                        }
+                        let mut remove_camera = false;
+                        if let Some(cam) = &mut self.config.camera {
+                            ui.separator();
+                            ui.label(RichText::new(tr!("Cámara", "Camera")).strong());
+                            for corner in Corner::ALL {
+                                ui.radio_value(&mut cam.corner, corner, corner.label());
+                            }
+                            ui.separator();
+                            for size in CameraSize::ALL {
+                                ui.radio_value(&mut cam.size, size, size.label());
+                            }
+                            ui.separator();
+                            remove_camera = ui.button(tr!("Quitar cámara", "Remove Camera")).clicked();
+                        }
+                        if remove_camera {
+                            self.config.camera = None;
+                            self.restart_camera(&ctx);
                             ui.close();
                         }
                     });
@@ -765,6 +867,15 @@ impl App {
                         format!(" ({} {}×{})", tr!("región", "region"), r.width, r.height)
                     });
                     list_row(ui, &format!("{kind}{region}  ·  {}", source.label));
+                    if let Some(cam) = &self.config.camera {
+                        ui.add_space(2.0);
+                        let error = self.camera.as_ref().and_then(|c| c.shared.error.lock().unwrap().clone());
+                        let text = format!("{}  ·  {}", tr!("Dispositivo de captura de vídeo", "Video Capture Device"), cam.name);
+                        let row = list_row(ui, &text);
+                        if let Some(e) = error {
+                            row.on_hover_text(tr!("Error de la cámara: {}", "Camera error: {}", e));
+                        }
+                    }
                 }
                 None => {
                     ui.label(RichText::new(tr!("No hay ninguna fuente. Pulsa + para añadir una.", "No sources. Press + to add one.")).color(TEXT_MUTED));
@@ -1095,6 +1206,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.update_texture(&ctx);
+        self.update_camera_texture(&ctx);
         let bar = egui::Frame::new().fill(GREY7).inner_margin(Margin::symmetric(8, 3));
         egui::Panel::top("menu").frame(bar).show(ui, |ui| self.menu_bar(ui));
         egui::Panel::bottom("status").frame(bar.inner_margin(Margin::symmetric(10, 4))).show(ui, |ui| self.status_bar(ui));
@@ -1194,6 +1306,18 @@ fn outline_region(painter: &egui::Painter, canvas: Rect, inner: Rect) {
     painter.rect_stroke(inner, 0.0, Stroke::new(1.5, PRIMARY_LIGHT), egui::StrokeKind::Inside);
 }
 
+/// Draws the webcam onto an RGBA screenshot where the recording would show it.
+fn paste_camera(rgba: &mut [u8], width: u32, height: u32, frame: &CameraFrame, corner: Corner, size: CameraSize) {
+    let (x, y, w, h) = camera::overlay_rect((width, height), (frame.width, frame.height), corner, size);
+    let scaled = camera::resize(&frame.bgra, (frame.width, frame.height), (w, h));
+    for (row, src) in scaled.chunks(w as usize * 4).enumerate() {
+        let start = ((y as usize + row) * width as usize + x as usize) * 4;
+        for (dst, &[b, g, r, a]) in rgba[start..start + src.len()].as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
+            *dst = [r, g, b, a];
+        }
+    }
+}
+
 /// An OBS-style dock: titled panel with a border.
 fn dock(ui: &mut egui::Ui, title: &str, size: Vec2, content: impl FnOnce(&mut egui::Ui)) {
     ui.allocate_ui_with_layout(size, Layout::top_down(Align::Min), |ui| {
@@ -1214,7 +1338,7 @@ fn dock(ui: &mut egui::Ui, title: &str, size: Vec2, content: impl FnOnce(&mut eg
 }
 
 /// A selected list item, as in the OBS Sources list.
-fn list_row(ui: &mut egui::Ui, text: &str) {
+fn list_row(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
     ui.painter().rect_filled(rect, 3.0, PRIMARY);
     let clip = rect.shrink2(vec2(8.0, 0.0));
@@ -1225,7 +1349,7 @@ fn list_row(ui: &mut egui::Ui, text: &str) {
         FontId::proportional(13.5),
         Color32::WHITE,
     );
-    response.on_hover_text(text);
+    response.on_hover_text(text)
 }
 
 fn group_title(ui: &mut egui::Ui, title: &str) {
@@ -1488,6 +1612,10 @@ mod tests {
             screenshot: None,
             system: None,
             mic: None,
+            cameras: Vec::new(),
+            camera: None,
+            camera_texture: None,
+            camera_seq: None,
             meters: [0.0; 2],
             texture: None,
             texture_seq: None,

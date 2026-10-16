@@ -4,6 +4,7 @@ mod i18n;
 
 mod app;
 mod audio;
+mod camera;
 mod capture;
 mod config;
 mod encoder;
@@ -75,6 +76,7 @@ fn selftest(args: &[String]) -> Result<(), String> {
                 resolution,
                 audio: true,
                 region: None,
+                overlay: None,
             }),
         },
         None,

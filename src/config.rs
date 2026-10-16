@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::camera::CameraConfig;
 use crate::i18n::{Language, tr};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -143,6 +144,8 @@ pub struct Config {
     pub source_label: Option<String>,
     /// Record only this part of the source.
     pub region: Option<Region>,
+    /// Webcam overlaid on the recording.
+    pub camera: Option<CameraConfig>,
     pub hotkeys: Hotkeys,
 }
 
@@ -168,6 +171,7 @@ impl Default for Config {
             mic_device: None,
             source_label: None,
             region: None,
+            camera: None,
             hotkeys: Hotkeys::default(),
         }
     }
