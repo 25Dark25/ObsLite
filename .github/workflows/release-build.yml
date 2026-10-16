@@ -1,8 +1,8 @@
 name: Release build
 
-# Run by hand on a release tag. It produces the executable, the third-party
-# license notices and their SHA-256 as an artifact; the maintainer downloads,
-# verifies and signs them locally.
+# Run by hand on a release tag. It produces the portable zip (executable,
+# LICENSE and third-party license notices) and its SHA-256 as an artifact; the
+# maintainer downloads, verifies and signs the zip locally.
 on:
   workflow_dispatch:
 
@@ -37,13 +37,16 @@ jobs:
           echo "$RUNNER_TEMP/cargo-about-0.9.2-x86_64-pc-windows-msvc" >> "$GITHUB_PATH"
       - name: Third-party licenses
         run: cargo about generate --locked --fail about.hbs -o THIRD-PARTY-LICENSES.html
-      - name: Checksum
-        shell: bash
+      - name: Package
+        shell: pwsh
         run: |
-          mkdir dist
-          cp target/release/obs-lite.exe THIRD-PARTY-LICENSES.html dist/
-          cd dist
-          sha256sum obs-lite.exe THIRD-PARTY-LICENSES.html | tee SHA256SUMS
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          New-Item -ItemType Directory pkg, dist | Out-Null
+          Copy-Item target/release/obs-lite.exe, LICENSE, THIRD-PARTY-LICENSES.html pkg
+          $zip = "dist/obs-lite-$version-windows-x64.zip"
+          Compress-Archive -Path pkg/* -DestinationPath $zip
+          Get-FileHash $zip -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $zip -Leaf)" } | Tee-Object dist/SHA256SUMS
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: obs-lite-${{ github.sha }}
