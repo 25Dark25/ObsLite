@@ -160,17 +160,19 @@ full manual test protocol and [docs/RELEASING.md](docs/RELEASING.md) the release
 ### How it works
 
 ```
-WGC (only when the image changes) ─► ring of 3 GPU textures
+WGC (only when the image changes) ─┐
+webcam (Media Foundation) ─────────┴─► GPU canvas (region crop + webcam overlay)
                                                 │
-recording clock (excludes pauses) ─► the encoder pulls one frame every 1/fps
-                                     and receives the newest texture
+recording clock (excludes pauses) ─► video thread copies the canvas every 1/fps
+                                     into a queue of GPU textures
 WASAPI desktop + mic ─► mixer paced by the same clock (fills silence)
                                                 │
                      MediaStreamSource ─► MediaTranscoder (HW, scaling) ─► MP4
 ```
 
 - `src/capture.rs`: capture sessions, source list and preview.
-- `src/encoder.rs`: clock, texture ring and constant-frame-rate encoder.
+- `src/encoder.rs`: clock, canvas, frame queue and constant-frame-rate encoder.
+- `src/camera.rs`: webcam capture and overlay placement.
 - `src/audio.rs`: WASAPI capture, devices and mixer.
 - `src/app.rs`: user interface (egui) and recording lifecycle.
 - `src/config.rs`: settings and their defaults.

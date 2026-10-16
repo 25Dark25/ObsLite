@@ -386,8 +386,13 @@ impl App {
         if let Some(camera) = &self.camera {
             let shared = session.shared.clone();
             *camera.shared.sink.lock().unwrap() = Some(Box::new(move |frame: &CameraFrame| {
+                // Scale outside the encoder lock: audio and screen frames wait on it, and audio
+                // arriving late made the encoder emit black frames.
+                let size = (frame.width, frame.height);
+                let Some(rect) = shared.encoder.lock().unwrap().as_ref().and_then(|e| e.overlay_rect(size)) else { return };
+                let pixels = camera::resize(&frame.bgra, size, (rect.2, rect.3));
                 if let Some(enc) = shared.encoder.lock().unwrap().as_ref() {
-                    enc.push_camera(frame);
+                    enc.push_overlay(rect, &pixels);
                 }
             }));
         }

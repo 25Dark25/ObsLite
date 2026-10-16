@@ -69,6 +69,9 @@ provide, so the pipeline is tested by hand before each release. Build with
     a left click.
 16. **Webcam**: add it, record a static screen for a few seconds (the camera must keep moving), try
     each corner and size, take a screenshot, remove it (the camera light must go off).
+17. **Black frames**: record 15 s of the screen with the webcam on, then count fully black frames
+    with ffmpeg (none expected):
+    `ffmpeg -i rec.mp4 -vf "signalstats,metadata=print:file=-" -f null - | grep -c "YMAX=1[0-9]$"`
 
 Check each MP4's duration, resolution, frame rate and audio track in its *Properties › Details*
 tab or with `ffprobe`.
@@ -102,6 +105,7 @@ and 8 on commit `b6cdad1` plus the settings BOM fix:
 | 13. Region | 840×504 region: recording 840×504 at 60 fps, screenshot 840×504 with the selected content |
 | 14. Noise suppression | Built-in microphone, quiet room: noise floor about −76 dBFS off, −105 dBFS on |
 | 15. Tray | Taskbar button removed when minimized; hotkey recording while minimized (3.82 s); tray menu start/stop (5.44 s); left click restores |
-| 16. Webcam | Camera capture checked alone: 31 frames in 3 s at 1280×720, no error. **Not yet checked in the running app** (the session was locked) |
+| 16. Webcam | Added from *+ › Video Capture Device*; overlay in the chosen corner of preview and recording. Static window recorded with a 400×300 region and the webcam: 400×300, 60 fps, the camera corner changes every frame while the rest does not |
+| 17. Black frames | Before the fix, counted with ffmpeg: 1 per 15 s on the screen without webcam (also on `main`), 5 per 15 s with it, up to 27 per 10 s in a debug build. After: 0 in 5 webcam recordings and 5 self-tests (6–15 s each), 0 lagged frames |
 
 Not tested at all: Intel and AMD encoders, Windows 10, multiple monitors, HDR displays.
