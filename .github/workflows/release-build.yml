@@ -1,0 +1,38 @@
+name: Release build
+
+# Run by hand on a release tag. It produces the executable and its SHA-256 as
+# an artifact; the maintainer downloads, verifies and signs them locally.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No build cache here, so a poisoned cache entry can never reach a release.
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc -Vv
+      - name: Build
+        run: cargo build --locked --release
+      - name: Checksum
+        shell: bash
+        run: |
+          mkdir dist
+          cp target/release/obs-lite.exe dist/
+          cd dist
+          sha256sum obs-lite.exe | tee SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: obs-lite-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error

@@ -1,0 +1,31 @@
+# cargo-deny configuration: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# obs-lite only builds for Windows; ignore dependencies of other platforms.
+targets = ["x86_64-pc-windows-msvc"]
+
+[advisories]
+# Fail on any RustSec advisory (vulnerable, unmaintained, unsound or yanked).
+ignore = []
+
+[licenses]
+# Every license here is compatible with distributing obs-lite under MIT.
+allow = [
+    "Apache-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",          # option-ext (through dirs)
+    "OFL-1.1",          # egui's bundled fonts
+    "Ubuntu-font-1.0",  # egui's bundled fonts
+    "Unicode-3.0",      # unicode-ident
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

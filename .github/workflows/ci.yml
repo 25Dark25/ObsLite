@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.toolchain }})
+    # obs-lite uses Windows-only APIs; it does not build on Linux or macOS.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep the first entry in sync with `rust-version` in Cargo.toml.
+        toolchain: ["1.95", stable]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust ${{ matrix.toolchain }}
+        run: |
+          rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component clippy
+          rustup default ${{ matrix.toolchain }}
+          rustc -V
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Test
+        run: cargo test --locked
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Release build
+        run: cargo build --locked --release
+
+  deny:
+    name: cargo-deny
+    # The action runs in a Docker container, so it needs Linux; deny.toml
+    # restricts the dependency graph to the Windows target.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          arguments: --all-features --locked
+
+  # Single stable check for the branch ruleset: fails if any job above failed,
+  # was cancelled or was skipped.
+  all-tests:
+    name: all-tests
+    if: always()
+    needs: [test, deny]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check job results
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Results: $RESULTS"
+          for result in $RESULTS; do
+            [ "$result" = success ] || exit 1
+          done

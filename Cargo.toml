@@ -2,6 +2,7 @@
 name = "obs-lite"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.95"
 description = "Lightweight screen recorder for Windows"
 license = "MIT"
 repository = "https://github.com/25Dark25/obs-lite"
