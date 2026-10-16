@@ -23,6 +23,7 @@ use crate::capture::{self, RecordConfig, Session, SessionOptions, Source, Source
 use crate::config::{Config, Hotkeys, Quality, Region, Resolution};
 use crate::hotkeys;
 use crate::i18n::{self, Language, tr};
+use crate::tray::{Tray, TrayCommand, TrayState};
 
 const PREVIEW_FPS: u32 = 5;
 const DOCK_HEIGHT: f32 = 236.0;
@@ -114,6 +115,10 @@ pub struct App {
     bindings: Arc<Mutex<Vec<(HotKey, Action)>>>,
     /// The main window, for excluding it from capture.
     hwnd: Option<isize>,
+    tray: Option<Tray>,
+    tray_commands: Arc<Mutex<Vec<TrayCommand>>>,
+    /// Minimized to the tray.
+    hidden: bool,
 }
 
 impl App {
@@ -151,7 +156,15 @@ impl App {
             hotkey_manager,
             bindings,
             hwnd: main_window(cc),
+            tray: None,
+            tray_commands: Arc::new(Mutex::new(Vec::new())),
+            hidden: false,
         };
+        let commands = app.tray_commands.clone();
+        match Tray::new(&cc.egui_ctx, crate::ICON_RGBA, 64, move |c| commands.lock().unwrap().push(c)) {
+            Ok(tray) => app.tray = Some(tray),
+            Err(e) => app.set_status(tr!("Icono de la bandeja no disponible: {}", "Tray icon unavailable: {}", e), None, true),
+        }
         app.apply_capture_visibility();
         app.refresh_devices();
         app.restart_input(InputKind::System);
@@ -372,6 +385,30 @@ impl App {
         self.set_status(reason.unwrap_or_else(|| tr!("Guardando grabación…", "Saving recording…").into()), None, false);
     }
 
+    fn show_window(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.hidden) {
+            self.set_taskbar_button(true);
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    fn set_taskbar_button(&self, visible: bool) {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx};
+        use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
+        let Some(hwnd) = self.hwnd else { return };
+        unsafe {
+            // Already initialized as STA by winit on this thread; this only makes sure.
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let Ok(list) = CoCreateInstance::<_, ITaskbarList>(&TaskbarList, None, CLSCTX_INPROC_SERVER) else { return };
+            if list.HrInit().is_ok() {
+                let hwnd = HWND(hwnd as *mut _);
+                let _ = if visible { list.AddTab(hwnd) } else { list.DeleteTab(hwnd) };
+            }
+        }
+    }
+
     /// Saves the newest frame of the current source as a PNG in the recordings folder.
     fn take_screenshot(&mut self, ctx: &egui::Context) {
         let Some(session) = self.recording_session().or(self.preview.as_ref()) else {
@@ -406,6 +443,31 @@ impl App {
         let actions: Vec<Action> = self.actions.lock().unwrap().drain(..).collect();
         for action in actions {
             self.handle(ctx, action);
+        }
+        let commands: Vec<TrayCommand> = self.tray_commands.lock().unwrap().drain(..).collect();
+        for command in commands {
+            match command {
+                TrayCommand::ToggleRecording => self.handle(ctx, Action::ToggleRecording),
+                TrayCommand::TogglePause => self.handle(ctx, Action::TogglePause),
+                TrayCommand::Screenshot => self.handle(ctx, Action::Screenshot),
+                TrayCommand::Show => self.show_window(ctx),
+                TrayCommand::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            }
+        }
+        // Minimize to tray: the window stays minimized (a hidden window would stop eframe from
+        // handling hotkeys and tray clicks) and only loses its taskbar button.
+        let minimized = ctx.input(|i| i.viewport().minimized);
+        if self.config.minimize_to_tray && !self.hidden && minimized == Some(true) {
+            self.set_taskbar_button(false);
+            self.hidden = true;
+        } else if self.hidden && minimized == Some(false) {
+            // Restored some other way, e.g. Alt+Tab.
+            self.set_taskbar_button(true);
+            self.hidden = false;
+        }
+        let state = TrayState { recording: self.is_recording(), paused: self.is_paused(), english: i18n::english() };
+        if let Some(tray) = &mut self.tray {
+            tray.update(state);
         }
 
         if let RecState::Saving(rx) = &self.rec
@@ -937,6 +999,9 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
                 };
                 combo(ui, "language", &mut c.language, &options, name, 260.0);
                 ui.end_row();
+                ui.label(tr!("Bandeja del sistema", "System Tray"));
+                ui.checkbox(&mut c.minimize_to_tray, tr!("Minimizar a la bandeja del sistema", "Minimize to the system tray"));
+                ui.end_row();
                 ui.label(tr!("Captura", "Capture"));
                 ui.checkbox(&mut c.hide_from_capture, tr!("Ocultar obs-lite de la captura de pantalla", "Hide obs-lite from screen capture"));
                 ui.end_row();
@@ -1435,6 +1500,9 @@ mod tests {
             hotkey_manager: None,
             bindings: Arc::new(Mutex::new(Vec::new())),
             hwnd: None,
+            tray: None,
+            tray_commands: Arc::new(Mutex::new(Vec::new())),
+            hidden: false,
         }
     }
 

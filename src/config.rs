@@ -122,6 +122,8 @@ pub struct Config {
     pub language: Option<Language>,
     /// Keep the obs-lite window out of every capture, including its own preview.
     pub hide_from_capture: bool,
+    /// Minimizing hides the window; the tray icon brings it back.
+    pub minimize_to_tray: bool,
     pub output_dir: PathBuf,
     pub fps: u32,
     pub resolution: Resolution,
@@ -149,6 +151,7 @@ impl Default for Config {
         Self {
             language: None,
             hide_from_capture: true,
+            minimize_to_tray: false,
             output_dir: dirs::video_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from(".")),
             fps: 60,
             resolution: Resolution::Native,
