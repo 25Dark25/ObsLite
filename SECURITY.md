@@ -12,8 +12,7 @@ guaranteed response time; you will get an answer in the advisory thread.
 
 ## Supported versions
 
-Only the latest release receives fixes. There are no releases yet; until the first one, fixes go to
-`main`.
+Only the latest release receives fixes.
 
 ## Scope
 
