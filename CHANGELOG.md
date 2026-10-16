@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The preview is scaled to the size it is drawn at (up to the source's resolution) with area
+  averaging, instead of to 640 pixels by picking one pixel per block, so it is no longer pixelated.
+
 ## [0.2.0] - 2026-10-17
 
 ### Added

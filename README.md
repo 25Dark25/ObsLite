@@ -5,10 +5,12 @@ The interface follows OBS Studio, so OBS users find everything where they expect
 
 | | Idle (preview + audio) | Recording 1080p60 + audio |
 |---|---|---|
-| Private memory | ~85 MB | ~180 MB |
-| CPU (16 threads) | ~0.3 % | ~1.1 % |
+| Private memory | ~100 MB | ~350 MB |
+| CPU (16 threads) | ~0.5 % | ~1.3 % |
 
-Measured on Windows 11 with an RTX 4060 Laptop GPU; your numbers will vary.
+Measured on Windows 11 with an RTX 4060 Laptop GPU, without a webcam; your numbers will vary.
+About 100 MB of the recording figure is the queue of frame copies that keeps the encoder from
+dropping or blacking out frames when it briefly stalls.
 
 > **Status: early (0.2.0).** obs-lite has been tested on a single machine
 > (Windows 11, NVIDIA GPU); see [docs/TESTING.md](docs/TESTING.md) for what was and was not
@@ -73,7 +75,8 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spa
   in its own preview.
 - **System tray icon**, with an option to minimize to the tray.
 - **Spanish and English** interface.
-- Low-cost preview (5 fps).
+- Sharp preview at 5 fps: frames are scaled down to the size the preview is drawn at, averaging
+  every pixel, so text stays legible.
 
 ## Configuration
 

@@ -698,6 +698,11 @@ impl App {
             vec2(rect.width(), rect.width() / aspect)
         };
         let canvas = Rect::from_center_size(rect.center(), size);
+        // Ask for a preview as sharp as it is drawn on screen (but never larger than the source).
+        if let Some(session) = self.recording_session().or(self.preview.as_ref()) {
+            let pixels = (canvas.width() * ui.ctx().pixels_per_point()).round() as usize;
+            session.shared.preview_width.store(pixels, Ordering::Relaxed);
+        }
         painter.rect_filled(canvas, 0.0, Color32::BLACK);
         match &self.texture {
             Some(texture) => {

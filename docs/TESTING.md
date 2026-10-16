@@ -29,6 +29,7 @@ cargo test --locked
 | `capture::bgra_rows_with_padding_become_packed_rgba` | Screenshot read-back handles padded GPU rows. |
 | `capture::png_round_trips` | Screenshots are valid PNG with the right pixels. |
 | `capture::crop_keeps_only_the_region` | Screenshots are cropped to the region. |
+| `capture::preview_downscale_averages_every_pixel` | The preview averages every source pixel when scaling down, and is an exact copy at full size. |
 | `config::region_is_clipped_to_the_source_with_even_sides` | A region survives the source changing size and keeps even sides for H.264. |
 | `app::a_selection_on_the_preview_maps_to_source_pixels` | A rectangle dragged on the preview becomes the right region, and a click selects nothing. |
 | `audio::denoiser_keeps_the_stream_length_in_whole_frames` | Noise suppression neither loses nor invents samples. |
@@ -107,5 +108,6 @@ and 8 on commit `b6cdad1` plus the settings BOM fix:
 | 15. Tray | Taskbar button removed when minimized; hotkey recording while minimized (3.82 s); tray menu start/stop (5.44 s); left click restores |
 | 16. Webcam | Added from *+ › Video Capture Device*; overlay in the chosen corner of preview and recording. Static window recorded with a 400×300 region and the webcam: 400×300, 60 fps, the camera corner changes every frame while the rest does not |
 | 17. Black frames | Before the fix, counted with ffmpeg: 1 per 15 s on the screen without webcam (also on `main`), 5 per 15 s with it, up to 27 per 10 s in a debug build. After: 0 in 5 webcam recordings and 5 self-tests (6–15 s each), 0 lagged frames |
+| Preview sharpness | Preview drawn at about 1170 px wide on a 1920×1080 display: text in it is legible (it was 640 px, one pixel per block). Idle CPU 4.2 → 7.5 % of one core (0.3 → 0.5 % of 16 threads), private memory 95 → 98 MB (105 MB maximized) |
 
 Not tested at all: Intel and AMD encoders, Windows 10, multiple monitors, HDR displays.
