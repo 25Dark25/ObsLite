@@ -133,6 +133,8 @@ pub struct Config {
     pub mic: bool,
     pub mic_volume: f32,
     pub mic_muted: bool,
+    /// RNNoise noise suppression on the microphone.
+    pub mic_denoise: bool,
     /// WASAPI endpoint IDs; `None` follows the Windows default device.
     pub system_device: Option<String>,
     pub mic_device: Option<String>,
@@ -158,6 +160,7 @@ impl Default for Config {
             mic: false,
             mic_volume: 1.0,
             mic_muted: false,
+            mic_denoise: false,
             system_device: None,
             mic_device: None,
             source_label: None,

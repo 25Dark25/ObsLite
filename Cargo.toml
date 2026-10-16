@@ -12,6 +12,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "7.0.0"
 eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts"] }
 global-hotkey = "0.8.0"
+nnnoiseless = { version = "0.5.2", default-features = false }
 png = "0.18.1"
 raw-window-handle = "0.6.2"
 rfd = "0.17.2"

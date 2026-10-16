@@ -244,6 +244,11 @@ impl App {
         };
         *slot = None; // release the device before reopening it
         *slot = enabled.then(|| Input::start(kind, device, gain));
+        if kind == InputKind::Microphone
+            && let Some(mic) = &self.mic
+        {
+            mic.shared.set_denoise(self.config.mic_denoise);
+        }
     }
 
     fn restart_preview(&mut self, ctx: &egui::Context) {
@@ -474,6 +479,9 @@ impl App {
         }
         if mic_changed {
             self.restart_input(InputKind::Microphone);
+        }
+        if let Some(mic) = &self.mic {
+            mic.shared.set_denoise(self.config.mic_denoise);
         }
         self.apply_capture_visibility();
         self.config.save();
@@ -969,6 +977,9 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
                 ui.end_row();
                 ui.label(tr!("Dispositivo de audio Mic/auxiliar", "Mic/Auxiliary Audio"));
                 device_combo(ui, "micdev", &mut c.mic, &mut c.mic_device, mic);
+                ui.end_row();
+                ui.label("");
+                ui.checkbox(&mut c.mic_denoise, tr!("Supresión de ruido del micrófono (RNNoise)", "Microphone noise suppression (RNNoise)"));
                 ui.end_row();
             });
         }
