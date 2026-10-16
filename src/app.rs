@@ -806,15 +806,23 @@ impl eframe::App for App {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.config.save();
-        if let RecState::Recording { session, mixer, .. } = std::mem::replace(&mut self.rec, RecState::Idle) {
+        finish_on_exit(std::mem::replace(&mut self.rec, RecState::Idle));
+    }
+}
+
+/// Never leaves the MP4 half-written when the app closes mid-recording or mid-save.
+fn finish_on_exit(rec: RecState) {
+    match rec {
+        RecState::Recording { session, mixer, .. } => {
             drop(mixer);
             if let (Some(enc), _) = session.stop() {
                 let _ = enc.finish();
             }
         }
-        if let RecState::Saving(rx) = &self.rec {
+        RecState::Saving(rx) => {
             let _ = rx.recv_timeout(Duration::from_secs(10));
         }
+        RecState::Idle => {}
     }
 }
 
@@ -1082,7 +1090,26 @@ fn register_hotkeys(ctx: &egui::Context, actions: Arc<Mutex<Vec<Action>>>) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::channel_gain;
+    use std::sync::atomic::AtomicBool;
+
+    use super::*;
+
+    #[test]
+    fn exit_waits_for_the_recording_being_saved() {
+        let (tx, rx) = mpsc::channel();
+        let saved = Arc::new(AtomicBool::new(false));
+        let saver = thread::spawn({
+            let saved = saved.clone();
+            move || {
+                thread::sleep(Duration::from_millis(100));
+                saved.store(true, Ordering::SeqCst);
+                let _ = tx.send(Ok(PathBuf::from("rec.mp4")));
+            }
+        });
+        finish_on_exit(RecState::Saving(rx));
+        assert!(saved.load(Ordering::SeqCst), "exited before the recording was finalized");
+        saver.join().unwrap();
+    }
 
     #[test]
     fn mute_silences_regardless_of_volume() {
