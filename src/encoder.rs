@@ -103,8 +103,8 @@ pub struct EncoderSettings {
 }
 
 /// COM pointer used from several threads; D3D11 devices are free-threaded and the
-/// immediate context is only touched from the capture thread.
-struct Com<T>(T);
+/// immediate context is multithread-protected (see `capture::keep_last_frame`).
+pub struct Com<T>(pub T);
 unsafe impl<T> Send for Com<T> {}
 unsafe impl<T> Sync for Com<T> {}
 

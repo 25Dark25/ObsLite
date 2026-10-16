@@ -92,6 +92,8 @@ pub struct App {
     mic_devices: Vec<Device>,
     preview: Option<Session>,
     rec: RecState,
+    /// A screenshot being written to disk.
+    screenshot: Option<Receiver<Result<PathBuf, String>>>,
     system: Option<Input>,
     mic: Option<Input>,
     meters: [f32; 2],
@@ -127,6 +129,7 @@ impl App {
             mic_devices: Vec::new(),
             preview: None,
             rec: RecState::Idle,
+            screenshot: None,
             meters: [0.0; 2],
             texture: None,
             texture_seq: None,
@@ -341,6 +344,31 @@ impl App {
         self.set_status(reason.unwrap_or_else(|| tr!("Guardando grabación…", "Saving recording…").into()), None, false);
     }
 
+    /// Saves the newest frame of the current source as a PNG in the recordings folder.
+    fn take_screenshot(&mut self, ctx: &egui::Context) {
+        let Some(session) = self.recording_session().or(self.preview.as_ref()) else {
+            return self.set_status(tr!("Añade una fuente con el botón + del panel Fuentes.", "Add a source with the + button in the Sources dock."), None, true);
+        };
+        let (width, height, rgba) = match session.snapshot() {
+            Ok(image) => image,
+            Err(e) => return self.set_status(tr!("No se pudo hacer la captura: {}", "Could not take the screenshot: {}", e), None, true),
+        };
+        let name = format!("{} {}.png", tr!("Captura", "Screenshot"), chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
+        let path = self.config.output_dir.join(name);
+        let (tx, rx) = mpsc::channel();
+        let ctx = ctx.clone();
+        // PNG encoding of a large frame takes a moment; keep the UI responsive.
+        thread::spawn(move || {
+            let result = std::fs::create_dir_all(path.parent().unwrap_or(&path))
+                .map_err(|e| e.to_string())
+                .and_then(|()| capture::write_png(&path, width, height, &rgba))
+                .map(|()| path);
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+        self.screenshot = Some(rx);
+    }
+
     /// Background bookkeeping; runs even while the window is minimized.
     fn poll(&mut self, ctx: &egui::Context) {
         let actions: Vec<Action> = self.actions.lock().unwrap().drain(..).collect();
@@ -357,6 +385,16 @@ impl App {
             match result {
                 Ok(path) => self.set_status(tr!("Grabación guardada en '{}'", "Recording saved to '{}'", path.display()), Some(path), false),
                 Err(e) => self.set_status(tr!("Error al guardar la grabación: {}", "Error saving the recording: {}", e), None, true),
+            }
+        }
+
+        if let Some(rx) = &self.screenshot
+            && let Ok(result) = rx.try_recv()
+        {
+            self.screenshot = None;
+            match result {
+                Ok(path) => self.set_status(tr!("Captura guardada en '{}'", "Screenshot saved to '{}'", path.display()), Some(path), false),
+                Err(e) => self.set_status(tr!("No se pudo guardar la captura: {}", "Could not save the screenshot: {}", e), None, true),
             }
         }
 
@@ -426,6 +464,10 @@ impl App {
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button(tr!("Archivo", "File"), |ui| {
+                if ui.button(tr!("Hacer captura de pantalla", "Take Screenshot")).clicked() {
+                    self.take_screenshot(ui.ctx());
+                    ui.close();
+                }
                 if ui.button(tr!("Mostrar grabaciones", "Show Recordings")).clicked() {
                     let _ = std::process::Command::new("explorer").arg(&self.config.output_dir).spawn();
                     ui.close();
@@ -442,8 +484,18 @@ impl App {
         });
     }
 
-    fn preview_area(&self, ui: &mut egui::Ui) {
-        let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+    fn preview_area(&mut self, ui: &mut egui::Ui) {
+        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click());
+        let mut screenshot = false;
+        response.context_menu(|ui| {
+            if ui.button(tr!("Hacer captura de pantalla", "Take Screenshot")).clicked() {
+                screenshot = true;
+                ui.close();
+            }
+        });
+        if screenshot {
+            self.take_screenshot(ui.ctx());
+        }
         let painter = ui.painter_at(rect);
         let aspect = self.texture.as_ref().map_or(16.0 / 9.0, |t| t.size_vec2().x / t.size_vec2().y);
         let size = if rect.width() / rect.height() > aspect {
@@ -1161,6 +1213,7 @@ mod tests {
             mic_devices: Vec::new(),
             preview: None,
             rec: RecState::Idle,
+            screenshot: None,
             system: None,
             mic: None,
             meters: [0.0; 2],

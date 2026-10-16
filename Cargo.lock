@@ -1446,6 +1446,7 @@ dependencies = [
  "dirs",
  "eframe",
  "global-hotkey",
+ "png",
  "raw-window-handle",
  "rfd",
  "serde",
