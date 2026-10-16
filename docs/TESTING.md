@@ -19,6 +19,8 @@ cargo test --locked
 | `config::missing_fields_fall_back_to_defaults` | An old or partial `settings.json` still loads. |
 | `app::mute_silences_regardless_of_volume` | Mute wins over any volume. |
 | `app::volume_uses_a_squared_curve` | The volume slider maps to gain as `volume²`. |
+| `app::exit_waits_for_the_recording_being_saved` | Closing the app while a recording is being saved waits for the MP4 to be finalized. |
+| `app::saved_message_survives_a_source_that_is_gone` | When the recorded window is closed, the "saved" message and file link stay, and the source is deselected. |
 
 ## Manual
 
