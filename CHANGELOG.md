@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-18
+
 ### Added
 
 - Update notice: at start-up obs-lite asks GitHub for the latest release and shows a link in the
@@ -72,7 +74,8 @@ changes.
 - Minimum supported Rust version: 1.95.
 - Releases ship `THIRD-PARTY-LICENSES.html` with the licenses of the bundled crates.
 
-[Unreleased]: https://github.com/25Dark25/obs-lite/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/25Dark25/obs-lite/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/25Dark25/obs-lite/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/25Dark25/obs-lite/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/25Dark25/obs-lite/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/25Dark25/obs-lite/releases/tag/v0.1.0

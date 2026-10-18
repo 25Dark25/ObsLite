@@ -161,5 +161,14 @@ and so encoding on the Intel GPU, *Intel Quick Sync Video H.264 Encoder MFT*):
 | 22. Installer, interactive | Welcome, *Shortcuts* (box unticked), *Ready*, *Completed*; no UAC prompt; installed to `%LOCALAPPDATA%\Programs\obs-lite`; MSI 3.1 MB. Started from the Start menu shortcut, whose icon is the obs-lite one |
 | `wix msi validate` | Passes; warnings ICE69 (shortcut and executable in different components of the same feature) and ICE91 (per-user folder), expected for a per-user package |
 
+2026-10-18, release preparation for 0.3.0 (`main` plus the version bump), same machine:
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 33 passed; clippy clean |
+| 1. Self-test 6 s 1080p60, 440 Hz tone playing | 352 frames, 0 lagged, 5.87 s, audio −14.0 dB |
+| 1. Self-test with pause, 720p and `replay` | 1280×720, 3.87 s, 0 lagged, audio −14.1 dB; replay 3.85 s with audio |
+| `installer/test.ps1` on the 0.3.0 MSI | All checks passed |
+
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.
