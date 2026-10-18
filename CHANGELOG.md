@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   status bar if there is a newer one (Settings › General can turn this off).
 - Application Audio Capture source: records the sound of one application, with its own mixer
   channel.
+- Replay buffer: keeps the last 20 s (configurable) in memory and saves them to an MP4 on demand,
+  from the Controls dock, the tray menu or a hotkey. It can run with or without a recording.
+
+### Changed
+
+- New encoding engine: obs-lite drives the Media Foundation H.264 and AAC encoders and the MP4
+  writer itself instead of going through MediaTranscoder. Colour conversion and scaling run on the
+  GPU's video processor; colours are BT.709 and signalled in the file; a keyframe every 2 s.
+  Recording 1080p60 uses about 80 MB less memory.
+- Without a usable hardware H.264 encoder, the Windows software encoder is used.
 
 ## [0.2.1] - 2026-10-17
 

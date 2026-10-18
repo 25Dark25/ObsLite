@@ -12,6 +12,10 @@ cargo test --locked
 | Test | Checks |
 |---|---|
 | `encoder::clock_excludes_paused_time` | The recording clock stops while paused. |
+| `encoder::replay_keeps_the_last_seconds_from_a_keyframe` | The replay buffer keeps at least its length, from a keyframe, at most one keyframe interval more, and audio from the first frame on. |
+| `encoder::replay_shorter_than_its_length_keeps_everything` | A replay buffer that has run less than its length keeps every packet. |
+| `encoder::replay_starts_at_the_first_keyframe` | Packets before the first keyframe are not kept (they would not play). |
+| `mf::software_encoder_encodes_the_canvas` | Without a hardware encoder, the canvas still goes through the GPU colour conversion and the Windows software H.264 encoder (one packet per frame, keyframe first). Skipped where there is no GPU video processor, such as CI. |
 | `audio::mixes_with_gain_and_pads_silence` | Inputs are mixed with their gain; a short input is padded with silence. |
 | `audio::drops_oldest_samples_beyond_latency_bound` | A backed-up input drops its oldest samples instead of drifting. |
 | `config::bitrate_scales_with_pixel_rate` | Quality presets scale with resolution and frame rate, within limits. |
@@ -78,6 +82,16 @@ provide, so the pipeline is tested by hand before each release. Build with
 18. **Application audio**: play a sound in one application, add it with *Application Audio
     Capture*, turn desktop audio off and record; the file must contain that sound. Capturing a
     silent application at the same time must give silence.
+19. **Audio/video sync**: record a window that turns white with a short beep once a second, for
+    10 minutes; the beep-to-flash offset (ffmpeg `signalstats` and a band-passed `astats`) must
+    be the same at the start and the end, and video and audio must last the same.
+20. **Software encoder**: in a build where `H264::new` skips the hardware encoders, run step 1;
+    the self-test must print `H264 Encoder MFT` and the files must play with correct colours.
+21. **Replay buffer**: assign hotkeys to *Start / Stop Replay Buffer* and *Save Replay*; start it,
+    wait 25 s and save (about 20–22 s, starting on a keyframe, with audio); start a recording
+    while it runs, pause it, stop it (its length must match, without the pause), save again, stop
+    the buffer. The recording timer must count from the recording's start; the tray menu must
+    offer the same actions.
 
 Check each MP4's duration, resolution, frame rate and audio track in its *Properties › Details*
 tab or with `ffprobe`.
@@ -117,4 +131,21 @@ and 8 on commit `b6cdad1` plus the settings BOM fix:
 | Update notice | A build labelled 0.2.0 queried the real GitHub API at start-up and showed "Nueva versión 0.2.1 disponible" in the status bar |
 | 18. Application audio | A PowerShell window looping a 440 Hz tone: captured on its own at −14 dBFS while VSCodium, captured at the same time, gave silence; recording with desktop audio off had the tone (mean −14.1 dB, ffmpeg volumedetect); mixer channel and source row shown |
 
-Not tested at all: Intel and AMD encoders, Windows 10, multiple monitors, HDR displays.
+2026-10-18, Windows 11, laptop with Intel UHD and RTX 4060 GPUs, new encoding engine (capture
+and so encoding on the Intel GPU, *Intel Quick Sync Video H.264 Encoder MFT*):
+
+| Step | Result |
+|---|---|
+| 1. Self-test 6 s 1080p60 | 350 frames, 60 fps, H.264 High, AAC-LC 48 kHz stereo, keyframes at 0/2/4 s, BT.709 signalled, 0 black, 0 decode errors |
+| 1. Self-test with pause, 720p | 1280×720, 3.88 s, 233 frames, 0 black |
+| 5. Window grown and shrunk while recording | Cropped / padded with black as documented; 0 black frames, 0 decode errors |
+| 13. Region | Region past the right edge clipped to 520×360; 0 black frames |
+| 17. Black frames, 15 s with webcam | 890 frames, 0 black |
+| 18. Application audio with a region | Tone at −14.1 dB mean, desktop audio off |
+| 19. Audio/video sync, 10 min | 35 993 frames, 0 lagged; offset 0.211 s at the start and 0.207 s at the end (the same 0.2 s as 0.2.1, so it comes from the test signal); video 599.88 s, audio 599.87 s; private memory 225 → 229 MB |
+| 20. Software encoder | 1080p60: 359 frames, 0 lagged, about one CPU core; 720p with pause: 239 frames; correct colours |
+| Resource use | Idle 98 MB / 0.5 % CPU; recording 1080p60 270 MB / 1.5 % CPU (0.2.1: ~350 MB / 1.3 %) |
+| 21. Replay buffer | Self-test with `replay`: 3 s asked, 4.83 s saved (from the keyframe before), audio −14.1 dB. In the app: two replays of 20.87 s and 20.90 s, first frame a keyframe, 0 decode errors; a recording started while it ran lasted 6.00 s for 6 s between hotkeys (forced keyframe), and another, paused 2 s, lasted 5.03 s with a 440 Hz tone at −14.1 dB; private memory 280 MB with both running. A bug where stopping a recording without the replay buffer left the MP4 unfinished was found here and fixed before commit. Not tested: the new tray menu items |
+
+Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
+HDR displays.

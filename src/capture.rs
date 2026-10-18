@@ -1,7 +1,6 @@
 //! Screen/window capture through Windows Graphics Capture.
 
 use std::error::Error;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -23,7 +22,7 @@ use windows_capture::window::Window;
 
 use crate::camera::{CameraSize, Corner};
 use crate::config::{Quality, Region, Resolution};
-use crate::encoder::{Clock, Com, Encoder, EncoderSettings};
+use crate::encoder::{Clock, Com, Encoder, EncoderSettings, Outputs};
 use crate::i18n::tr;
 
 type BoxError = Box<dyn Error + Send + Sync>;
@@ -93,7 +92,6 @@ pub fn list_audio_apps() -> Vec<AudioApp> {
 
 #[derive(Clone)]
 pub struct RecordConfig {
-    pub path: PathBuf,
     pub quality: Quality,
     pub resolution: Resolution,
     pub audio: bool,
@@ -127,6 +125,8 @@ pub struct Shared {
     /// Set once the encoder is pulling samples and the clock has started.
     pub encoder_ready: Arc<AtomicBool>,
     pub encoder: Mutex<Option<Encoder>>,
+    /// The recording file and replay buffer; they can be turned on before the encoder exists.
+    pub outputs: Arc<Mutex<Outputs>>,
     /// Capture size and encoded size, known once the encoder exists.
     pub sizes: Mutex<Option<(Size, Size)>>,
     last_frame: Mutex<Option<Com<LastFrame>>>,
@@ -176,7 +176,6 @@ impl GraphicsCaptureApiHandler for Handler {
                 let created = Encoder::new(
                     frame.device(),
                     EncoderSettings {
-                        path: rec.path.clone(),
                         input,
                         output,
                         fps,
@@ -186,6 +185,7 @@ impl GraphicsCaptureApiHandler for Handler {
                     },
                     shared.clock.clone(),
                     shared.encoder_ready.clone(),
+                    shared.outputs.clone(),
                 )?;
                 *encoder = Some(created);
                 *shared.sizes.lock().unwrap() = Some((input, output));
@@ -258,6 +258,7 @@ impl Session {
             clock: Arc::new(Clock::new()),
             encoder_ready: Arc::new(AtomicBool::new(false)),
             encoder: Mutex::new(None),
+            outputs: Arc::default(),
             sizes: Mutex::new(None),
             last_frame: Mutex::new(None),
             repaint,
