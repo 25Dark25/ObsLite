@@ -10,6 +10,7 @@ mod config;
 mod encoder;
 mod hotkeys;
 mod tray;
+mod update;
 
 use std::path::PathBuf;
 use std::time::Duration;

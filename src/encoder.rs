@@ -581,10 +581,13 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
         assert_eq!(clock.elapsed(), at_pause);
         assert!(clock.is_paused());
+        let resumed = Instant::now();
         clock.set_paused(false);
         thread::sleep(Duration::from_millis(20));
         let after = clock.elapsed();
         assert!(after >= at_pause + Duration::from_millis(15));
-        assert!(after < at_pause + Duration::from_millis(45), "paused time leaked: {after:?}");
+        // Bounded by the real time since resuming, however long the sleep took: only the 50 ms
+        // pause leaking into the clock can break it.
+        assert!(after <= at_pause + resumed.elapsed(), "paused time leaked: {after:?}");
     }
 }

@@ -125,6 +125,8 @@ pub struct Config {
     pub hide_from_capture: bool,
     /// Minimizing hides the window; the tray icon brings it back.
     pub minimize_to_tray: bool,
+    /// Ask GitHub for a newer release at start-up.
+    pub check_updates: bool,
     pub output_dir: PathBuf,
     pub fps: u32,
     pub resolution: Resolution,
@@ -155,6 +157,7 @@ impl Default for Config {
             language: None,
             hide_from_capture: true,
             minimize_to_tray: false,
+            check_updates: true,
             output_dir: dirs::video_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from(".")),
             fps: 60,
             resolution: Resolution::Native,
