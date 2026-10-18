@@ -27,10 +27,14 @@ the queue of converted frames that keeps the encoder from dropping frames when i
 
 ## Quick start
 
-1. Download `obs-lite-X.Y.Z-windows-x64.zip` from [Releases](https://github.com/25Dark25/obs-lite/releases)
-   and [verify it](#verifying-a-release).
-2. Unzip it anywhere and run `obs-lite.exe`. There is nothing to install.
-3. Press *Iniciar Grabación* (or `Ctrl+Alt+R`). By default it records the first display Windows
+1. Download from [Releases](https://github.com/25Dark25/obs-lite/releases) and
+   [verify](#verifying-a-release) either:
+   - `obs-lite-X.Y.Z-windows-x64.msi`, the installer: it needs no administrator rights, installs
+     to `%LOCALAPPDATA%\Programs\obs-lite`, adds *Obs Lite* to the Start menu and, if you tick the
+     box, to the desktop. A newer `.msi` upgrades it in place; uninstall it from *Settings › Apps*.
+   - `obs-lite-X.Y.Z-windows-x64.zip`, the portable version: unzip it anywhere and run
+     `obs-lite.exe`. There is nothing to install.
+2. Press *Iniciar Grabación* (or `Ctrl+Alt+R`). By default it records the first display Windows
    reports and desktop audio at 60 fps to your *Videos* folder.
 
 ## Interface
@@ -123,13 +127,18 @@ Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and scre
   It is chosen among applications with a window and found again by executable name; if the
   application starts after obs-lite, its audio is picked up when the recording starts.
 - Hotkeys need Ctrl or Alt (F-keys excepted), and are off while Settings is open.
+- Neither the executable nor the installer has an Authenticode signature (they are signed with
+  OpenPGP instead), so Windows SmartScreen may warn before running them the first time and the
+  installer shows an unknown publisher.
+- The installer is per user: each Windows account that wants obs-lite installs it. Uninstalling
+  keeps the settings in `%APPDATA%\obs-lite`.
 - Pausing a recording also pauses the replay buffer: both share one encoder and clock.
 - A replay starts at a keyframe (one every 2 s), so it is up to 2 s longer than the maximum
   replay time.
 
 ## Verifying a release
 
-Each release zip has a detached signature (`.asc`) made with this OpenPGP key:
+Each release zip and installer has a detached signature (`.asc`) made with this OpenPGP key:
 
 ```
 A7FC EDEA D7E6 C343 7312  284A 442D A687 E0FF 73EE
@@ -143,7 +152,7 @@ A7FC EDEA D7E6 C343 7312  284A 442D A687 E0FF 73EE
    gpg --fingerprint A7FCEDEAD7E6C3437312284A442DA687E0FF73EE
    ```
 
-2. Verify the signature of the zip:
+2. Verify the signature of the zip (or, the same way, of the `.msi`):
 
    ```sh
    gpg --verify obs-lite-0.2.1-windows-x64.zip.asc obs-lite-0.2.1-windows-x64.zip
@@ -151,7 +160,7 @@ A7FC EDEA D7E6 C343 7312  284A 442D A687 E0FF 73EE
 
    The output must say `Good signature` and show the fingerprint above.
 
-3. Optionally, compare the zip's SHA-256 with the one in the release notes:
+3. Optionally, compare the file's SHA-256 with the one in the release notes:
    `sha256sum obs-lite-0.2.1-windows-x64.zip`, or on Windows
    `Get-FileHash obs-lite-0.2.1-windows-x64.zip -Algorithm SHA256`.
 
@@ -184,7 +193,9 @@ The capture and encoding pipeline needs a GPU and a desktop session, so CI canno
 .\target\release\obs-lite.exe --selftest 6 test.mp4 replay     # also saves the last 3 s as test-replay.mp4
 ```
 
-It prints captured, encoded and dropped frame counts. [docs/TESTING.md](docs/TESTING.md) has the
+It prints captured, encoded and dropped frame counts. The installer is built from a release build
+with [WiX](https://wixtoolset.org/) 6.0.2 (`installer/build.ps1`), and `installer/test.ps1`
+installs, upgrades and uninstalls it, as CI does. [docs/TESTING.md](docs/TESTING.md) has the
 full manual test protocol and [docs/RELEASING.md](docs/RELEASING.md) the release steps.
 
 ### How it works

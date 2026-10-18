@@ -81,12 +81,47 @@ jobs:
       - name: Generate THIRD-PARTY-LICENSES.html
         run: cargo about generate --locked --fail about.hbs -o THIRD-PARTY-LICENSES.html
 
+  installer:
+    name: installer
+    # Builds the MSI and installs, upgrades and uninstalls it for the runner's user.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Release build
+        run: cargo build --locked --release
+      # Keep the version in sync with release-build.yml.
+      - name: Install WiX
+        run: |
+          dotnet tool install --global wix --version 6.0.2
+          wix extension add --global WixToolset.UI.wixext/6.0.2
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory pkg | Out-Null
+          Copy-Item target/release/obs-lite.exe, LICENSE pkg
+          # The licenses job checks the real file; the installer only needs one to package.
+          Set-Content pkg/THIRD-PARTY-LICENSES.html '<p>placeholder</p>'
+          installer/build.ps1 -BinDir pkg -Out obs-lite.msi
+          installer/build.ps1 -BinDir pkg -Out obs-lite-newer.msi -Version 255.0.0
+          wix msi validate obs-lite.msi
+      - name: Install, upgrade and uninstall
+        shell: pwsh
+        run: installer/test.ps1 -Msi obs-lite.msi -UpgradeMsi obs-lite-newer.msi
+
   # Single stable check for the branch ruleset: fails if any job above failed,
   # was cancelled or was skipped.
   all-tests:
     name: all-tests
     if: always()
-    needs: [test, deny, licenses]
+    needs: [test, deny, licenses, installer]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

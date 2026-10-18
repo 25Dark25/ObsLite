@@ -1,8 +1,9 @@
 name: Release build
 
 # Run by hand on a release tag. It produces the portable zip (executable,
-# LICENSE and third-party license notices) and its SHA-256 as an artifact; the
-# maintainer downloads, verifies and signs the zip locally.
+# LICENSE and third-party license notices), the MSI installer with the same
+# files, and their SHA-256 as an artifact; the maintainer downloads, verifies
+# and signs them locally.
 on:
   workflow_dispatch:
 
@@ -37,6 +38,11 @@ jobs:
           echo "$RUNNER_TEMP/cargo-about-0.9.2-x86_64-pc-windows-msvc" >> "$GITHUB_PATH"
       - name: Third-party licenses
         run: cargo about generate --locked --fail about.hbs -o THIRD-PARTY-LICENSES.html
+      # Keep the version in sync with ci.yml.
+      - name: Install WiX
+        run: |
+          dotnet tool install --global wix --version 6.0.2
+          wix extension add --global WixToolset.UI.wixext/6.0.2
       - name: Package
         shell: pwsh
         run: |
@@ -45,10 +51,14 @@ jobs:
           Copy-Item target/release/obs-lite.exe, LICENSE, THIRD-PARTY-LICENSES.html pkg
           $zip = "dist/obs-lite-$version-windows-x64.zip"
           Compress-Archive -Path pkg/* -DestinationPath $zip
-          $line = "{0}  {1}" -f (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower(), (Split-Path $zip -Leaf)
-          $line
-          # LF line ending, so `sha256sum --check` reads the file name correctly.
-          Set-Content dist/SHA256SUMS -Value "$line`n" -NoNewline
+          $msi = "dist/obs-lite-$version-windows-x64.msi"
+          installer/build.ps1 -BinDir pkg -Out $msi -Version $version
+          $lines = foreach ($file in $zip, $msi) {
+            "{0}  {1}" -f (Get-FileHash $file -Algorithm SHA256).Hash.ToLower(), (Split-Path $file -Leaf)
+          }
+          $lines
+          # LF line endings, so `sha256sum --check` reads the file names correctly.
+          Set-Content dist/SHA256SUMS -Value (($lines -join "`n") + "`n") -NoNewline
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: obs-lite-${{ github.sha }}
