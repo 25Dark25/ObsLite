@@ -5,15 +5,15 @@ The interface follows OBS Studio, so OBS users find everything where they expect
 
 | | Idle (preview + audio) | Recording 1080p60 + audio |
 |---|---|---|
-| Private memory | ~100 MB | ~350 MB |
-| CPU (16 threads) | ~0.5 % | ~1.3 % |
+| Private memory | ~100 MB | ~270 MB |
+| CPU (16 threads) | ~0.5 % | ~1.5 % |
 
-Measured on Windows 11 with an RTX 4060 Laptop GPU, without a webcam; your numbers will vary.
-About 100 MB of the recording figure is the queue of frame copies that keeps the encoder from
-dropping or blacking out frames when it briefly stalls.
+Measured on Windows 11 on a laptop with an RTX 4060 GPU, encoding on its Intel integrated GPU
+(Quick Sync), without a webcam; your numbers will vary. About 40 MB of the recording figure is
+the queue of converted frames that keeps the encoder from dropping frames when it briefly stalls.
 
 > **Status: early (0.2.1).** obs-lite has been tested on a single machine
-> (Windows 11, NVIDIA GPU); see [docs/TESTING.md](docs/TESTING.md) for what was and was not
+> (Windows 11, laptop with Intel and NVIDIA GPUs); see [docs/TESTING.md](docs/TESTING.md) for what was and was not
 > verified. It has not had any security audit or independent code review. Most of the code was
 > written with an AI coding assistant (Claude Code) and then built and tested as described there.
 > It is not affiliated with the OBS Project and contains no OBS code.
@@ -21,7 +21,9 @@ dropping or blacking out frames when it briefly stalls.
 ## Requirements
 
 - Windows 11. Windows 10 has not been tested.
-- A GPU with a hardware H.264 encoder (NVIDIA, Intel or AMD). Only NVIDIA has been tested.
+- A GPU with a working driver (NVIDIA, Intel or AMD). Its hardware H.264 encoder is used; without
+  one, the Windows software encoder takes over (more CPU). Tested: Intel Quick Sync, and the
+  software encoder.
 
 ## Quick start
 
@@ -62,7 +64,9 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spa
 - **Desktop audio + microphone** mixed together, with volume, mute, meters and device selection.
 - **Application audio**: the sound of a single application (and its child processes), e.g. a game
   without Discord, as its own mixer channel. Needs Windows 10 version 2004 or later.
-- **Hardware H.264** (NVENC / Quick Sync / AMF through Media Foundation) to MP4, which plays everywhere.
+- **H.264 + AAC** to MP4, which plays everywhere: the GPU's hardware encoder (NVENC / Quick Sync /
+  AMF through Media Foundation), or the Windows software encoder if the GPU has none. A keyframe
+  every 2 s; BT.709 colours, signalled in the file.
 - **Constant frame rate** (30 or 60 fps), suitable for video editors. When the screen does not
   change the last frame is repeated; when the machine falls behind, slots are skipped and reported
   as dropped frames.
@@ -100,6 +104,10 @@ Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and scre
 - An MP4 cannot be recovered if the process dies mid-recording.
 - While the Windows session is locked, Windows delivers no new frames.
 - If a window is resized while recording, the image is cropped or padded with black.
+- On a laptop with two GPUs the image is captured, and so encoded, on the GPU driving the display
+  (usually the integrated one).
+- A PC without a GPU driver (for example a virtual machine without graphics acceleration) cannot
+  record: colour conversion needs the GPU's video processor.
 - One display or window source plus an optional webcam. No streaming, scenes, video filters or other
   codecs: obs-lite only records.
 - Minimize to tray keeps the window minimized and removes its taskbar button (a hidden window would
@@ -175,15 +183,16 @@ full manual test protocol and [docs/RELEASING.md](docs/RELEASING.md) the release
 WGC (only when the image changes) ─┐
 webcam (Media Foundation) ─────────┴─► GPU canvas (region crop + webcam overlay)
                                                 │
-recording clock (excludes pauses) ─► video thread copies the canvas every 1/fps
-                                     into a queue of GPU textures
-WASAPI desktop + mic ─► mixer paced by the same clock (fills silence)
+recording clock (excludes pauses) ─► video thread converts the canvas every 1/fps
+                                     to NV12 (GPU video processor, scaling) into a queue
+WASAPI desktop + mic + app ─► mixer paced by the same clock (fills silence)
                                                 │
-                     MediaStreamSource ─► MediaTranscoder (HW, scaling) ─► MP4
+      H.264 encoder (hardware, or software) + AAC encoder ─► packets ─► MP4 writer
 ```
 
 - `src/capture.rs`: capture sessions, source list and preview.
 - `src/encoder.rs`: clock, canvas, frame queue and constant-frame-rate encoder.
+- `src/mf.rs`: Media Foundation pieces: GPU colour conversion, H.264 and AAC encoders, MP4 writer.
 - `src/camera.rs`: webcam capture and overlay placement.
 - `src/audio.rs`: WASAPI capture, devices and mixer.
 - `src/app.rs`: user interface (egui) and recording lifecycle.

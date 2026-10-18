@@ -44,6 +44,7 @@ Out of scope:
 ## Audit status
 
 obs-lite has not been audited. Most of the code was written with an AI coding assistant and has had
-no independent review. It contains a small amount of `unsafe` Rust (five `unsafe` blocks and two
-`unsafe impl` for Direct3D/COM interop, in `src/encoder.rs` and `src/capture.rs`). Dependencies are
+no independent review. It uses `unsafe` Rust to call Windows APIs directly (Direct3D 11, Media
+Foundation, COM and a few Win32 functions), mostly in `src/mf.rs`, `src/encoder.rs`,
+`src/capture.rs` and `src/camera.rs`. Dependencies are
 checked for RustSec advisories and licenses with `cargo deny` on every pull request.

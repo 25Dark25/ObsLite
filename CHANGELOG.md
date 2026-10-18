@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Application Audio Capture source: records the sound of one application, with its own mixer
   channel.
 
+### Changed
+
+- New encoding engine: obs-lite drives the Media Foundation H.264 and AAC encoders and the MP4
+  writer itself instead of going through MediaTranscoder. Colour conversion and scaling run on the
+  GPU's video processor; colours are BT.709 and signalled in the file; a keyframe every 2 s.
+  Recording 1080p60 uses about 80 MB less memory.
+- Without a usable hardware H.264 encoder, the Windows software encoder is used.
+
 ## [0.2.1] - 2026-10-17
 
 The 0.2.0 release was withdrawn before its files were attached; 0.2.1 includes all of its
