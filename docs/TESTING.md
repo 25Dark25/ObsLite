@@ -3,7 +3,10 @@
 ## Automated
 
 Run on every pull request by CI (Windows, Rust 1.95 and stable), together with clippy, a release
-build and `cargo deny`:
+build and `cargo deny`. CI also builds the MSI, validates it (ICE) and runs `installer/test.ps1`,
+which installs it for the runner's user and checks the files, the *Obs Lite* Start menu shortcut,
+that there is no desktop shortcut by default, the *Installed apps* entry and its icon, a clean
+uninstall, then an install with the desktop shortcut and an upgrade that keeps it:
 
 ```powershell
 cargo test --locked
@@ -92,6 +95,9 @@ provide, so the pipeline is tested by hand before each release. Build with
     while it runs, pause it, stop it (its length must match, without the pause), save again, stop
     the buffer. The recording timer must count from the recording's start; the tray menu must
     offer the same actions.
+22. **Installer**: run the `.msi` by double-clicking it as a standard user: no UAC prompt; the
+    *Shortcuts* page has *Create a shortcut on the desktop* unticked; after installing, *Obs Lite*
+    is in the Start menu with the obs-lite icon and starts. Uninstall from *Settings › Apps*.
 
 Check each MP4's duration, resolution, frame rate and audio track in its *Properties › Details*
 tab or with `ffprobe`.
@@ -146,6 +152,14 @@ and so encoding on the Intel GPU, *Intel Quick Sync Video H.264 Encoder MFT*):
 | 20. Software encoder | 1080p60: 359 frames, 0 lagged, about one CPU core; 720p with pause: 239 frames; correct colours |
 | Resource use | Idle 98 MB / 0.5 % CPU; recording 1080p60 270 MB / 1.5 % CPU (0.2.1: ~350 MB / 1.3 %) |
 | 21. Replay buffer | Self-test with `replay`: 3 s asked, 4.83 s saved (from the keyframe before), audio −14.1 dB. In the app: two replays of 20.87 s and 20.90 s, first frame a keyframe, 0 decode errors; a recording started while it ran lasted 6.00 s for 6 s between hotkeys (forced keyframe), and another, paused 2 s, lasted 5.03 s with a 440 Hz tone at −14.1 dB; private memory 280 MB with both running. A bug where stopping a recording without the replay buffer left the MP4 unfinished was found here and fixed before commit. Not tested: the new tray menu items |
+
+2026-10-18, installer (WiX 6.0.2), same machine:
+
+| Step | Result |
+|---|---|
+| `installer/test.ps1` | All 23 checks passed (install, uninstall, desktop shortcut, upgrade 0.2.1 → 0.2.2 keeping it, clean uninstall) |
+| 22. Installer, interactive | Welcome, *Shortcuts* (box unticked), *Ready*, *Completed*; no UAC prompt; installed to `%LOCALAPPDATA%\Programs\obs-lite`; MSI 3.1 MB. Started from the Start menu shortcut, whose icon is the obs-lite one |
+| `wix msi validate` | Passes; warnings ICE69 (shortcut and executable in different components of the same feature) and ICE91 (per-user folder), expected for a per-user package |
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.

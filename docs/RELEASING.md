@@ -18,18 +18,23 @@ Releases are tagged, built and signed by the maintainer. Replace `X.Y.Z` with th
 3. **Build** the zip: *Actions › Release build › Run workflow*, choosing the tag
    (or `gh api -X POST repos/25Dark25/obs-lite/actions/workflows/release-build.yml/dispatches -f ref=vX.Y.Z`).
    Download the `obs-lite-<commit>` artifact and unzip it: it contains
-   `obs-lite-X.Y.Z-windows-x64.zip` (`obs-lite.exe`, `LICENSE`, `THIRD-PARTY-LICENSES.html`) and
-   `SHA256SUMS`. Check that `sha256sum obs-lite-X.Y.Z-windows-x64.zip` matches the hash printed in
-   the run's *Package* step and that the run's commit is the tag's (`git rev-parse vX.Y.Z^{commit}`).
+   `obs-lite-X.Y.Z-windows-x64.zip` (`obs-lite.exe`, `LICENSE`, `THIRD-PARTY-LICENSES.html`), the
+   installer `obs-lite-X.Y.Z-windows-x64.msi` (the same files) and `SHA256SUMS`. Check that
+   `sha256sum --check SHA256SUMS` passes, that the hashes match those printed in the run's *Package*
+   step and that the run's commit is the tag's (`git rev-parse vX.Y.Z^{commit}`).
    The Windows build is not bit-for-bit reproducible, so a local build will not have the same hash.
-   Run `obs-lite.exe --selftest 3 test.mp4` from the zip as a smoke test.
+   Run `obs-lite.exe --selftest 3 test.mp4` from the zip as a smoke test, and install the `.msi`:
+   *Obs Lite* must be in the Start menu and start; then uninstall it.
 
-4. **Sign** the zip and check the signature as a user would (*Verifying a release* in the README):
+4. **Sign** the zip and the installer and check the signatures as a user would (*Verifying a
+   release* in the README):
 
    ```sh
-   gpg --local-user A7FCEDEAD7E6C3437312284A442DA687E0FF73EE --detach-sign --armor obs-lite-X.Y.Z-windows-x64.zip
-   gpg --verify obs-lite-X.Y.Z-windows-x64.zip.asc obs-lite-X.Y.Z-windows-x64.zip
+   for f in obs-lite-X.Y.Z-windows-x64.zip obs-lite-X.Y.Z-windows-x64.msi; do
+     gpg --local-user A7FCEDEAD7E6C3437312284A442DA687E0FF73EE --detach-sign --armor "$f"
+     gpg --verify "$f.asc" "$f"
+   done
    ```
 
 5. **Publish**: create a GitHub release from the tag. Use the changelog section as the notes, with
-   the zip's SHA-256, and upload `obs-lite-X.Y.Z-windows-x64.zip` and its `.asc`.
+   the SHA-256 of the zip and the installer, and upload both with their `.asc` files.
