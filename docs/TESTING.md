@@ -75,6 +75,9 @@ provide, so the pipeline is tested by hand before each release. Build with
 17. **Black frames**: record 15 s of the screen with the webcam on, then count fully black frames
     with ffmpeg (none expected):
     `ffmpeg -i rec.mp4 -vf "signalstats,metadata=print:file=-" -f null - | grep -c "YMAX=1[0-9]$"`
+18. **Application audio**: play a sound in one application, add it with *Application Audio
+    Capture*, turn desktop audio off and record; the file must contain that sound. Capturing a
+    silent application at the same time must give silence.
 
 Check each MP4's duration, resolution, frame rate and audio track in its *Properties › Details*
 tab or with `ffprobe`.
@@ -112,5 +115,6 @@ and 8 on commit `b6cdad1` plus the settings BOM fix:
 | 17. Black frames | Before the fix, counted with ffmpeg: 1 per 15 s on the screen without webcam (also on `main`), 5 per 15 s with it, up to 27 per 10 s in a debug build. After: 0 in 5 webcam recordings and 5 self-tests (6–15 s each), 0 lagged frames |
 | Preview sharpness | Preview drawn at about 1170 px wide on a 1920×1080 display: text in it is legible (it was 640 px, one pixel per block). Idle CPU 4.2 → 7.5 % of one core (0.3 → 0.5 % of 16 threads), private memory 95 → 98 MB (105 MB maximized) |
 | Update notice | A build labelled 0.2.0 queried the real GitHub API at start-up and showed "Nueva versión 0.2.1 disponible" in the status bar |
+| 18. Application audio | A PowerShell window looping a 440 Hz tone: captured on its own at −14 dBFS while VSCodium, captured at the same time, gave silence; recording with desktop audio off had the tone (mean −14.1 dB, ffmpeg volumedetect); mixer channel and source row shown |
 
 Not tested at all: Intel and AMD encoders, Windows 10, multiple monitors, HDR displays.

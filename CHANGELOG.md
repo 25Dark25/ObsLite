@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Update notice: at start-up obs-lite asks GitHub for the latest release and shows a link in the
   status bar if there is a newer one (Settings › General can turn this off).
+- Application Audio Capture source: records the sound of one application, with its own mixer
+  channel.
 
 ## [0.2.1] - 2026-10-17
 
