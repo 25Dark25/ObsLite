@@ -108,11 +108,20 @@ pub struct Hotkeys {
     pub pause: Option<String>,
     pub screenshot: Option<String>,
     pub mute_mic: Option<String>,
+    pub replay: Option<String>,
+    pub save_replay: Option<String>,
 }
 
 impl Default for Hotkeys {
     fn default() -> Self {
-        Self { record: Some("Ctrl+Alt+R".into()), pause: Some("Ctrl+Alt+P".into()), screenshot: None, mute_mic: None }
+        Self {
+            record: Some("Ctrl+Alt+R".into()),
+            pause: Some("Ctrl+Alt+P".into()),
+            screenshot: None,
+            mute_mic: None,
+            replay: None,
+            save_replay: None,
+        }
     }
 }
 
@@ -153,6 +162,8 @@ pub struct Config {
     /// Webcam overlaid on the recording.
     pub camera: Option<CameraConfig>,
     pub hotkeys: Hotkeys,
+    /// Seconds the replay buffer keeps.
+    pub replay_seconds: u32,
 }
 
 impl Default for Config {
@@ -183,6 +194,7 @@ impl Default for Config {
             region: None,
             camera: None,
             hotkeys: Hotkeys::default(),
+            replay_seconds: 20,
         }
     }
 }
