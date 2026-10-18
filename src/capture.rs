@@ -67,6 +67,30 @@ pub fn list_sources() -> Vec<Source> {
     out
 }
 
+/// An application whose audio can be captured on its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudioApp {
+    pub pid: u32,
+    /// Executable name, e.g. "Spotify.exe": what the settings remember.
+    pub exe: String,
+    pub title: String,
+}
+
+/// Applications with a visible window (one entry per executable), excluding obs-lite.
+pub fn list_audio_apps() -> Vec<AudioApp> {
+    let own_pid = std::process::id();
+    let mut apps: Vec<AudioApp> = Vec::new();
+    for w in Window::enumerate().unwrap_or_default() {
+        let (Ok(title), Ok(pid), Ok(exe)) = (w.title(), w.process_id(), w.process_name()) else { continue };
+        if title.trim().is_empty() || pid == own_pid || apps.iter().any(|a| a.exe.eq_ignore_ascii_case(&exe)) {
+            continue;
+        }
+        apps.push(AudioApp { pid, exe, title });
+    }
+    apps.sort_by_key(|a| a.exe.to_lowercase());
+    apps
+}
+
 #[derive(Clone)]
 pub struct RecordConfig {
     pub path: PathBuf,

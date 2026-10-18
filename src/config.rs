@@ -140,6 +140,10 @@ pub struct Config {
     pub mic_muted: bool,
     /// RNNoise noise suppression on the microphone.
     pub mic_denoise: bool,
+    /// Executable whose audio is captured on its own (Application Audio Capture).
+    pub app_audio: Option<String>,
+    pub app_volume: f32,
+    pub app_muted: bool,
     /// WASAPI endpoint IDs; `None` follows the Windows default device.
     pub system_device: Option<String>,
     pub mic_device: Option<String>,
@@ -170,6 +174,9 @@ impl Default for Config {
             mic_volume: 1.0,
             mic_muted: false,
             mic_denoise: false,
+            app_audio: None,
+            app_volume: 1.0,
+            app_muted: false,
             system_device: None,
             mic_device: None,
             source_label: None,

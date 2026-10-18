@@ -102,11 +102,14 @@ pub struct App {
     screenshot: Option<Receiver<Result<PathBuf, String>>>,
     system: Option<Input>,
     mic: Option<Input>,
+    /// Application Audio Capture, when its application is running.
+    app_audio: Option<Input>,
+    audio_apps: Vec<capture::AudioApp>,
     cameras: Vec<CameraDevice>,
     camera: Option<Camera>,
     camera_texture: Option<TextureHandle>,
     camera_seq: Option<u64>,
-    meters: [f32; 2],
+    meters: [f32; 3],
     texture: Option<TextureHandle>,
     texture_seq: Option<u64>,
     /// Choosing a region on the preview, and the drag in progress (start, end).
@@ -145,6 +148,8 @@ impl App {
         let mut app = Self {
             system: None,
             mic: None,
+            app_audio: None,
+            audio_apps: Vec::new(),
             cameras: Vec::new(),
             camera: None,
             camera_texture: None,
@@ -157,7 +162,7 @@ impl App {
             preview: None,
             rec: RecState::Idle,
             screenshot: None,
-            meters: [0.0; 2],
+            meters: [0.0; 3],
             texture: None,
             texture_seq: None,
             picking_region: false,
@@ -194,6 +199,7 @@ impl App {
         app.refresh_devices();
         app.restart_input(InputKind::System);
         app.restart_input(InputKind::Microphone);
+        app.restart_app_audio();
         app.refresh_sources();
         app.restart_preview(&cc.egui_ctx);
         app.restart_camera(&cc.egui_ctx);
@@ -272,7 +278,17 @@ impl App {
         match kind {
             InputKind::System => (c.system_audio, c.system_device.clone(), channel_gain(c.system_volume, c.system_muted)),
             InputKind::Microphone => (c.mic, c.mic_device.clone(), channel_gain(c.mic_volume, c.mic_muted)),
+            InputKind::Application(_) => (c.app_audio.is_some(), None, channel_gain(c.app_volume, c.app_muted)),
         }
+    }
+
+    /// Captures the configured application's audio, if that application is running now.
+    fn restart_app_audio(&mut self) {
+        self.app_audio = None;
+        let Some(exe) = &self.config.app_audio else { return };
+        let Some(app) = capture::list_audio_apps().into_iter().find(|a| a.exe.eq_ignore_ascii_case(exe)) else { return };
+        let (_, _, gain) = self.channel(InputKind::Application(app.pid));
+        self.app_audio = Some(Input::start(InputKind::Application(app.pid), None, gain));
     }
 
     fn restart_input(&mut self, kind: InputKind) {
@@ -280,6 +296,7 @@ impl App {
         let slot = match kind {
             InputKind::System => &mut self.system,
             InputKind::Microphone => &mut self.mic,
+            InputKind::Application(_) => &mut self.app_audio,
         };
         *slot = None; // release the device before reopening it
         *slot = enabled.then(|| Input::start(kind, device, gain));
@@ -369,7 +386,12 @@ impl App {
 
         let name = format!("{}.mp4", chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
         let path = self.config.output_dir.join(name);
-        let inputs: Vec<_> = [&self.system, &self.mic].into_iter().flatten().map(|i| i.shared.clone()).collect();
+        // The application may have started after obs-lite.
+        if self.app_audio.is_none() {
+            self.restart_app_audio();
+        }
+        let inputs: Vec<_> =
+            [&self.system, &self.mic, &self.app_audio].into_iter().flatten().map(|i| i.shared.clone()).collect();
         let opts = SessionOptions {
             source,
             fps: self.config.fps,
@@ -804,6 +826,7 @@ impl App {
             ui.add_enabled_ui(!recording, |ui| {
                 ui.horizontal(|ui| {
                     let mut camera_choice = None;
+                    let mut app_choice = None;
                     let add = ui.menu_button(RichText::new(" + ").strong(), |ui| {
                         let mut chosen = None;
                         ui.menu_button(tr!("Captura de pantalla", "Display Capture"), |ui| {
@@ -818,6 +841,15 @@ impl App {
                                 for s in self.sources.iter().filter(|s| matches!(s.id, SourceId::Window(_))) {
                                     if ui.button(&s.label).clicked() {
                                         chosen = Some(s.id);
+                                    }
+                                }
+                            });
+                        });
+                        ui.menu_button(tr!("Captura de audio de aplicación", "Application Audio Capture"), |ui| {
+                            egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
+                                for app in &self.audio_apps {
+                                    if ui.button(format!("{}  ·  {}", app.exe, app.title)).clicked() {
+                                        app_choice = Some(app.exe.clone());
                                     }
                                 }
                             });
@@ -838,12 +870,18 @@ impl App {
                     if add.response.clicked() {
                         self.refresh_sources();
                         self.cameras = camera::list_devices();
+                        self.audio_apps = capture::list_audio_apps();
                     }
                     if let Some(Some(id)) = add.inner {
                         self.select_source(&ctx, id);
                         ui.close();
                     }
                     add.response.on_hover_text(tr!("Añadir fuente", "Add source"));
+                    if let Some(exe) = app_choice {
+                        self.config.app_audio = Some(exe);
+                        self.restart_app_audio();
+                        ui.close();
+                    }
                     if let Some(device) = camera_choice {
                         let (corner, size) = self.config.camera.as_ref().map_or((Corner::BottomRight, CameraSize::Medium), |c| (c.corner, c.size));
                         self.config.camera = Some(CameraConfig { device: device.id, name: device.name, corner, size });
@@ -863,6 +901,14 @@ impl App {
                         if ui.add_enabled(self.config.region.is_some(), whole).clicked() {
                             self.config.region = None;
                             ui.close();
+                        }
+                        if self.config.app_audio.is_some() {
+                            ui.separator();
+                            if ui.button(tr!("Quitar audio de aplicación", "Remove Application Audio")).clicked() {
+                                self.config.app_audio = None;
+                                self.restart_app_audio();
+                                ui.close();
+                            }
                         }
                         let mut remove_camera = false;
                         if let Some(cam) = &mut self.config.camera {
@@ -898,6 +944,11 @@ impl App {
                         format!(" ({} {}×{})", tr!("región", "region"), r.width, r.height)
                     });
                     list_row(ui, &format!("{kind}{region}  ·  {}", source.label));
+                    if let Some(exe) = &self.config.app_audio {
+                        ui.add_space(2.0);
+                        let state = if self.app_audio.is_some() { String::new() } else { tr!(" (no se está ejecutando)", " (not running)").to_owned() };
+                        list_row(ui, &format!("{}  ·  {exe}{state}", tr!("Captura de audio de aplicación", "Application Audio Capture")));
+                    }
                     if let Some(cam) = &self.config.camera {
                         ui.add_space(2.0);
                         let error = self.camera.as_ref().and_then(|c| c.shared.error.lock().unwrap().clone());
@@ -916,12 +967,19 @@ impl App {
     }
 
     fn mixer_dock(&mut self, ui: &mut egui::Ui) {
-        let rows = [(InputKind::System, tr!("Audio del escritorio", "Desktop Audio")), (InputKind::Microphone, "Mic/Aux")];
+        // Three channels do not always fit the dock's height.
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.mixer_channels(ui));
+    }
+
+    fn mixer_channels(&mut self, ui: &mut egui::Ui) {
+        let app_label = self.config.app_audio.clone().unwrap_or_default();
         let mut any = false;
-        for (i, (kind, label)) in rows.into_iter().enumerate() {
-            let (volume, muted, input) = match kind {
-                InputKind::System => (&mut self.config.system_volume, &mut self.config.system_muted, &self.system),
-                InputKind::Microphone => (&mut self.config.mic_volume, &mut self.config.mic_muted, &self.mic),
+        for i in 0..3 {
+            let c = &mut self.config;
+            let (label, volume, muted, input) = match i {
+                0 => (tr!("Audio del escritorio", "Desktop Audio").to_owned(), &mut c.system_volume, &mut c.system_muted, &self.system),
+                1 => ("Mic/Aux".to_owned(), &mut c.mic_volume, &mut c.mic_muted, &self.mic),
+                _ => (app_label.clone(), &mut c.app_volume, &mut c.app_muted, &self.app_audio),
             };
             // Disabled devices are not shown, as in OBS.
             let Some(input) = input else { continue };
@@ -1653,11 +1711,13 @@ mod tests {
             screenshot: None,
             system: None,
             mic: None,
+            app_audio: None,
+            audio_apps: Vec::new(),
             cameras: Vec::new(),
             camera: None,
             camera_texture: None,
             camera_seq: None,
-            meters: [0.0; 2],
+            meters: [0.0; 3],
             texture: None,
             texture_seq: None,
             picking_region: false,

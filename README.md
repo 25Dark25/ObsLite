@@ -38,7 +38,8 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spa
 
 - **Preview** on top and, below it, the **Sources**, **Audio Mixer** and **Controls** docks.
   Right-click the preview to take a screenshot.
-- **Sources › +**: *Display Capture*, *Window Capture* or *Video Capture Device* (a webcam shown in a
+- **Sources › +**: *Display Capture*, *Window Capture*, *Application Audio Capture* (the sound of
+  one application, with its own mixer channel) or *Video Capture Device* (a webcam shown in a
   corner of the recording). **Properties**: capture the cursor, *Select Region…* to record only part
   of the source, and the webcam's corner and size.
 - **Audio Mixer**: desktop audio and *Mic/Aux*, each with a meter, volume slider and mute button
@@ -59,6 +60,8 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spa
 - **Display or window capture** through Windows Graphics Capture (the API OBS uses), with or
   without the cursor.
 - **Desktop audio + microphone** mixed together, with volume, mute, meters and device selection.
+- **Application audio**: the sound of a single application (and its child processes), e.g. a game
+  without Discord, as its own mixer channel. Needs Windows 10 version 2004 or later.
 - **Hardware H.264** (NVENC / Quick Sync / AMF through Media Foundation) to MP4, which plays everywhere.
 - **Constant frame rate** (30 or 60 fps), suitable for video editors. When the screen does not
   change the last frame is repeated; when the machine falls behind, slots are skipped and reported
@@ -102,6 +105,9 @@ Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and scre
 - Minimize to tray keeps the window minimized and removes its taskbar button (a hidden window would
   stop handling hotkeys); it still appears in Alt+Tab.
 - Noise suppression downmixes the microphone to mono.
+- Application audio is also part of desktop audio: with both on, that application is heard twice.
+  It is chosen among applications with a window and found again by executable name; if the
+  application starts after obs-lite, its audio is picked up when the recording starts.
 - Hotkeys need Ctrl or Alt (F-keys excepted), and are off while Settings is open.
 
 ## Verifying a release

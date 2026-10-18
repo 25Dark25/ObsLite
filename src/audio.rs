@@ -13,7 +13,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use nnnoiseless::DenoiseState;
-use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
+use wasapi::{AudioClient, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 
 use crate::encoder::Clock;
 
@@ -28,13 +28,15 @@ const MAX_LATENCY: usize = SAMPLE_RATE as usize * CHANNELS / 10; // 100 ms
 pub enum InputKind {
     System,
     Microphone,
+    /// The audio of one process (and its children), by process id.
+    Application(u32),
 }
 
 impl InputKind {
     fn direction(self) -> Direction {
         match self {
             // Loopback capture opens the render (output) endpoint.
-            Self::System => Direction::Render,
+            Self::System | Self::Application(_) => Direction::Render,
             Self::Microphone => Direction::Capture,
         }
     }
@@ -142,15 +144,27 @@ impl Drop for Input {
 
 fn capture_loop(kind: InputKind, device_id: Option<&str>, shared: &InputShared) -> Result<(), Box<dyn Error>> {
     wasapi::initialize_mta().ok()?;
-    let enumerator = DeviceEnumerator::new()?;
-    let device = match device_id {
-        Some(id) => enumerator.get_device(id)?,
-        None => enumerator.get_default_device(&kind.direction())?,
-    };
-    let mut client = device.get_iaudioclient()?;
     let format = WaveFormat::new(32, 32, &SampleType::Float, SAMPLE_RATE as usize, CHANNELS, None);
-    let mode = StreamMode::PollingShared { autoconvert: true, buffer_duration_hns: 1_000_000 };
+    let (mut client, mode) = match kind {
+        // Process loopback (Windows 10 2004+) only works event-driven.
+        InputKind::Application(pid) => (
+            AudioClient::new_application_loopback_client(pid, true)?,
+            StreamMode::EventsShared { autoconvert: true, buffer_duration_hns: 0 },
+        ),
+        _ => {
+            let enumerator = DeviceEnumerator::new()?;
+            let device = match device_id {
+                Some(id) => enumerator.get_device(id)?,
+                None => enumerator.get_default_device(&kind.direction())?,
+            };
+            (device.get_iaudioclient()?, StreamMode::PollingShared { autoconvert: true, buffer_duration_hns: 1_000_000 })
+        }
+    };
     client.initialize_client(&format, &Direction::Capture, &mode)?;
+    let event = match mode {
+        StreamMode::EventsShared { .. } => Some(client.set_get_eventhandle()?),
+        _ => None,
+    };
     let capture = client.get_audiocaptureclient()?;
     client.start_stream()?;
 
@@ -176,7 +190,13 @@ fn capture_loop(kind: InputKind, device_id: Option<&str>, shared: &InputShared) 
         } else {
             shared.peak.store(0, Ordering::Relaxed);
         }
-        thread::sleep(Duration::from_millis(5));
+        match &event {
+            // Times out while the application is silent; that is fine.
+            Some(event) => {
+                let _ = event.wait_for_event(20);
+            }
+            None => thread::sleep(Duration::from_millis(5)),
+        }
     }
     client.stop_stream()?;
     Ok(())
