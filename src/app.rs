@@ -25,6 +25,7 @@ use crate::config::{Config, Hotkeys, Quality, Region, Resolution};
 use crate::hotkeys;
 use crate::i18n::{self, Language, tr};
 use crate::tray::{Tray, TrayCommand, TrayState};
+use crate::update::{self, Release};
 
 const PREVIEW_FPS: u32 = 5;
 const DOCK_HEIGHT: f32 = 236.0;
@@ -124,6 +125,9 @@ pub struct App {
     tray_commands: Arc<Mutex<Vec<TrayCommand>>>,
     /// Minimized to the tray.
     hidden: bool,
+    /// A newer release, once the start-up check has answered.
+    update: Option<Release>,
+    update_check: Option<Receiver<Option<Release>>>,
 }
 
 impl App {
@@ -168,7 +172,19 @@ impl App {
             tray: None,
             tray_commands: Arc::new(Mutex::new(Vec::new())),
             hidden: false,
+            update: None,
+            update_check: None,
         };
+        if app.config.check_updates {
+            let (tx, rx) = mpsc::channel();
+            let ctx = cc.egui_ctx.clone();
+            thread::spawn(move || {
+                // Offline or rate-limited: say nothing.
+                let _ = tx.send(update::newer_release().ok().flatten());
+                ctx.request_repaint();
+            });
+            app.update_check = Some(rx);
+        }
         let commands = app.tray_commands.clone();
         match Tray::new(&cc.egui_ctx, crate::ICON_RGBA, 64, move |c| commands.lock().unwrap().push(c)) {
             Ok(tray) => app.tray = Some(tray),
@@ -487,6 +503,11 @@ impl App {
         let actions: Vec<Action> = self.actions.lock().unwrap().drain(..).collect();
         for action in actions {
             self.handle(ctx, action);
+        }
+        if let Some(rx) = &self.update_check
+            && let Ok(release) = rx.try_recv()
+        {
+            (self.update, self.update_check) = (release, None);
         }
         let commands: Vec<TrayCommand> = self.tray_commands.lock().unwrap().drain(..).collect();
         for command in commands {
@@ -998,6 +1019,13 @@ impl App {
                 ui.spacing_mut().item_spacing.x = 14.0;
                 self.recording_indicator(ui);
                 ui.label(RichText::new(format!("CPU: {:.1}%", self.cpu.percent)).small().color(TEXT_MUTED));
+                if let Some(release) = &self.update {
+                    let text = tr!("Nueva versión {} disponible", "New version {} available", release.version);
+                    let link = ui.add(egui::Label::new(RichText::new(text).small().color(PRIMARY_LIGHT).underline()).sense(Sense::click()));
+                    if link.on_hover_text(&release.url).clicked() {
+                        let _ = std::process::Command::new("explorer").arg(&release.url).spawn();
+                    }
+                }
             });
         });
     }
@@ -1122,6 +1150,9 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
                 ui.end_row();
                 ui.label(tr!("Bandeja del sistema", "System Tray"));
                 ui.checkbox(&mut c.minimize_to_tray, tr!("Minimizar a la bandeja del sistema", "Minimize to the system tray"));
+                ui.end_row();
+                ui.label(tr!("Actualizaciones", "Updates"));
+                ui.checkbox(&mut c.check_updates, tr!("Buscar versiones nuevas al iniciar", "Check for new versions at startup"));
                 ui.end_row();
                 ui.label(tr!("Captura", "Capture"));
                 ui.checkbox(&mut c.hide_from_capture, tr!("Ocultar obs-lite de la captura de pantalla", "Hide obs-lite from screen capture"));
@@ -1641,6 +1672,8 @@ mod tests {
             tray: None,
             tray_commands: Arc::new(Mutex::new(Vec::new())),
             hidden: false,
+            update: None,
+            update_check: None,
         }
     }
 

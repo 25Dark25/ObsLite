@@ -75,6 +75,8 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spa
   in its own preview.
 - **System tray icon**, with an option to minimize to the tray.
 - **Spanish and English** interface.
+- **Update notice**: at start-up it asks GitHub for the latest release and shows a link if there
+  is a newer one. Nothing is downloaded; Settings › General turns the check off.
 - Sharp preview at 5 fps: frames are scaled down to the size the preview is drawn at, averaging
   every pixel, so text stays legible.
 
@@ -83,7 +85,8 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spa
 Everything is set from the interface (*Ajustes* and the docks) and saved in
 `%APPDATA%\obs-lite\settings.json`. Delete that file to go back to the defaults: first display,
 cursor captured, desktop audio on, microphone off, 60 fps, native resolution, medium quality,
-output to the *Videos* folder, hotkeys `Ctrl+Alt+R` and `Ctrl+Alt+P`, obs-lite hidden from capture.
+output to the *Videos* folder, hotkeys `Ctrl+Alt+R` and `Ctrl+Alt+P`, obs-lite hidden from capture,
+update check on.
 Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and screenshots likewise
 (`Screenshot 2026-10-16 13-45-02.png`, or `Captura …` in Spanish).
 

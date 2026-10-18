@@ -16,10 +16,12 @@ Only the latest release receives fixes.
 
 ## Scope
 
-obs-lite is a local desktop application. It runs with the privileges of the user who starts it,
-installs nothing, and its own code opens no network connections. It reads one input file it does
-not fully control, `%APPDATA%\obs-lite\settings.json`, and writes MP4 files to the folder chosen in
-*Ajustes*.
+obs-lite is a local desktop application. It runs with the privileges of the user who starts it
+and installs nothing. Its only network connection is an optional update check at start-up: one
+HTTPS request to `api.github.com` for the latest release, which is shown as a link and never
+downloaded (Settings › General turns it off). It reads two inputs it does not fully control,
+`%APPDATA%\obs-lite\settings.json` and that update response, and writes MP4 and PNG files to the
+folder chosen in Settings.
 
 In scope:
 

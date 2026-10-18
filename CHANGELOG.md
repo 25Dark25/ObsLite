@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Update notice: at start-up obs-lite asks GitHub for the latest release and shows a link in the
+  status bar if there is a newer one (Settings › General can turn this off).
+
 ## [0.2.1] - 2026-10-17
 
 The 0.2.0 release was withdrawn before its files were attached; 0.2.1 includes all of its

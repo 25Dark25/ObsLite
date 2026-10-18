@@ -37,6 +37,8 @@ cargo test --locked
 | `camera::overlay_sits_in_the_corner_with_the_camera_aspect` | The webcam overlay's position and size. |
 | `camera::resize_keeps_flat_colour_and_identity` | The webcam scaling. |
 | `tray::idle_icon_is_grey_with_the_same_alpha` | The idle tray icon. |
+| `update::versions_compare_numerically` | Only a strictly newer plain version counts as an update. |
+| `update::release_is_read_from_the_github_response` | The tag and page are read from GitHub's response; an error response gives nothing. |
 | `app::saved_message_survives_a_source_that_is_gone` | When the recorded window is closed, the "saved" message and file link stay, and the source is deselected. |
 
 ## Manual
@@ -109,5 +111,6 @@ and 8 on commit `b6cdad1` plus the settings BOM fix:
 | 16. Webcam | Added from *+ › Video Capture Device*; overlay in the chosen corner of preview and recording. Static window recorded with a 400×300 region and the webcam: 400×300, 60 fps, the camera corner changes every frame while the rest does not |
 | 17. Black frames | Before the fix, counted with ffmpeg: 1 per 15 s on the screen without webcam (also on `main`), 5 per 15 s with it, up to 27 per 10 s in a debug build. After: 0 in 5 webcam recordings and 5 self-tests (6–15 s each), 0 lagged frames |
 | Preview sharpness | Preview drawn at about 1170 px wide on a 1920×1080 display: text in it is legible (it was 640 px, one pixel per block). Idle CPU 4.2 → 7.5 % of one core (0.3 → 0.5 % of 16 threads), private memory 95 → 98 MB (105 MB maximized) |
+| Update notice | A build labelled 0.2.0 queried the real GitHub API at start-up and showed "Nueva versión 0.2.1 disponible" in the status bar |
 
 Not tested at all: Intel and AMD encoders, Windows 10, multiple monitors, HDR displays.
