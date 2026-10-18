@@ -21,14 +21,14 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11RenderTargetView, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
-use windows::Win32::Media::MediaFoundation::{IMFMediaType, MF_VERSION, MFSTARTUP_FULL, MFShutdown, MFStartup};
+use windows::Win32::Media::MediaFoundation::IMFMediaType;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::core::BOOL;
 use windows_capture::frame::Frame;
 
 use crate::camera::{self, CameraSize, Corner, PixelRect};
 use crate::i18n::tr;
-use crate::mf::{Aac, Converter, H264, Mp4, Packet, TICKS_PER_SECOND, VideoEvent};
+use crate::mf::{Aac, Converter, H264, Media, Mp4, Packet, TICKS_PER_SECOND, VideoEvent};
 
 /// Queued NV12 frames (200 ms at 60 fps, about 3 MB each at 1080p). If the encoder falls
 /// further behind, the oldest queued frame is dropped and counted as lagged.
@@ -80,7 +80,6 @@ impl Clock {
 }
 
 pub struct EncoderSettings {
-    pub path: PathBuf,
     pub input: (u32, u32),
     pub output: (u32, u32),
     pub fps: u32,
@@ -135,26 +134,68 @@ impl Canvas {
     }
 }
 
-/// Where encoded packets go: the MP4 file, created at the first keyframe.
-struct Output {
-    path: PathBuf,
+/// Where encoded packets go: the recording file and the replay buffer, each optional. Shared
+/// with the app, which turns them on and off while the encoder runs.
+#[derive(Default)]
+pub struct Outputs {
+    /// The recording asked for, and its file once a keyframe has arrived.
+    path: Option<PathBuf>,
     file: Option<Com<Mp4>>,
+    /// Audio not yet in the file: from the last second, or since the recording was asked for.
+    pending_audio: VecDeque<Packet>,
+    replay: Option<Ring>,
+    video_type: Option<Com<IMFMediaType>>,
     audio_type: Option<Com<IMFMediaType>>,
-    /// Audio encoded before the first keyframe.
-    pending_audio: Vec<Packet>,
+    /// The encoder should make its next frame a keyframe, for a recording to start on.
+    keyframe_wanted: bool,
     error: Option<String>,
 }
 
-impl Output {
-    fn video(&mut self, packet: &Packet, video_type: impl FnOnce() -> windows::core::Result<IMFMediaType>) {
-        if self.file.is_none() {
-            if !packet.key {
-                return;
+impl Outputs {
+    /// Starts recording to `path` at the next keyframe, which is asked for right away.
+    pub fn start_file(&mut self, path: PathBuf) {
+        (self.path, self.file, self.error, self.keyframe_wanted) = (Some(path), None, None, true);
+    }
+
+    /// Stops recording; the returned file must still be finished (it can take a moment).
+    pub fn take_file(&mut self) -> Option<PendingFile> {
+        let path = self.path.take()?;
+        Some(PendingFile { path, file: self.file.take(), error: self.error.take() })
+    }
+
+    /// Keeps the last `seconds` of encoded video and audio in memory, or stops doing so.
+    pub fn set_replay(&mut self, seconds: Option<u32>) {
+        self.replay = seconds.map(|s| Ring::new(s as i64 * TICKS_PER_SECOND));
+    }
+
+    /// A copy of the replay buffer, to be saved.
+    pub fn replay(&self) -> Result<Replay, String> {
+        let empty = || tr!("el búfer de repetición todavía está vacío", "the replay buffer is still empty").to_owned();
+        let ring = self.replay.as_ref().filter(|r| !r.video.is_empty()).ok_or_else(empty)?;
+        let video_type = self.video_type.as_ref().ok_or_else(empty)?;
+        Ok(Replay {
+            video_type: Com(video_type.0.clone()),
+            audio_type: self.audio_type.as_ref().map(|t| Com(t.0.clone())),
+            video: ring.video.iter().cloned().collect(),
+            audio: ring.audio.iter().cloned().collect(),
+        })
+    }
+
+    fn take_keyframe_request(&mut self) -> bool {
+        std::mem::take(&mut self.keyframe_wanted)
+    }
+
+    fn video(&mut self, packet: Packet, video_type: impl FnOnce() -> windows::core::Result<IMFMediaType>) {
+        if packet.key && self.video_type.is_none() {
+            match video_type() {
+                Ok(t) => self.video_type = Some(Com(t)),
+                Err(e) => {
+                    self.error.get_or_insert(e.to_string());
+                }
             }
-            let created = video_type().and_then(|video| {
-                Mp4::create(&self.path, &video, self.audio_type.as_ref().map(|t| &t.0), packet.time)
-            });
-            match created {
+        }
+        if let (Some(path), None, true, Some(video)) = (&self.path, &self.file, packet.key, &self.video_type) {
+            match Mp4::create(path, &video.0, self.audio_type.as_ref().map(|t| &t.0), packet.time) {
                 Ok(file) => {
                     for audio in self.pending_audio.drain(..) {
                         let _ = file.write(false, &audio);
@@ -163,38 +204,136 @@ impl Output {
                 }
                 Err(e) => {
                     self.error.get_or_insert(e.to_string());
-                    return;
                 }
             }
         }
         if let Some(file) = &self.file
-            && let Err(e) = file.0.write(true, packet)
+            && let Err(e) = file.0.write(true, &packet)
         {
             self.error.get_or_insert(e.to_string());
+        }
+        if let Some(ring) = &mut self.replay {
+            ring.push_video(packet);
         }
     }
 
     fn audio(&mut self, packets: Vec<Packet>) {
-        match &self.file {
-            Some(file) => {
-                for packet in &packets {
-                    if let Err(e) = file.0.write(false, packet) {
+        for packet in packets {
+            match &self.file {
+                Some(file) => {
+                    if let Err(e) = file.0.write(false, &packet) {
                         self.error.get_or_insert(e.to_string());
                     }
                 }
+                None => {
+                    self.pending_audio.push_back(packet.clone());
+                    // Without a recording waiting for its keyframe, a second is plenty.
+                    if self.path.is_none() {
+                        while self.pending_audio.front().is_some_and(|p| p.time < packet.time - TICKS_PER_SECOND) {
+                            self.pending_audio.pop_front();
+                        }
+                    }
+                }
             }
-            None => self.pending_audio.extend(packets),
+            if let Some(ring) = &mut self.replay {
+                ring.push_audio(packet);
+            }
         }
     }
+}
 
-    fn finish(&mut self) -> Result<(), String> {
-        if let Some(e) = self.error.take() {
+/// A recording that was stopped, still to be written out.
+pub struct PendingFile {
+    path: PathBuf,
+    file: Option<Com<Mp4>>,
+    error: Option<String>,
+}
+
+impl PendingFile {
+    pub fn finish(self) -> Result<PathBuf, String> {
+        if let Some(e) = self.error {
             return Err(e);
         }
-        match self.file.take() {
-            Some(file) => file.0.finish().map_err(|e| e.to_string()),
-            None => Err(tr!("no se codificó ningún fotograma", "no frame was encoded").into()),
+        let file = self.file.ok_or_else(|| tr!("no se codificó ningún fotograma", "no frame was encoded").to_owned())?;
+        file.0.finish().map_err(|e| e.to_string())?;
+        Ok(self.path)
+    }
+}
+
+/// The last seconds of encoded packets, starting at a video keyframe so they play on their own.
+struct Ring {
+    /// 100 ns units.
+    length: i64,
+    video: VecDeque<Packet>,
+    audio: VecDeque<Packet>,
+}
+
+impl Ring {
+    fn new(length: i64) -> Self {
+        Self { length, video: VecDeque::new(), audio: VecDeque::new() }
+    }
+
+    fn push_video(&mut self, packet: Packet) {
+        if self.video.is_empty() && !packet.key {
+            return;
         }
+        let oldest_needed = packet.time - self.length;
+        self.video.push_back(packet);
+        // Drop whole keyframe intervals while the next keyframe still covers `length`.
+        while let Some(next) = self.video.iter().skip(1).position(|p| p.key).map(|i| i + 1)
+            && self.video[next].time <= oldest_needed
+        {
+            self.video.drain(..next);
+        }
+        self.trim_audio();
+    }
+
+    fn push_audio(&mut self, packet: Packet) {
+        self.audio.push_back(packet);
+        self.trim_audio();
+    }
+
+    /// Audio from before the first video frame is of no use, nor is audio older than `length`.
+    fn trim_audio(&mut self) {
+        let start = match (self.video.front(), self.audio.back()) {
+            (Some(video), _) => video.time,
+            (None, Some(audio)) => audio.time - self.length,
+            (None, None) => return,
+        };
+        while self.audio.front().is_some_and(|p| p.time < start) {
+            self.audio.pop_front();
+        }
+    }
+}
+
+/// A copy of the replay buffer.
+pub struct Replay {
+    video_type: Com<IMFMediaType>,
+    audio_type: Option<Com<IMFMediaType>>,
+    video: Vec<Packet>,
+    audio: Vec<Packet>,
+}
+
+impl Replay {
+    pub fn save(self, path: PathBuf) -> Result<PathBuf, String> {
+        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        let start = self.video[0].time;
+        let audio_type = self.audio_type.as_ref().map(|t| &t.0);
+        let file = Mp4::create(&path, &self.video_type.0, audio_type, start).map_err(|e| e.to_string())?;
+        // Interleaved by time, the order a player reads them in.
+        let (mut audio, mut video) = (self.audio.iter().peekable(), self.video.iter().peekable());
+        loop {
+            let is_video = match (audio.peek(), video.peek()) {
+                (Some(a), Some(v)) => v.time <= a.time,
+                (Some(_), None) => false,
+                (None, Some(_)) => true,
+                (None, None) => break,
+            };
+            let packet = if is_video { video.next() } else { audio.next() };
+            file.write(is_video, packet.expect("peeked")).map_err(|e| e.to_string())?;
+        }
+        file.finish().map_err(|e| e.to_string())?;
+        Ok(path)
     }
 }
 
@@ -212,7 +351,7 @@ struct Inner {
     /// Frames waiting for the encoder: (frame number, NV12 slot).
     queue: Mutex<VecDeque<(u64, usize)>>,
     queued: Condvar,
-    output: Mutex<Output>,
+    output: Arc<Mutex<Outputs>>,
 }
 
 pub struct Encoder {
@@ -224,8 +363,10 @@ pub struct Encoder {
     overlay: Option<(Corner, CameraSize)>,
     /// The newest webcam picture, scaled, and where it goes: (x, y, width, height).
     overlay_texture: Mutex<Option<(Com<ID3D11Texture2D>, PixelRect)>>,
-    /// Name of the hardware encoder in use, for diagnostics.
+    /// Name of the H.264 encoder in use, for diagnostics.
     pub encoder_name: String,
+    /// Dropped last, after everything that uses Media Foundation.
+    _media: Media,
 }
 
 impl Encoder {
@@ -236,25 +377,27 @@ impl Encoder {
         s: EncoderSettings,
         clock: Arc<Clock>,
         started: Arc<AtomicBool>,
+        outputs: Arc<Mutex<Outputs>>,
     ) -> Result<Self, String> {
-        unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            MFStartup(MF_VERSION, MFSTARTUP_FULL).map_err(|e| e.to_string())?;
-        }
-        let created = Self::create(device, s, clock, started);
-        if created.is_err() {
-            let _ = unsafe { MFShutdown() };
-        }
-        created
+        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        let media = Media::start().map_err(|e| e.to_string())?;
+        Self::create(device, s, clock, started, outputs, media)
     }
 
-    fn create(device: &ID3D11Device, s: EncoderSettings, clock: Arc<Clock>, started: Arc<AtomicBool>) -> Result<Self, String> {
+    fn create(
+        device: &ID3D11Device,
+        s: EncoderSettings,
+        clock: Arc<Clock>,
+        started: Arc<AtomicBool>,
+        outputs: Arc<Mutex<Outputs>>,
+        media: Media,
+    ) -> Result<Self, String> {
         let fps = s.fps.max(1);
         let h264 = H264::new(device, s.output, fps, s.bitrate)
             .map_err(|e| tr!("no se pudo iniciar el codificador H.264: {}", "could not start the H.264 encoder: {}", e))?;
         let encoder_name = h264.name.clone();
         let aac = if s.audio { Some(Aac::new().map_err(|e| e.to_string())?) } else { None };
-        let audio_type = match &aac {
+        outputs.lock().unwrap().audio_type = match &aac {
             Some(aac) => Some(Com(aac.output_type().map_err(|e| e.to_string())?)),
             None => None,
         };
@@ -269,7 +412,7 @@ impl Encoder {
             fps: fps as u64,
             queue: Mutex::new(VecDeque::new()),
             queued: Condvar::new(),
-            output: Mutex::new(Output { path: s.path, file: None, audio_type, pending_audio: Vec::new(), error: None }),
+            output: outputs,
         });
 
         let spawn = |name: &str, work: Box<dyn FnOnce() + Send>| {
@@ -303,6 +446,7 @@ impl Encoder {
             overlay: s.overlay,
             overlay_texture: Mutex::new(None),
             encoder_name,
+            _media: media,
         })
     }
 
@@ -387,10 +531,10 @@ impl Encoder {
         (self.inner.encoded.load(Ordering::Relaxed), self.inner.lagged.load(Ordering::Relaxed))
     }
 
-    /// Ends both streams and waits for the MP4 to be finalized.
-    pub fn finish(mut self) -> Result<(), String> {
+    /// Ends both streams; what was being recorded still has to be finished.
+    pub fn finish(mut self) -> Option<PendingFile> {
         self.stop_threads();
-        self.inner.output.lock().unwrap().finish()
+        self.inner.output.lock().unwrap().take_file()
     }
 
     fn stop_threads(&mut self) {
@@ -407,9 +551,10 @@ impl Drop for Encoder {
     fn drop(&mut self) {
         if !self.threads.is_empty() {
             self.stop_threads();
-            let _ = self.inner.output.lock().unwrap().finish();
+            if let Some(file) = self.inner.output.lock().unwrap().take_file() {
+                let _ = file.finish();
+            }
         }
-        let _ = unsafe { MFShutdown() };
     }
 }
 
@@ -516,6 +661,9 @@ fn encode_video(inner: &Inner, h264: Com<H264>) {
         match event {
             VideoEvent::NeedInput if !draining => match next_frame(inner) {
                 Some((n, slot)) => {
+                    if inner.output.lock().unwrap().take_keyframe_request() {
+                        h264.force_keyframe();
+                    }
                     let texture = inner.canvas.converter.0.texture(slot);
                     if let Err(e) = h264.push(texture, n as i64 * TICKS_PER_SECOND / fps, TICKS_PER_SECOND / fps) {
                         inner.output.lock().unwrap().error.get_or_insert(e.to_string());
@@ -530,7 +678,7 @@ fn encode_video(inner: &Inner, h264: Com<H264>) {
                 }
             },
             VideoEvent::HaveOutput => match h264.pull() {
-                Ok(Some(packet)) => inner.output.lock().unwrap().video(&packet, || h264.output_type()),
+                Ok(Some(packet)) => inner.output.lock().unwrap().video(packet, || h264.output_type()),
                 Ok(None) => {}
                 Err(e) => {
                     inner.output.lock().unwrap().error.get_or_insert(e.to_string());
@@ -562,6 +710,55 @@ fn encode_audio(inner: &Inner, aac: Com<Aac>, rx: Receiver<Vec<u8>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn packet(time: i64, key: bool) -> Packet {
+        Packet { data: vec![0; 4], time, duration: 0, key }
+    }
+
+    /// 30 fps video with a keyframe every 2 s, and audio every 1024 samples, for `seconds`.
+    fn fill(ring: &mut Ring, seconds: i64) {
+        let audio_step = 1024 * TICKS_PER_SECOND / 48_000;
+        let mut audio = 0;
+        for n in 0..seconds * 30 {
+            let time = n * TICKS_PER_SECOND / 30;
+            while audio <= time {
+                ring.push_audio(packet(audio, true));
+                audio += audio_step;
+            }
+            ring.push_video(packet(time, n % 60 == 0));
+        }
+    }
+
+    #[test]
+    fn replay_keeps_the_last_seconds_from_a_keyframe() {
+        let mut ring = Ring::new(20 * TICKS_PER_SECOND);
+        fill(&mut ring, 60);
+        let (first, newest) = (&ring.video[0], ring.video.back().unwrap());
+        assert!(first.key, "the replay must start on a keyframe");
+        let covered = newest.time - first.time;
+        assert!(covered >= 20 * TICKS_PER_SECOND, "only {covered} covered");
+        assert!(covered < 22 * TICKS_PER_SECOND, "{covered} kept: more than one keyframe interval too many");
+        assert!(ring.audio[0].time >= first.time, "audio from before the first frame was kept");
+        assert!(ring.audio[0].time - first.time < TICKS_PER_SECOND / 40, "audio at the start is missing");
+    }
+
+    #[test]
+    fn replay_shorter_than_its_length_keeps_everything() {
+        let mut ring = Ring::new(20 * TICKS_PER_SECOND);
+        fill(&mut ring, 5);
+        assert_eq!(ring.video.len(), 150);
+        assert_eq!(ring.video[0].time, 0);
+    }
+
+    #[test]
+    fn replay_starts_at_the_first_keyframe() {
+        let mut ring = Ring::new(20 * TICKS_PER_SECOND);
+        ring.push_video(packet(0, false));
+        ring.push_video(packet(1, false));
+        assert!(ring.video.is_empty());
+        ring.push_video(packet(2, true));
+        assert_eq!(ring.video.len(), 1);
+    }
 
     #[test]
     fn clock_excludes_paused_time() {

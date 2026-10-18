@@ -20,7 +20,7 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_RATIONAL, DX
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Media::MediaFoundation::{
     CODECAPI_AVEncCommonMeanBitRate, CODECAPI_AVEncCommonRateControlMode, CODECAPI_AVEncMPVGOPSize,
-    CODECAPI_AVLowLatencyMode, ICodecAPI, IMF2DBuffer, IMFActivate,
+    CODECAPI_AVEncVideoForceKeyFrame, CODECAPI_AVLowLatencyMode, ICodecAPI, IMF2DBuffer, IMFActivate,
     IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType, IMFSample, IMFSinkWriter, IMFTransform,
     MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE, MF_EVENT_FLAG_NONE, MF_MT_AAC_PAYLOAD_TYPE,
     MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_BLOCK_ALIGNMENT,
@@ -34,7 +34,8 @@ use windows::Win32::Media::MediaFoundation::{
     MFT_ENUM_ADAPTER_LUID, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT,
     MFT_FRIENDLY_NAME_Attribute, MFT_MESSAGE_COMMAND_DRAIN, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
     MFT_MESSAGE_NOTIFY_END_OF_STREAM, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_MESSAGE_SET_D3D_MANAGER,
-    MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MFT_REGISTER_TYPE_INFO, MFTEnum2, MFTEnumEx,
+    MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MFT_REGISTER_TYPE_INFO, MF_VERSION, MFSTARTUP_FULL, MFShutdown, MFStartup, MFTEnum2,
+    MFTEnumEx,
     MFTranscodeContainerType_MPEG4, MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
     MFVideoPrimaries_BT709, MFVideoTransFunc_709, MFVideoTransferMatrix_BT709, eAVEncCommonRateControlMode_UnconstrainedVBR, eAVEncH264VProfile_High,
 };
@@ -55,6 +56,23 @@ pub struct Packet {
     pub duration: i64,
     /// A video keyframe (playback can start here); always true for audio.
     pub key: bool,
+}
+
+/// Keeps Media Foundation started while it lives (start-up is reference counted), so a file
+/// can still be finished after the encoder that made it is gone.
+pub struct Media(());
+
+impl Media {
+    pub fn start() -> Result<Self> {
+        unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL)? };
+        Ok(Self(()))
+    }
+}
+
+impl Drop for Media {
+    fn drop(&mut self) {
+        let _ = unsafe { MFShutdown() };
+    }
 }
 
 fn pack(high: u32, low: u32) -> u64 {
@@ -199,6 +217,7 @@ pub struct H264 {
     events: Option<IMFMediaEventGenerator>,
     next: Cell<VideoEvent>,
     draining: Cell<bool>,
+    codec: Option<ICodecAPI>,
     provides_samples: bool,
     _manager: Option<IMFDXGIDeviceManager>,
     pub name: String,
@@ -244,7 +263,8 @@ impl H264 {
             };
 
             // Not every encoder supports every setting; what it rejects keeps its default.
-            if let Ok(codec) = mft.cast::<ICodecAPI>() {
+            let codec = mft.cast::<ICodecAPI>().ok();
+            if let Some(codec) = &codec {
                 let set = |key: &GUID, value: u32| codec.SetValue(key, &VARIANT::from(value));
                 let _ = set(&CODECAPI_AVEncCommonRateControlMode, eAVEncCommonRateControlMode_UnconstrainedVBR.0 as u32);
                 let _ = set(&CODECAPI_AVEncCommonMeanBitRate, bitrate);
@@ -291,6 +311,7 @@ impl H264 {
                 events: if hardware { Some(mft.cast()?) } else { None },
                 next: Cell::new(VideoEvent::NeedInput),
                 draining: Cell::new(false),
+                codec,
                 mft,
                 provides_samples,
                 _manager: manager,
@@ -336,6 +357,13 @@ impl H264 {
                 self.next.set(if self.draining.get() { VideoEvent::Drained } else { VideoEvent::NeedInput });
                 Ok(None)
             }
+        }
+    }
+
+    /// Makes the next frame a keyframe, so a recording can start right away.
+    pub fn force_keyframe(&self) {
+        if let Some(codec) = &self.codec {
+            let _ = unsafe { codec.SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &VARIANT::from(1u32)) };
         }
     }
 
@@ -561,10 +589,12 @@ pub struct Mp4 {
     writer: IMFSinkWriter,
     audio: bool,
     start: i64,
+    _media: Media,
 }
 
 impl Mp4 {
     pub fn create(path: &Path, video: &IMFMediaType, audio: Option<&IMFMediaType>, start: i64) -> Result<Self> {
+        let media = Media::start()?;
         unsafe {
             let mut attributes = None;
             MFCreateAttributes(&mut attributes, 3)?;
@@ -582,7 +612,7 @@ impl Mp4 {
                 writer.SetInputMediaType(audio_stream, audio, None)?;
             }
             writer.BeginWriting()?;
-            Ok(Self { writer, audio: audio.is_some(), start })
+            Ok(Self { writer, audio: audio.is_some(), start, _media: media })
         }
     }
 
@@ -624,7 +654,6 @@ mod tests {
         D3D11CreateDevice,
     };
     use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
-    use windows::Win32::Media::MediaFoundation::{MF_VERSION, MFSTARTUP_FULL, MFShutdown, MFStartup};
     use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 
     /// A GPU without a usable hardware encoder: the software encoder must still turn the canvas
@@ -635,7 +664,7 @@ mod tests {
         const FRAMES: i64 = 10;
         unsafe {
             CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap();
-            MFStartup(MF_VERSION, MFSTARTUP_FULL).unwrap();
+            let media = Media::start().unwrap();
             let mut device = None;
             let flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
             D3D11CreateDevice(None, D3D_DRIVER_TYPE_HARDWARE, Default::default(), flags, None, D3D11_SDK_VERSION, Some(&mut device), None, None)
@@ -682,8 +711,7 @@ mod tests {
             assert_eq!(packets.len(), FRAMES as usize);
             assert!(packets[0].key);
             assert!(h264.output_type().is_ok());
-            drop((h264, converter));
-            MFShutdown().unwrap();
+            drop((h264, converter, media));
         }
     }
 }

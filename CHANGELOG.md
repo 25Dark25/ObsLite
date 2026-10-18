@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   status bar if there is a newer one (Settings › General can turn this off).
 - Application Audio Capture source: records the sound of one application, with its own mixer
   channel.
+- Replay buffer: keeps the last 20 s (configurable) in memory and saves them to an MP4 on demand,
+  from the Controls dock, the tray menu or a hotkey. It can run with or without a recording.
 
 ### Changed
 

@@ -11,14 +11,18 @@ use crate::i18n::tr;
 pub enum TrayCommand {
     ToggleRecording,
     TogglePause,
+    ToggleReplay,
+    SaveReplay,
     Screenshot,
     Show,
     Exit,
 }
 
-const ITEMS: [(&str, TrayCommand); 5] = [
+const ITEMS: [(&str, TrayCommand); 7] = [
     ("record", TrayCommand::ToggleRecording),
     ("pause", TrayCommand::TogglePause),
+    ("replay", TrayCommand::ToggleReplay),
+    ("save_replay", TrayCommand::SaveReplay),
     ("screenshot", TrayCommand::Screenshot),
     ("show", TrayCommand::Show),
     ("exit", TrayCommand::Exit),
@@ -29,6 +33,7 @@ const ITEMS: [(&str, TrayCommand); 5] = [
 pub struct TrayState {
     pub recording: bool,
     pub paused: bool,
+    pub replay: bool,
     pub english: bool,
 }
 
@@ -36,6 +41,8 @@ pub struct Tray {
     icon: TrayIcon,
     record: MenuItem,
     pause: MenuItem,
+    replay: MenuItem,
+    save_replay: MenuItem,
     screenshot: MenuItem,
     show: MenuItem,
     exit: MenuItem,
@@ -53,11 +60,12 @@ impl Tray {
         on_command: impl Fn(TrayCommand) + Send + Sync + 'static,
     ) -> Result<Self, String> {
         let item = |id: &str| MenuItem::with_id(id, "", true, None);
-        let (record, pause, screenshot, show, exit) =
-            (item("record"), item("pause"), item("screenshot"), item("show"), item("exit"));
+        let (record, pause, replay, save_replay) = (item("record"), item("pause"), item("replay"), item("save_replay"));
+        let (screenshot, show, exit) = (item("screenshot"), item("show"), item("exit"));
         let menu = Menu::new();
-        let separator = PredefinedMenuItem::separator();
-        menu.append_items(&[&record, &pause, &screenshot, &separator, &show, &exit]).map_err(|e| e.to_string())?;
+        let (separator, separator2) = (PredefinedMenuItem::separator(), PredefinedMenuItem::separator());
+        menu.append_items(&[&record, &pause, &separator, &replay, &save_replay, &screenshot, &separator2, &show, &exit])
+            .map_err(|e| e.to_string())?;
 
         let recording_icon = Icon::from_rgba(rgba.to_vec(), size, size).map_err(|e| e.to_string())?;
         let idle_icon = Icon::from_rgba(desaturate(rgba), size, size).map_err(|e| e.to_string())?;
@@ -85,7 +93,7 @@ impl Tray {
             }
         }));
 
-        Ok(Self { icon, record, pause, screenshot, show, exit, idle_icon, recording_icon, shown: None })
+        Ok(Self { icon, record, pause, replay, save_replay, screenshot, show, exit, idle_icon, recording_icon, shown: None })
     }
 
     /// Updates icon, tooltip and menu texts when the state or the language changed.
@@ -99,16 +107,25 @@ impl Tray {
         self.record.set_text(record);
         self.pause.set_text(pause);
         self.pause.set_enabled(state.recording);
+        let replay = if state.replay {
+            tr!("Detener búfer de repetición", "Stop Replay Buffer")
+        } else {
+            tr!("Iniciar búfer de repetición", "Start Replay Buffer")
+        };
+        self.replay.set_text(replay);
+        self.save_replay.set_text(tr!("Guardar repetición", "Save Replay"));
+        self.save_replay.set_enabled(state.replay);
         self.screenshot.set_text(tr!("Hacer captura de pantalla", "Take Screenshot"));
         self.show.set_text(tr!("Mostrar obs-lite", "Show obs-lite"));
         self.exit.set_text(tr!("Salir", "Exit"));
-        let tooltip = match (state.recording, state.paused) {
-            (true, true) => tr!("obs-lite · En pausa", "obs-lite · Paused"),
-            (true, false) => tr!("obs-lite · Grabando", "obs-lite · Recording"),
+        let tooltip = match (state.recording, state.paused, state.replay) {
+            (true, true, _) => tr!("obs-lite · En pausa", "obs-lite · Paused"),
+            (true, false, _) => tr!("obs-lite · Grabando", "obs-lite · Recording"),
+            (false, _, true) => tr!("obs-lite · Búfer de repetición", "obs-lite · Replay Buffer"),
             _ => "obs-lite",
         };
         let _ = self.icon.set_tooltip(Some(tooltip));
-        let icon = if state.recording { &self.recording_icon } else { &self.idle_icon };
+        let icon = if state.recording || state.replay { &self.recording_icon } else { &self.idle_icon };
         let _ = self.icon.set_icon(Some(icon.clone()));
     }
 }

@@ -46,16 +46,17 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spa
   of the source, and the webcam's corner and size.
 - **Audio Mixer**: desktop audio and *Mic/Aux*, each with a meter, volume slider and mute button
   (mute also works while recording).
-- **Controls**: *Start Recording* (with a pause button next to it while recording), *Settings* and
-  *Exit*.
+- **Controls**: *Start Recording* (with a pause button next to it while recording), *Start Replay
+  Buffer* (with a *Save Replay* button next to it while it runs), *Settings* and *Exit*.
 - **Settings**: *General* (language, minimize to tray, hide obs-lite from capture), *Output*
-  (recording path and quality), *Audio* (devices, microphone noise suppression), *Video* (scaled
+  (recording path and quality, maximum replay time), *Audio* (devices, microphone noise suppression), *Video* (scaled
   output resolution and FPS) and *Hotkeys* (click a field and press the combination). *OK* applies,
   *Cancel* discards.
 - **Status bar**: messages, CPU usage, dropped frames and the recording indicator with elapsed time.
 - **File**: *Take Screenshot* and *Show Recordings*.
-- **System tray icon**: grey when idle, in colour while recording. Its menu starts/stops and pauses
-  recording, takes a screenshot, shows the window or exits; a left click shows the window.
+- **System tray icon**: grey when idle, in colour while recording or while the replay buffer runs.
+  Its menu starts/stops and pauses recording, starts/stops the replay buffer, saves a replay, takes
+  a screenshot, shows the window or exits; a left click shows the window.
 
 ## Features
 
@@ -71,13 +72,18 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spa
   change the last frame is repeated; when the machine falls behind, slots are skipped and reported
   as dropped frames.
 - **Pause and resume** without gaps: paused time never reaches the file, in video or audio.
+- **Replay buffer**, like OBS's: keeps the last 20 s (5–600, in Settings › Output) in memory, already
+  encoded, and *Save Replay* writes them to a new MP4 (`Replay 2026-10-18 17-43-13.mp4`, or
+  `Repetición …` in Spanish). It can run on its own or together with a recording; a recording
+  started while it runs begins at once, on a forced keyframe. Memory: what the quality preset
+  encodes in that time, about 30 MB for 20 s at 1080p60 medium.
 - **Hardware scaling** to 1440p, 1080p or 720p (downscale only, aspect ratio preserved).
 - **Region recording**: drag a rectangle on the preview to record only that part (cropped on the GPU).
 - **Webcam overlay** (picture-in-picture) in any corner, in three sizes.
 - **Screenshots** as full-resolution PNG, with the region and webcam applied.
 - **Microphone noise suppression** with RNNoise, like OBS's filter.
-- **Configurable global hotkeys** for start/stop, pause/resume, screenshot and muting Mic/Aux, from
-  any application. Defaults: `Ctrl+Alt+R` and `Ctrl+Alt+P`.
+- **Configurable global hotkeys** for start/stop, pause/resume, the replay buffer, saving a replay,
+  screenshot and muting Mic/Aux, from any application. Defaults: `Ctrl+Alt+R` and `Ctrl+Alt+P`.
 - **Hidden from capture**: like OBS's option, the obs-lite window never appears in recordings or
   in its own preview.
 - **System tray icon**, with an option to minimize to the tray.
@@ -93,7 +99,7 @@ Everything is set from the interface (*Ajustes* and the docks) and saved in
 `%APPDATA%\obs-lite\settings.json`. Delete that file to go back to the defaults: first display,
 cursor captured, desktop audio on, microphone off, 60 fps, native resolution, medium quality,
 output to the *Videos* folder, hotkeys `Ctrl+Alt+R` and `Ctrl+Alt+P`, obs-lite hidden from capture,
-update check on.
+update check on, 20 s replay buffer.
 Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and screenshots likewise
 (`Screenshot 2026-10-16 13-45-02.png`, or `Captura …` in Spanish).
 
@@ -117,6 +123,9 @@ Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and scre
   It is chosen among applications with a window and found again by executable name; if the
   application starts after obs-lite, its audio is picked up when the recording starts.
 - Hotkeys need Ctrl or Alt (F-keys excepted), and are off while Settings is open.
+- Pausing a recording also pauses the replay buffer: both share one encoder and clock.
+- A replay starts at a keyframe (one every 2 s), so it is up to 2 s longer than the maximum
+  replay time.
 
 ## Verifying a release
 
@@ -172,6 +181,7 @@ The capture and encoding pipeline needs a GPU and a desktop session, so CI canno
 ```powershell
 .\target\release\obs-lite.exe --selftest 6 test.mp4            # 6 s at 1080p60
 .\target\release\obs-lite.exe --selftest 6 test.mp4 pause 720  # pauses the middle third, 720p output
+.\target\release\obs-lite.exe --selftest 6 test.mp4 replay     # also saves the last 3 s as test-replay.mp4
 ```
 
 It prints captured, encoded and dropped frame counts. [docs/TESTING.md](docs/TESTING.md) has the
@@ -187,11 +197,13 @@ recording clock (excludes pauses) ─► video thread converts the canvas every 
                                      to NV12 (GPU video processor, scaling) into a queue
 WASAPI desktop + mic + app ─► mixer paced by the same clock (fills silence)
                                                 │
-      H.264 encoder (hardware, or software) + AAC encoder ─► packets ─► MP4 writer
+      H.264 encoder (hardware, or software) + AAC encoder ─► packets ─┬─► MP4 writer
+                                                    replay buffer (in memory) ◄─┘ ─► MP4 on save
 ```
 
 - `src/capture.rs`: capture sessions, source list and preview.
-- `src/encoder.rs`: clock, canvas, frame queue and constant-frame-rate encoder.
+- `src/encoder.rs`: clock, canvas, frame queue, constant-frame-rate encoder, recording file and
+  replay buffer.
 - `src/mf.rs`: Media Foundation pieces: GPU colour conversion, H.264 and AAC encoders, MP4 writer.
 - `src/camera.rs`: webcam capture and overlay placement.
 - `src/audio.rs`: WASAPI capture, devices and mixer.

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
@@ -21,6 +21,7 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use crate::audio::{self, Device, Input, InputKind, Mixer};
 use crate::camera::{self, Camera, CameraConfig, CameraDevice, CameraFrame, CameraSize, Corner};
 use crate::capture::{self, RecordConfig, Session, SessionOptions, Source, SourceId};
+use crate::encoder::{Encoder, PendingFile};
 use crate::config::{Config, Hotkeys, Quality, Region, Resolution};
 use crate::hotkeys;
 use crate::i18n::{self, Language, tr};
@@ -51,14 +52,24 @@ const GREEN_DIM: Color32 = Color32::from_rgb(0x17, 0x64, 0x1E);
 enum Action {
     ToggleRecording,
     TogglePause,
+    ToggleReplay,
+    SaveReplay,
     Screenshot,
     ToggleMicMute,
 }
 
 enum RecState {
     Idle,
-    Recording { session: Session, mixer: Option<Mixer>, path: PathBuf },
+    /// Capturing and encoding, for a recording, the replay buffer or both.
+    Active { session: Session, mixer: Option<Mixer>, recording: Option<Recording>, replay: bool },
+    /// The last output was stopped and the recording is being written out.
     Saving(Receiver<Result<PathBuf, String>>),
+}
+
+/// A recording in progress: where it starts on the session clock, which may have been running
+/// for the replay buffer.
+struct Recording {
+    since: Duration,
 }
 
 struct Status {
@@ -131,6 +142,8 @@ pub struct App {
     /// A newer release, once the start-up check has answered.
     update: Option<Release>,
     update_check: Option<Receiver<Option<Release>>>,
+    /// Files being written in the background (a stopped recording, a replay).
+    jobs: Vec<JoinHandle<Status>>,
 }
 
 impl App {
@@ -179,6 +192,7 @@ impl App {
             hidden: false,
             update: None,
             update_check: None,
+            jobs: Vec::new(),
         };
         if app.config.check_updates {
             let (tx, rx) = mpsc::channel();
@@ -211,23 +225,28 @@ impl App {
     }
 
     fn is_recording(&self) -> bool {
-        matches!(self.rec, RecState::Recording { .. })
+        matches!(self.rec, RecState::Active { recording: Some(_), .. })
     }
 
-    fn recording_session(&self) -> Option<&Session> {
+    fn is_replaying(&self) -> bool {
+        matches!(self.rec, RecState::Active { replay: true, .. })
+    }
+
+    /// The capture session of a recording or the replay buffer.
+    fn active_session(&self) -> Option<&Session> {
         match &self.rec {
-            RecState::Recording { session, .. } => Some(session),
+            RecState::Active { session, .. } => Some(session),
             _ => None,
         }
     }
 
     fn is_paused(&self) -> bool {
-        self.recording_session().is_some_and(|s| s.shared.clock.is_paused())
+        self.is_recording() && self.active_session().is_some_and(|s| s.shared.clock.is_paused())
     }
 
     /// Recording and the encoder clock is running (pausing before that would be lost).
     fn is_live(&self) -> bool {
-        self.recording_session().is_some_and(|s| s.shared.encoder_ready.load(Ordering::Acquire))
+        self.is_recording() && self.active_session().is_some_and(|s| s.shared.encoder_ready.load(Ordering::Acquire))
     }
 
     fn refresh_sources(&mut self) {
@@ -322,7 +341,7 @@ impl App {
     fn restart_preview(&mut self, ctx: &egui::Context) {
         self.preview = None;
         self.texture_seq = None;
-        if self.is_recording() {
+        if self.active_session().is_some() {
             return;
         }
         let Some(source) = self.selected else { return };
@@ -352,13 +371,19 @@ impl App {
     fn handle(&mut self, ctx: &egui::Context, action: Action) {
         match action {
             Action::ToggleRecording => match self.rec {
-                RecState::Idle => self.start_recording(ctx),
-                RecState::Recording { .. } => self.stop_recording(ctx, None),
                 RecState::Saving(_) => {}
+                RecState::Active { recording: Some(_), .. } => self.stop_recording(ctx),
+                _ => self.start_recording(ctx),
             },
+            Action::ToggleReplay => match self.rec {
+                RecState::Saving(_) => {}
+                RecState::Active { replay: true, .. } => self.stop_replay(ctx),
+                _ => self.start_replay(ctx),
+            },
+            Action::SaveReplay => self.save_replay(ctx),
             Action::TogglePause => {
                 if self.is_live()
-                    && let Some(session) = self.recording_session()
+                    && let Some(session) = self.active_session()
                 {
                     let clock = &session.shared.clock;
                     clock.set_paused(!clock.is_paused());
@@ -375,17 +400,74 @@ impl App {
     }
 
     fn start_recording(&mut self, ctx: &egui::Context) {
-        let Some(source) = self.selected else {
-            return self.set_status(tr!("Añade una fuente con el botón + del panel Fuentes.", "Add a source with the + button in the Sources dock."), None, true);
-        };
         if let Err(e) = std::fs::create_dir_all(&self.config.output_dir) {
             return self.set_status(tr!("No se puede usar la ruta de grabación: {}", "Cannot use the recording path: {}", e), None, true);
         }
+        if !self.start_session(ctx) {
+            return;
+        }
+        let RecState::Active { session, recording, .. } = &mut self.rec else { return };
+        let shared = &session.shared;
+        // The clock starts with the encoder; if the replay buffer started it, count from now.
+        let since = if shared.encoder_ready.load(Ordering::Acquire) { shared.clock.elapsed() } else { Duration::ZERO };
+        let name = format!("{}.mp4", chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
+        shared.outputs.lock().unwrap().start_file(self.config.output_dir.join(name));
+        *recording = Some(Recording { since });
+        self.status = None;
+    }
+
+    fn start_replay(&mut self, ctx: &egui::Context) {
+        if !self.start_session(ctx) {
+            return;
+        }
+        let RecState::Active { session, replay, .. } = &mut self.rec else { return };
+        session.shared.outputs.lock().unwrap().set_replay(Some(self.config.replay_seconds));
+        *replay = true;
+    }
+
+    /// Saves the replay buffer as a new file, in the background.
+    fn save_replay(&mut self, ctx: &egui::Context) {
+        let Some(session) = self.active_session().filter(|_| self.is_replaying()) else {
+            return self.set_status(tr!("Inicia el búfer de repetición para poder guardar repeticiones.", "Start the replay buffer to save replays."), None, true);
+        };
+        let replay = session.shared.outputs.lock().unwrap().replay();
+        let replay = match replay {
+            Ok(replay) => replay,
+            Err(e) => return self.set_status(tr!("No se pudo guardar la repetición: {}", "Could not save the replay: {}", e), None, true),
+        };
+        let name = format!("{} {}.mp4", tr!("Repetición", "Replay"), chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
+        let path = self.config.output_dir.join(name);
+        self.spawn_job(ctx, move || match std::fs::create_dir_all(path.parent().unwrap_or(&path)).map_err(|e| e.to_string()).and_then(|()| replay.save(path)) {
+            Ok(path) => saved(tr!("Repetición guardada en '{}'", "Replay saved to '{}'", path.display()), path),
+            Err(e) => failed(tr!("No se pudo guardar la repetición: {}", "Could not save the replay: {}", e)),
+        });
+    }
+
+    /// Runs `job` on another thread; its status is shown when it ends, and exit waits for it.
+    fn spawn_job(&mut self, ctx: &egui::Context, job: impl FnOnce() -> Status + Send + 'static) {
+        let ctx = ctx.clone();
+        self.jobs.push(thread::spawn(move || {
+            let status = job();
+            ctx.request_repaint();
+            status
+        }));
+    }
+
+    /// Starts capturing and encoding for a recording or the replay buffer, unless already
+    /// doing so. Returns whether the session is running.
+    fn start_session(&mut self, ctx: &egui::Context) -> bool {
+        match self.rec {
+            RecState::Active { .. } => return true,
+            RecState::Saving(_) => return false,
+            RecState::Idle => {}
+        }
+        let Some(source) = self.selected else {
+            self.set_status(tr!("Añade una fuente con el botón + del panel Fuentes.", "Add a source with the + button in the Sources dock."), None, true);
+            return false;
+        };
         // One capture session at a time: the recording session also feeds the preview.
         self.preview = None;
 
-        let name = format!("{}.mp4", chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
-        let path = self.config.output_dir.join(name);
         // The application may have started after obs-lite.
         if self.app_audio.is_none() {
             self.restart_app_audio();
@@ -398,7 +480,6 @@ impl App {
             cursor: self.config.cursor,
             preview_fps: PREVIEW_FPS,
             record: Some(RecordConfig {
-                path: path.clone(),
                 quality: self.config.quality,
                 resolution: self.config.resolution,
                 audio: !inputs.is_empty(),
@@ -410,7 +491,8 @@ impl App {
             Ok(s) => s,
             Err(e) => {
                 self.restart_preview(ctx);
-                return self.set_status(tr!("No se pudo iniciar la grabación: {}", "Could not start recording: {}", e), None, true);
+                self.set_status(tr!("No se pudo iniciar la grabación: {}", "Could not start recording: {}", e), None, true);
+                return false;
             }
         };
         let mixer = (!inputs.is_empty()).then(|| {
@@ -434,12 +516,42 @@ impl App {
                 }
             }));
         }
-        self.rec = RecState::Recording { session, mixer, path };
-        self.status = None;
+        self.rec = RecState::Active { session, mixer, recording: None, replay: false };
+        true
     }
 
-    fn stop_recording(&mut self, ctx: &egui::Context, reason: Option<String>) {
-        let RecState::Recording { session, mixer, path } = std::mem::replace(&mut self.rec, RecState::Idle) else {
+    fn stop_recording(&mut self, ctx: &egui::Context) {
+        let RecState::Active { session, recording, replay, .. } = &mut self.rec else { return };
+        if recording.is_none() {
+            return;
+        }
+        if !*replay {
+            return self.stop_session(ctx, None);
+        }
+        *recording = None;
+        // The replay buffer keeps the session (and its clock) going: only the file ends.
+        session.shared.clock.set_paused(false);
+        let file = session.shared.outputs.lock().unwrap().take_file();
+        self.set_status(tr!("Guardando grabación…", "Saving recording…"), None, false);
+        self.spawn_job(ctx, move || match file.map(PendingFile::finish) {
+            Some(Ok(path)) => saved(tr!("Grabación guardada en '{}'", "Recording saved to '{}'", path.display()), path),
+            Some(Err(e)) => failed(tr!("Error al guardar la grabación: {}", "Error saving the recording: {}", e)),
+            None => failed(tr!("no se capturó ningún fotograma", "no frames were captured").into()),
+        });
+    }
+
+    fn stop_replay(&mut self, ctx: &egui::Context) {
+        let RecState::Active { session, recording, replay, .. } = &mut self.rec else { return };
+        *replay = false;
+        if recording.is_none() {
+            return self.stop_session(ctx, None);
+        }
+        session.shared.outputs.lock().unwrap().set_replay(None);
+    }
+
+    /// Ends capture and encoding, writing out the recording if there is one.
+    fn stop_session(&mut self, ctx: &egui::Context, reason: Option<String>) {
+        let RecState::Active { session, mixer, recording, .. } = std::mem::replace(&mut self.rec, RecState::Idle) else {
             return;
         };
         drop(mixer);
@@ -447,13 +559,24 @@ impl App {
             *camera.shared.sink.lock().unwrap() = None;
         }
         let (encoder, stop_error) = session.stop();
+        if recording.is_none() {
+            // Only the replay buffer: nothing to write; let the encoder wind down elsewhere.
+            if let Some(encoder) = encoder {
+                thread::spawn(move || encoder.finish().map(PendingFile::finish));
+            }
+            self.restart_preview(ctx);
+            if let Some(reason) = reason {
+                self.set_status(reason, None, true);
+            }
+            return;
+        }
         let (tx, rx) = mpsc::channel();
         let ctx2 = ctx.clone();
         // Finalizing the MP4 can take a moment; keep the UI responsive.
         thread::spawn(move || {
-            let result = match encoder {
-                Some(enc) => enc.finish().map(|()| path),
-                None => Err(stop_error.unwrap_or_else(|| tr!("no se capturó ningún fotograma", "no frames were captured").into())),
+            let result = match encoder.map(Encoder::finish) {
+                Some(Some(file)) => file.finish(),
+                _ => Err(stop_error.unwrap_or_else(|| tr!("no se capturó ningún fotograma", "no frames were captured").into())),
             };
             let _ = tx.send(result);
             ctx2.request_repaint();
@@ -488,7 +611,7 @@ impl App {
 
     /// Saves the newest frame of the current source as a PNG in the recordings folder.
     fn take_screenshot(&mut self, ctx: &egui::Context) {
-        let Some(session) = self.recording_session().or(self.preview.as_ref()) else {
+        let Some(session) = self.active_session().or(self.preview.as_ref()) else {
             return self.set_status(tr!("Añade una fuente con el botón + del panel Fuentes.", "Add a source with the + button in the Sources dock."), None, true);
         };
         let (mut width, mut height, mut rgba) = match session.snapshot() {
@@ -536,6 +659,8 @@ impl App {
             match command {
                 TrayCommand::ToggleRecording => self.handle(ctx, Action::ToggleRecording),
                 TrayCommand::TogglePause => self.handle(ctx, Action::TogglePause),
+                TrayCommand::ToggleReplay => self.handle(ctx, Action::ToggleReplay),
+                TrayCommand::SaveReplay => self.handle(ctx, Action::SaveReplay),
                 TrayCommand::Screenshot => self.handle(ctx, Action::Screenshot),
                 TrayCommand::Show => self.show_window(ctx),
                 TrayCommand::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
@@ -552,7 +677,12 @@ impl App {
             self.set_taskbar_button(true);
             self.hidden = false;
         }
-        let state = TrayState { recording: self.is_recording(), paused: self.is_paused(), english: i18n::english() };
+        let state = TrayState {
+            recording: self.is_recording(),
+            paused: self.is_paused(),
+            replay: self.is_replaying(),
+            english: i18n::english(),
+        };
         if let Some(tray) = &mut self.tray {
             tray.update(state);
         }
@@ -579,8 +709,21 @@ impl App {
             }
         }
 
-        if self.recording_session().is_some_and(Session::is_finished) {
-            return self.stop_recording(ctx, Some(tr!("La fuente dejó de estar disponible; guardando…", "The source is no longer available; saving…").into()));
+        let (done, running) = std::mem::take(&mut self.jobs).into_iter().partition(JoinHandle::is_finished);
+        self.jobs = running;
+        for job in done {
+            if let Ok(status) = job.join() {
+                self.status = Some(status);
+            }
+        }
+
+        if self.active_session().is_some_and(Session::is_finished) {
+            let reason = if self.is_recording() {
+                tr!("La fuente dejó de estar disponible; guardando…", "The source is no longer available; saving…")
+            } else {
+                tr!("La fuente dejó de estar disponible; búfer de repetición detenido.", "The source is no longer available; replay buffer stopped.")
+            };
+            return self.stop_session(ctx, Some(reason.into()));
         }
         if self.preview.as_ref().is_some_and(Session::is_finished) {
             self.source_lost(tr!("La fuente ya no está disponible. Añade otra con el botón +.", "The source is no longer available. Add another one with the + button.").into());
@@ -605,7 +748,7 @@ impl App {
     }
 
     fn update_texture(&mut self, ctx: &egui::Context) {
-        let Some(session) = self.recording_session().or(self.preview.as_ref()) else { return };
+        let Some(session) = self.active_session().or(self.preview.as_ref()) else { return };
         let (seq, image) = {
             let guard = session.shared.preview.lock().unwrap();
             let Some(frame) = guard.as_ref() else { return };
@@ -655,12 +798,14 @@ impl App {
     /// Registers the configured hotkeys, reporting the ones another application already uses.
     fn bind_hotkeys(&mut self) {
         let Some(manager) = &self.hotkey_manager else { return };
-        let Hotkeys { record, pause, screenshot, mute_mic } = &self.config.hotkeys;
+        let Hotkeys { record, pause, screenshot, mute_mic, replay, save_replay } = &self.config.hotkeys;
         let wanted = [
             (record, Action::ToggleRecording),
             (pause, Action::TogglePause),
             (screenshot, Action::Screenshot),
             (mute_mic, Action::ToggleMicMute),
+            (replay, Action::ToggleReplay),
+            (save_replay, Action::SaveReplay),
         ];
         let mut bindings = Vec::new();
         let mut failed = Vec::new();
@@ -722,7 +867,7 @@ impl App {
 
     fn preview_area(&mut self, ui: &mut egui::Ui) {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
-        let source = self.recording_session().or(self.preview.as_ref()).and_then(Session::source_size);
+        let source = self.active_session().or(self.preview.as_ref()).and_then(Session::source_size);
         let mut screenshot = false;
         response.context_menu(|ui| {
             if ui.button(tr!("Hacer captura de pantalla", "Take Screenshot")).clicked() {
@@ -742,7 +887,7 @@ impl App {
         };
         let canvas = Rect::from_center_size(rect.center(), size);
         // Ask for a preview as sharp as it is drawn on screen (but never larger than the source).
-        if let Some(session) = self.recording_session().or(self.preview.as_ref()) {
+        if let Some(session) = self.active_session().or(self.preview.as_ref()) {
             let pixels = (canvas.width() * ui.ctx().pixels_per_point()).round() as usize;
             session.shared.preview_width.store(pixels, Ordering::Relaxed);
         }
@@ -820,7 +965,7 @@ impl App {
     }
 
     fn sources_dock(&mut self, ui: &mut egui::Ui) {
-        let recording = self.is_recording();
+        let recording = matches!(self.rec, RecState::Active { .. });
         let ctx = ui.ctx().clone();
         ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
             ui.add_enabled_ui(!recording, |ui| {
@@ -1026,12 +1171,12 @@ impl App {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             match &self.rec {
-                RecState::Idle => {
+                RecState::Idle | RecState::Active { recording: None, .. } => {
                     if ui.add_sized([full, height], Button::new(tr!("Iniciar Grabación", "Start Recording"))).on_hover_text(hotkey_hint(&self.config.hotkeys.record)).clicked() {
                         self.handle(&ctx, Action::ToggleRecording);
                     }
                 }
-                RecState::Recording { .. } => {
+                RecState::Active { .. } => {
                     let stop = Button::new(RichText::new(tr!("Detener Grabación", "Stop Recording")).color(Color32::WHITE)).fill(PRIMARY);
                     if ui.add_sized([full - height - 4.0, height], stop).on_hover_text(hotkey_hint(&self.config.hotkeys.record)).clicked() {
                         self.handle(&ctx, Action::ToggleRecording);
@@ -1047,6 +1192,28 @@ impl App {
                 }
                 RecState::Saving(_) => {
                     ui.add_enabled(false, Button::new(tr!("Guardando…", "Saving…")).min_size(vec2(full, height)));
+                }
+            }
+        });
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let hint = hotkey_hint(&self.config.hotkeys.replay);
+            let saving = matches!(self.rec, RecState::Saving(_));
+            if self.is_replaying() {
+                let stop = Button::new(RichText::new(tr!("Detener búfer de repetición", "Stop Replay Buffer")).color(Color32::WHITE)).fill(PRIMARY);
+                if ui.add_sized([full - height - 4.0, height], stop).on_hover_text(hint).clicked() {
+                    self.handle(&ctx, Action::ToggleReplay);
+                }
+                let tip = format!("{} {}", tr!("Guardar repetición", "Save Replay"), hotkey_hint(&self.config.hotkeys.save_replay));
+                if icon_button(ui, Icon::Save, height, true, false).on_hover_text(tip).clicked() {
+                    self.handle(&ctx, Action::SaveReplay);
+                }
+            } else {
+                let start = Button::new(tr!("Iniciar búfer de repetición", "Start Replay Buffer"));
+                let tip = tr!("Guarda en memoria los últimos {} s, para guardarlos cuando quieras. {}", "Keeps the last {} s in memory, to save whenever you want. {}", self.config.replay_seconds, hint);
+                if ui.add_enabled_ui(!saving, |ui| ui.add_sized([full, height], start)).inner.on_hover_text(tip).clicked() {
+                    self.handle(&ctx, Action::ToggleReplay);
                 }
             }
         });
@@ -1089,7 +1256,10 @@ impl App {
     }
 
     fn recording_indicator(&self, ui: &mut egui::Ui) {
-        let Some(session) = self.recording_session() else {
+        if self.is_replaying() {
+            ui.label(RichText::new(tr!("Búfer de repetición activo", "Replay buffer active")).small().color(PRIMARY_LIGHT));
+        }
+        let (Some(session), RecState::Active { recording: Some(recording), .. }) = (self.active_session(), &self.rec) else {
             status_icon(ui, Icon::Record, GREY3, "00:00:00");
             return;
         };
@@ -1100,7 +1270,7 @@ impl App {
             ui.spinner();
             return;
         }
-        let secs = shared.clock.elapsed().as_secs();
+        let secs = shared.clock.elapsed().saturating_sub(recording.since).as_secs();
         let time = format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60);
         if shared.clock.is_paused() {
             status_icon(ui, Icon::Pause, YELLOW, &time);
@@ -1120,7 +1290,7 @@ impl App {
 
     fn settings_dialog(&mut self, ctx: &egui::Context) {
         let Some(dialog) = &mut self.settings else { return };
-        let recording = matches!(self.rec, RecState::Recording { .. });
+        let recording = matches!(self.rec, RecState::Active { .. });
         let mut decision = None;
         let response = egui::Modal::new(egui::Id::unique("settings"))
             .frame(egui::Frame::new().fill(GREY7).stroke(Stroke::new(1.0, GREY4)).corner_radius(6).inner_margin(12))
@@ -1153,7 +1323,7 @@ impl App {
                     ui.allocate_ui_with_layout(vec2(ui.available_width(), body), Layout::top_down(Align::Min), |ui| {
                         ui.set_min_height(body);
                         if recording && dialog.page != SettingsPage::Hotkeys {
-                            ui.label(RichText::new(tr!("Detén la grabación para cambiar estos ajustes.", "Stop recording to change these settings.")).color(YELLOW));
+                            ui.label(RichText::new(tr!("Detén la grabación y el búfer de repetición para cambiar estos ajustes.", "Stop recording and the replay buffer to change these settings.")).color(YELLOW));
                             ui.add_space(6.0);
                         }
                         ui.add_enabled_ui(!recording, |ui| {
@@ -1240,7 +1410,14 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
                 ui.label("MP4");
                 ui.end_row();
                 ui.label(tr!("Codificador", "Encoder"));
-                ui.label("Hardware (H.264)");
+                ui.label(tr!("H.264 por hardware (por software si la GPU no tiene)", "Hardware H.264 (software if the GPU has none)"));
+                ui.end_row();
+            });
+            ui.add_space(8.0);
+            group_title(ui, tr!("Búfer de repetición", "Replay Buffer"));
+            grid("replay").show(ui, |ui| {
+                ui.label(tr!("Tiempo máximo de repetición", "Maximum Replay Time"));
+                ui.add(egui::DragValue::new(&mut c.replay_seconds).range(5..=600).suffix(" s"));
                 ui.end_row();
             });
         }
@@ -1271,10 +1448,12 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
         }
         SettingsPage::Hotkeys => {
             group_title(ui, tr!("Atajos globales", "Global Hotkeys"));
-            let Hotkeys { record, pause, screenshot, mute_mic } = &mut c.hotkeys;
+            let Hotkeys { record, pause, screenshot, mute_mic, replay, save_replay } = &mut c.hotkeys;
             let rows = [
                 (tr!("Iniciar / Detener Grabación", "Start / Stop Recording"), record),
                 (tr!("Pausar / Reanudar Grabación", "Pause / Resume Recording"), pause),
+                (tr!("Iniciar / Detener búfer de repetición", "Start / Stop Replay Buffer"), replay),
+                (tr!("Guardar repetición", "Save Replay"), save_replay),
                 (tr!("Hacer captura de pantalla", "Take Screenshot"), screenshot),
                 (tr!("Silenciar / Activar Mic/Aux", "Mute / Unmute Mic/Aux"), mute_mic),
             ];
@@ -1295,7 +1474,7 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll(ctx);
         // Keep the timer, CPU and audio meters moving; nothing else needs continuous repaints.
-        if self.is_recording() || self.system.is_some() || self.mic.is_some() {
+        if self.active_session().is_some() || self.system.is_some() || self.mic.is_some() {
             ctx.request_repaint_after(Duration::from_millis(66));
         } else {
             ctx.request_repaint_after(Duration::from_secs(1));
@@ -1323,16 +1502,29 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.config.save();
         finish_on_exit(std::mem::replace(&mut self.rec, RecState::Idle));
+        for job in self.jobs.drain(..) {
+            let _ = job.join();
+        }
     }
+}
+
+fn saved(text: String, file: PathBuf) -> Status {
+    Status { text, file: Some(file), error: false }
+}
+
+fn failed(text: String) -> Status {
+    Status { text, file: None, error: true }
 }
 
 /// Never leaves the MP4 half-written when the app closes mid-recording or mid-save.
 fn finish_on_exit(rec: RecState) {
     match rec {
-        RecState::Recording { session, mixer, .. } => {
+        RecState::Active { session, mixer, .. } => {
             drop(mixer);
-            if let (Some(enc), _) = session.stop() {
-                let _ = enc.finish();
+            if let (Some(enc), _) = session.stop()
+                && let Some(file) = enc.finish()
+            {
+                let _ = file.finish();
             }
         }
         RecState::Saving(rx) => {
@@ -1488,6 +1680,7 @@ enum Icon {
     Record,
     Pause,
     Play,
+    Save,
 }
 
 /// Draws an icon centred on `c`; drawn with shapes because the bundled fonts lack these glyphs.
@@ -1504,6 +1697,14 @@ fn paint_icon(painter: &egui::Painter, icon: Icon, c: egui::Pos2, s: f32, color:
         Icon::Play => {
             let pts = vec![c + vec2(-s * 0.7, -s), c + vec2(-s * 0.7, s), c + vec2(s, 0.0)];
             painter.add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+        }
+        Icon::Save => {
+            // A downward arrow onto a tray.
+            let stroke = Stroke::new(1.6, color);
+            painter.line_segment([c + vec2(0.0, -s), c + vec2(0.0, s * 0.35)], stroke);
+            let head = vec![c + vec2(-s * 0.55, -s * 0.05), c + vec2(s * 0.55, -s * 0.05), c + vec2(0.0, s * 0.55)];
+            painter.add(egui::Shape::convex_polygon(head, color, Stroke::NONE));
+            painter.line_segment([c + vec2(-s, s), c + vec2(s, s)], stroke);
         }
     }
 }
@@ -1734,6 +1935,7 @@ mod tests {
             hidden: false,
             update: None,
             update_check: None,
+            jobs: Vec::new(),
         }
     }
 
