@@ -21,5 +21,5 @@ $icon = Get-ChildItem (Join-Path $root 'target\release\build\obs-lite-*\out\icon
 if (-not $icon) { throw 'icon.ico not found: run cargo build --release first' }
 
 wix build (Join-Path $PSScriptRoot 'obs-lite.wxs') -arch x64 -ext WixToolset.UI.wixext `
-    -d "Version=$Version" -d "BinDir=$BinDir" -d "Icon=$($icon.FullName)" -o $Out
+    -d "Version=$Version" -d "BinDir=$BinDir" -d "Icon=$($icon.FullName)" -pdbtype none -o $Out
 if ($LASTEXITCODE) { throw "wix build failed with exit code $LASTEXITCODE" }
