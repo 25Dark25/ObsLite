@@ -18,7 +18,7 @@ Releases are tagged, built and signed by the maintainer. Replace `X.Y.Z` with th
 3. **Build** the zip: *Actions › Release build › Run workflow*, choosing the tag
    (or `gh api -X POST repos/25Dark25/obs-lite/actions/workflows/release-build.yml/dispatches -f ref=vX.Y.Z`).
    Download the `obs-lite-<commit>` artifact and unzip it: it contains
-   `obs-lite-X.Y.Z-windows-x64.zip` (`obs-lite.exe`, `LICENSE`, `THIRD-PARTY-LICENSES.html`), the
+   `obs-lite-X.Y.Z-portable-windows-x64.zip` (`obs-lite.exe`, `LICENSE`, `THIRD-PARTY-LICENSES.html`), the
    installer `obs-lite-X.Y.Z-windows-x64.msi` (the same files) and `SHA256SUMS`. Check that
    `sha256sum --check SHA256SUMS` passes, that the hashes match those printed in the run's *Package*
    step and that the run's commit is the tag's (`git rev-parse vX.Y.Z^{commit}`).
@@ -30,7 +30,7 @@ Releases are tagged, built and signed by the maintainer. Replace `X.Y.Z` with th
    release* in the README):
 
    ```sh
-   for f in obs-lite-X.Y.Z-windows-x64.zip obs-lite-X.Y.Z-windows-x64.msi; do
+   for f in obs-lite-X.Y.Z-portable-windows-x64.zip obs-lite-X.Y.Z-windows-x64.msi; do
      gpg --local-user A7FCEDEAD7E6C3437312284A442DA687E0FF73EE --detach-sign --armor "$f"
      gpg --verify "$f.asc" "$f"
    done

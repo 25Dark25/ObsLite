@@ -32,7 +32,7 @@ the queue of converted frames that keeps the encoder from dropping frames when i
    - `obs-lite-X.Y.Z-windows-x64.msi`, the installer: it needs no administrator rights, installs
      to `%LOCALAPPDATA%\Programs\obs-lite`, adds *Obs Lite* to the Start menu and, if you tick the
      box, to the desktop. A newer `.msi` upgrades it in place; uninstall it from *Settings › Apps*.
-   - `obs-lite-X.Y.Z-windows-x64.zip`, the portable version: unzip it anywhere and run
+   - `obs-lite-X.Y.Z-portable-windows-x64.zip`, the portable version: unzip it anywhere and run
      `obs-lite.exe`. There is nothing to install.
 2. Press *Iniciar Grabación* (or `Ctrl+Alt+R`). By default it records the first display Windows
    reports and desktop audio at 60 fps to your *Videos* folder.
@@ -155,14 +155,14 @@ A7FC EDEA D7E6 C343 7312  284A 442D A687 E0FF 73EE
 2. Verify the signature of the zip (or, the same way, of the `.msi`):
 
    ```sh
-   gpg --verify obs-lite-0.3.0-windows-x64.zip.asc obs-lite-0.3.0-windows-x64.zip
+   gpg --verify obs-lite-0.3.0-portable-windows-x64.zip.asc obs-lite-0.3.0-portable-windows-x64.zip
    ```
 
    The output must say `Good signature` and show the fingerprint above.
 
 3. Optionally, compare the file's SHA-256 with the one in the release notes:
-   `sha256sum obs-lite-0.3.0-windows-x64.zip`, or on Windows
-   `Get-FileHash obs-lite-0.3.0-windows-x64.zip -Algorithm SHA256`.
+   `sha256sum obs-lite-0.3.0-portable-windows-x64.zip`, or on Windows
+   `Get-FileHash obs-lite-0.3.0-portable-windows-x64.zip -Algorithm SHA256`.
 
 `gpg` ships with [Gpg4win](https://gpg4win.org/) and with Git for Windows.
 
