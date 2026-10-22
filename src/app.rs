@@ -958,9 +958,17 @@ impl App {
             ui.add_enabled_ui(!recording, |ui| {
                 ui.horizontal(|ui| {
                     let mut camera_choice = None;
-                    let mut app_choice = None;
+                    #[cfg_attr(not(windows), allow(unused_mut))]
+                    let mut app_choice: Option<String> = None;
                     let add = ui.menu_button(RichText::new(" + ").strong(), |ui| {
                         let mut chosen = None;
+                        // The portal's dialog lets the user pick the screen or window.
+                        #[cfg(target_os = "linux")]
+                        if ui.button(tr!("Captura de pantalla o ventana…", "Screen or Window Capture…")).clicked() {
+                            capture::forget_choice();
+                            chosen = Some(SourceId::Portal);
+                        }
+                        #[cfg(windows)]
                         ui.menu_button(tr!("Captura de pantalla", "Display Capture"), |ui| {
                             for s in self.sources.iter().filter(|s| matches!(s.id, SourceId::Monitor(_))) {
                                 if ui.button(&s.label).clicked() {
@@ -968,6 +976,7 @@ impl App {
                                 }
                             }
                         });
+                        #[cfg(windows)]
                         ui.menu_button(tr!("Captura de ventana", "Window Capture"), |ui| {
                             egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
                                 for s in self.sources.iter().filter(|s| matches!(s.id, SourceId::Window(_))) {
@@ -977,6 +986,7 @@ impl App {
                                 }
                             });
                         });
+                        #[cfg(windows)]
                         ui.menu_button(tr!("Captura de audio de aplicación", "Application Audio Capture"), |ui| {
                             egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
                                 for app in &self.audio_apps {
@@ -1070,6 +1080,8 @@ impl App {
                     let kind = match source.id {
                         SourceId::Monitor(_) => tr!("Captura de pantalla", "Display Capture"),
                         SourceId::Window(_) => tr!("Captura de ventana", "Window Capture"),
+                        #[cfg(target_os = "linux")]
+                        SourceId::Portal => tr!("Captura de pantalla o ventana", "Screen or Window Capture"),
                     };
                     // Before the label, which is often too long to show in full.
                     let region = self.config.region.map_or(String::new(), |r| {

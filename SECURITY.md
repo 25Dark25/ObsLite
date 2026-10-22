@@ -45,5 +45,6 @@ Out of scope:
 
 obs-lite has not been audited. Most of the code was written with an AI coding assistant and has had
 no independent review. It uses `unsafe` Rust to call Windows APIs directly (Direct3D 11, Media
-Foundation, COM and a few Win32 functions), all in `src/win/`. Dependencies are
+Foundation, COM and a few Win32 functions), all in `src/win/`, plus one `getrusage` call in
+`src/linux/sys.rs`. Dependencies are
 checked for RustSec advisories and licenses with `cargo deny` on every pull request.

@@ -33,6 +33,10 @@ cargo test --locked
 | `app::exit_waits_for_the_recording_being_saved` | Closing the app while a recording is being saved waits for the MP4 to be finalized. |
 | `i18n::every_spanish_variant_is_spanish` | The UI is Spanish for every Spanish Windows locale and English otherwise. |
 | `i18n::every_spanish_locale_is_spanish` | The same for POSIX locales (`es_ES.UTF-8`, `es`…), as read on Linux. |
+| `linux::encoder::a_region_is_copied_and_what_is_missing_is_black` | Linux only: a region (or a shrunk window) is copied into the canvas, padded with black. |
+| `linux::encoder::the_webcam_is_pasted_in_place` | Linux only: the webcam picture lands in its rectangle. |
+| `linux::encoder::packet_times_discount_the_encoders_offset` | Linux only: packet times ignore the 1000-hour offset GStreamer video encoders add, so audio is not dropped from files. |
+| `linux::encoder::aac_codec_data_describes_lc_48k_stereo` | Linux only: the AAC stream description given to the muxer before any audio is AAC-LC, 48 kHz, stereo. |
 | `hotkeys::text_round_trips_to_a_registrable_hotkey` | "Ctrl+Alt+R" in the settings becomes the right registered hotkey and back. |
 | `hotkeys::keys_that_would_break_typing_are_rejected` | A hotkey needs Ctrl or Alt unless it is an F-key. |
 | `hotkeys::a_modifier_alone_is_not_a_hotkey` | Pressing Ctrl or Alt alone does not end hotkey capture. |
@@ -173,6 +177,19 @@ and so encoding on the Intel GPU, *Intel Quick Sync Video H.264 Encoder MFT*):
 | 1. Self-test 6 s 1080p60, 440 Hz tone playing | 352 frames, 0 lagged, 5.87 s, audio −14.0 dB |
 | 1. Self-test with pause, 720p and `replay` | 1280×720, 3.87 s, 0 lagged, audio −14.1 dB; replay 3.85 s with audio |
 | `installer/test.ps1` on the 0.3.0 MSI | All checks passed |
+
+2026-10-22, Linux: Ubuntu 26.04.1 LTS (GNOME on Wayland, PipeWire, GStreamer 1.28.2) in a Hyper-V
+VM without a GPU, so x264 in software; desktop audio through the VM's dummy output's monitor:
+
+| Step | Result |
+|---|---|
+| Portal | The sharing dialog appears once ("Remember this decision" ticked); later sessions start without it (restore token), in under 0.1 s |
+| 1. Self-test 8 s with `replay`, test pattern moving and a 440 Hz tone | 1024×768, 60 fps, 479 frames, 0 lagged; H.264 High (x264) + AAC-LC; audio −33.2 dB; 0 decode errors; first frame a keyframe; replay 3.92 s with audio. About 3 s of CPU for 8 s of recording; 117 MB peak memory |
+| 2. Interface flow | The app starts with the preview of the shared screen, the desktop's sharing indicator and the tray icon (red while recording); *Start/Stop Recording* saved a 7.6 s file (456 frames at 60 fps, AAC) to `~/Vídeos` |
+| Bug found and fixed | Audio was missing from files: video packet times carried GStreamer encoders' 1000-hour offset, so all audio fell before the file's start. Times are now running times (test added; it fails without the fix) |
+
+Not verified on Linux: VA-API and NVENC encoders (no GPU in the VM), a real microphone (the VM has
+none), X11 sessions, desktops other than GNOME.
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.

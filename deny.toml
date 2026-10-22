@@ -31,6 +31,10 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.9
+exceptions = [
+    # Build time only (system-deps finds GStreamer on Linux); not part of the executable.
+    { allow = ["Apache-2.0 WITH LLVM-exception"], crate = "target-lexicon" },
+]
 
 [bans]
 multiple-versions = "allow"

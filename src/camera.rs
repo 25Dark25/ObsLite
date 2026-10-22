@@ -173,6 +173,8 @@ impl Camera {
     }
 }
 
+// The Linux webcam reader is not there yet.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 impl CameraShared {
     /// Whether the capture thread should stop.
     pub(crate) fn stopped(&self) -> bool {
