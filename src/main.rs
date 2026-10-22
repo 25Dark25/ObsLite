@@ -1,6 +1,4 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-// Until Linux has its capture and encoding backend, the shared code it will use sits idle there.
-#![cfg_attr(target_os = "linux", allow(dead_code))]
 
 mod i18n;
 

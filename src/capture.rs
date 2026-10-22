@@ -5,14 +5,21 @@ use crate::camera::{CameraSize, Corner};
 use crate::config::{Quality, Region, Resolution};
 
 pub use crate::platform::capture::{Session, list_audio_apps, list_sources};
+#[cfg(target_os = "linux")]
+pub use crate::platform::capture::forget_choice;
 
 /// Preview width until the UI reports how wide the preview is drawn.
 pub(crate) const PREVIEW_DEFAULT_WIDTH: usize = 640;
 
+// Windows lists displays and windows itself; on Linux the portal picks them.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SourceId {
     Monitor(isize),
     Window(isize),
+    /// Chosen by the user in the ScreenCast portal's dialog.
+    #[cfg(target_os = "linux")]
+    Portal,
 }
 
 #[derive(Clone, Debug)]

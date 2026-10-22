@@ -175,8 +175,20 @@ cargo build --release
 .\target\release\obs-lite.exe
 ```
 
-A Linux version is in progress: on Linux the same commands build it (no extra system packages are
-needed) and show the interface, but it cannot capture or record yet.
+A Linux version is in progress. It records the screen or window chosen in the desktop's sharing
+dialog (the ScreenCast portal and PipeWire, so it works on Wayland), with desktop audio and the
+microphone, encoded with GStreamer; pause, region and the replay buffer work as on Windows. Not
+there yet: the webcam, global hotkeys on Wayland, application audio and packaging. To build it
+(Ubuntu/Debian package names):
+
+```sh
+sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev   # to build
+sudo apt install gstreamer1.0-pipewire gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-ugly gstreamer1.0-libav                          # to record: x264, AAC
+cargo build --release
+```
+
+It picks the first H.264 encoder GStreamer has: VA-API (Intel/AMD), NVENC, x264, then OpenH264.
 
 Checks run by CI on every pull request (Windows and Ubuntu, Rust 1.95 and stable):
 
@@ -219,8 +231,9 @@ WASAPI desktop + mic + app ─► mixer paced by the same clock (fills silence)
 - `src/media.rs`: recording clock, encoded packets, recording file and replay buffer.
 - `src/capture.rs`, `src/camera.rs`, `src/audio.rs`: sources, preview and picture helpers, webcam
   overlay, audio inputs, noise suppression and mixer.
-- `src/linux/`: the Linux side, in progress: it builds and shows the interface but cannot capture
-  or record yet.
+- `src/linux/`: the Linux side, in progress: ScreenCast portal (`portal.rs`), PipeWire capture
+  (`capture.rs`), GStreamer encoding and MP4 (`encoder.rs`), audio (`audio.rs`), system calls
+  (`sys.rs`).
 - `src/win/`: the Windows side: capture sessions (`capture.rs`), canvas, frame queue and encoder
   (`encoder.rs`), Media Foundation (`mf.rs`), WASAPI (`audio.rs`), webcam (`camera.rs`) and
   system calls (`sys.rs`).
