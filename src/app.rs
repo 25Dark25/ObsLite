@@ -201,7 +201,8 @@ impl App {
             update_check: None,
             jobs: Vec::new(),
         };
-        if app.config.check_updates {
+        // On Linux the Flatpak is updated by the system instead.
+        if cfg!(windows) && app.config.check_updates {
             let (tx, rx) = mpsc::channel();
             let ctx = cc.egui_ctx.clone();
             thread::spawn(move || {
@@ -1384,12 +1385,16 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
                 ui.label(tr!("Bandeja del sistema", "System Tray"));
                 ui.checkbox(&mut c.minimize_to_tray, tr!("Minimizar a la bandeja del sistema", "Minimize to the system tray"));
                 ui.end_row();
-                ui.label(tr!("Actualizaciones", "Updates"));
-                ui.checkbox(&mut c.check_updates, tr!("Buscar versiones nuevas al iniciar", "Check for new versions at startup"));
-                ui.end_row();
-                ui.label(tr!("Captura", "Capture"));
-                ui.checkbox(&mut c.hide_from_capture, tr!("Ocultar obs-lite de la captura de pantalla", "Hide obs-lite from screen capture"));
-                ui.end_row();
+                // Neither applies on Linux: Flatpak updates the app, and Wayland cannot keep a
+                // window out of screen captures.
+                if cfg!(windows) {
+                    ui.label(tr!("Actualizaciones", "Updates"));
+                    ui.checkbox(&mut c.check_updates, tr!("Buscar versiones nuevas al iniciar", "Check for new versions at startup"));
+                    ui.end_row();
+                    ui.label(tr!("Captura", "Capture"));
+                    ui.checkbox(&mut c.hide_from_capture, tr!("Ocultar obs-lite de la captura de pantalla", "Hide obs-lite from screen capture"));
+                    ui.end_row();
+                }
             });
         }
         SettingsPage::Output => {
