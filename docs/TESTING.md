@@ -37,10 +37,12 @@ cargo test --locked
 | `linux::encoder::the_webcam_is_pasted_in_place` | Linux only: the webcam picture lands in its rectangle. |
 | `linux::encoder::packet_times_discount_the_encoders_offset` | Linux only: packet times ignore the 1000-hour offset GStreamer video encoders add, so audio is not dropped from files. |
 | `linux::encoder::aac_codec_data_describes_lc_48k_stereo` | Linux only: the AAC stream description given to the muxer before any audio is AAC-LC, 48 kHz, stereo. |
-| `hotkeys::text_round_trips_to_a_registrable_hotkey` | "Ctrl+Alt+R" in the settings becomes the right registered hotkey and back. |
+| `hotkeys::a_pressed_combination_becomes_text` | A combination pressed in the settings becomes "Ctrl+Alt+R". |
 | `hotkeys::keys_that_would_break_typing_are_rejected` | A hotkey needs Ctrl or Alt unless it is an F-key. |
 | `hotkeys::a_modifier_alone_is_not_a_hotkey` | Pressing Ctrl or Alt alone does not end hotkey capture. |
-| `hotkeys::invalid_text_is_rejected` | Malformed hotkeys in the settings are ignored. |
+| `win::hotkeys::text_round_trips_to_a_registrable_hotkey` | Windows only: "Ctrl+Alt+R" in the settings becomes the right registered hotkey. |
+| `win::hotkeys::invalid_text_is_rejected` | Windows only: malformed hotkeys in the settings are ignored. |
+| `linux::hotkeys::hotkeys_become_portal_triggers` | Linux only: "Ctrl+Alt+R" becomes the shortcut text the desktop expects ("CTRL+ALT+r"); unknown modifiers are rejected. |
 | `capture::bgra_rows_with_padding_become_packed_rgba` | Screenshot read-back handles padded GPU rows. |
 | `capture::png_round_trips` | Screenshots are valid PNG with the right pixels. |
 | `capture::crop_keeps_only_the_region` | Screenshots are cropped to the region. |
@@ -51,6 +53,7 @@ cargo test --locked
 | `audio::denoiser_keeps_silence_silent` | Noise suppression adds nothing to silence. |
 | `camera::overlay_sits_in_the_corner_with_the_camera_aspect` | The webcam overlay's position and size. |
 | `camera::resize_keeps_flat_colour_and_identity` | The webcam scaling. |
+| `linux::camera::row_padding_is_dropped` | Linux only: camera pictures with padded rows are packed, and short buffers are rejected. |
 | `tray::idle_icon_is_grey_with_the_same_alpha` | The idle tray icon. |
 | `update::versions_compare_numerically` | Only a strictly newer plain version counts as an update. |
 | `update::release_is_read_from_the_github_response` | The tag and page are read from GitHub's response; an error response gives nothing. |
@@ -188,8 +191,19 @@ VM without a GPU, so x264 in software; desktop audio through the VM's dummy outp
 | 2. Interface flow | The app starts with the preview of the shared screen, the desktop's sharing indicator and the tray icon (red while recording); *Start/Stop Recording* saved a 7.6 s file (456 frames at 60 fps, AAC) to `~/Vídeos` |
 | Bug found and fixed | Audio was missing from files: video packet times carried GStreamer encoders' 1000-hour offset, so all audio fell before the file's start. Times are now running times (test added; it fails without the fix) |
 
+Later the same day, hotkeys and webcam, same VM; a desktop entry for `io.github._25Dark25.ObsLite`
+installed in `~/.local/share/applications`, as the Flatpak will have:
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 41 passed; clippy clean on 1.95 and stable (Linux and Windows); 38 passed on Windows |
+| 4. Hotkeys | GNOME's *Add Keyboard Shortcuts* dialog listed the proposed combinations; `Ctrl+Alt+R` started a recording with another window focused, `Ctrl+Alt+P` paused and resumed it, `Ctrl+Alt+R` stopped it: 24.65 s file (1479 frames, AAC, 0 decode errors), pauses excluded. Without the desktop entry the portal refuses ("An app id is required") and the status bar says so |
+| 16. Webcam | A virtual camera (`v4l2loopback` fed with a GStreamer test pattern). Before access is granted, *Video Capture Device* shows one "Camera" entry and nothing is asked; choosing it brings GNOME's *Allow Obs Lite to Use the Camera?* dialog; then the overlay shows in the preview and in an 8.45 s recording (507 frames, AAC) and the desktop's camera indicator is on. After a restart the camera comes back without asking and the menu lists it by name; choosing it by name works. Without the desktop entry GNOME asks generically ("Allow Apps…") and the camera works too |
+| Bugs found and fixed | GNOME refused the camera dialog ("Only the focused app is allowed to show a system access dialog") because the window did not carry the app id; it does now. The camera list showed each camera twice; it is deduplicated |
+
 Not verified on Linux: VA-API and NVENC encoders (no GPU in the VM), a real microphone (the VM has
-none), X11 sessions, desktops other than GNOME.
+none), a real webcam, removing the webcam (the camera indicator should go off), denying camera
+access, X11 sessions, desktops other than GNOME.
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.

@@ -177,9 +177,12 @@ cargo build --release
 
 A Linux version is in progress. It records the screen or window chosen in the desktop's sharing
 dialog (the ScreenCast portal and PipeWire, so it works on Wayland), with desktop audio and the
-microphone, encoded with GStreamer; pause, region and the replay buffer work as on Windows. Not
-there yet: the webcam, global hotkeys on Wayland, application audio and packaging. To build it
-(Ubuntu/Debian package names):
+microphone, encoded with GStreamer; pause, region, the replay buffer and the webcam work as on
+Windows. Global hotkeys go through the desktop (the GlobalShortcuts portal), which keeps them: obs-lite
+proposes its combinations and they can be changed in the system settings. The desktop needs to know
+the app for that, so a source build needs a desktop entry named `io.github._25Dark25.ObsLite.desktop`
+in `~/.local/share/applications` (the Flatpak, still to come, brings its own). Not there yet:
+application audio and packaging. To build it (Ubuntu/Debian package names):
 
 ```sh
 sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev   # to build
@@ -232,11 +235,13 @@ WASAPI desktop + mic + app ─► mixer paced by the same clock (fills silence)
 - `src/capture.rs`, `src/camera.rs`, `src/audio.rs`: sources, preview and picture helpers, webcam
   overlay, audio inputs, noise suppression and mixer.
 - `src/linux/`: the Linux side, in progress: ScreenCast portal (`portal.rs`), PipeWire capture
-  (`capture.rs`), GStreamer encoding and MP4 (`encoder.rs`), audio (`audio.rs`), system calls
-  (`sys.rs`).
+  (`capture.rs`), GStreamer encoding and MP4 (`encoder.rs`), audio (`audio.rs`), webcam through
+  the Camera portal (`camera.rs`), hotkeys through the GlobalShortcuts portal (`hotkeys.rs`), system
+  calls (`sys.rs`).
 - `src/win/`: the Windows side: capture sessions (`capture.rs`), canvas, frame queue and encoder
-  (`encoder.rs`), Media Foundation (`mf.rs`), WASAPI (`audio.rs`), webcam (`camera.rs`) and
-  system calls (`sys.rs`).
+  (`encoder.rs`), Media Foundation (`mf.rs`), WASAPI (`audio.rs`), webcam (`camera.rs`), hotkeys
+  (`hotkeys.rs`) and system calls (`sys.rs`).
+- `src/hotkeys.rs`: hotkeys as text in the settings; registering them is platform code.
 - `src/config.rs`: settings and their defaults.
 - `build.rs`: draws the icon and embeds it in the executable.
 
