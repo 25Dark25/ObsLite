@@ -1,22 +1,19 @@
 //! Global hotkeys as the text shown in Settings and stored in settings.json ("Ctrl+Alt+R").
+//! Registering them is platform code (`platform::hotkeys`).
 
 use eframe::egui::{Key, Modifiers};
-use global_hotkey::hotkey::{self, Code, HotKey};
 
-/// Parses "Ctrl+Alt+R" into a hotkey that can be registered.
-pub fn parse(text: &str) -> Option<HotKey> {
-    let mut parts: Vec<&str> = text.split('+').collect();
-    let key = Key::from_name(parts.pop()?)?;
-    let mut mods = hotkey::Modifiers::empty();
-    for part in parts {
-        mods |= match part {
-            "Ctrl" => hotkey::Modifiers::CONTROL,
-            "Alt" => hotkey::Modifiers::ALT,
-            "Shift" => hotkey::Modifiers::SHIFT,
-            _ => return None,
-        };
-    }
-    Some(HotKey::new((!mods.is_empty()).then_some(mods), code(key)?))
+pub use crate::platform::hotkeys::GlobalHotkeys;
+
+/// A hotkey to register: a stable id (for desktops that store shortcuts), what it does, and
+/// the combination as text.
+pub struct Binding {
+    // Only desktops that keep the shortcuts themselves (the Linux portal) use these two.
+    #[cfg_attr(windows, allow(dead_code))]
+    pub id: &'static str,
+    #[cfg_attr(windows, allow(dead_code))]
+    pub description: String,
+    pub text: String,
 }
 
 /// The text for a combination pressed in Settings, or `None` if it cannot be a global hotkey.
@@ -27,7 +24,9 @@ pub fn format(mods: Modifiers, key: Key) -> Option<String> {
     if matches!(key, ShiftLeft | ShiftRight | ControlLeft | ControlRight | AltLeft | AltRight | SuperLeft | SuperRight) {
         return None; // still waiting for the actual key
     }
-    code(key)?;
+    if !crate::platform::hotkeys::supports(key) {
+        return None;
+    }
     let function_key = key.name().len() > 1 && key.name().starts_with('F') && key.name()[1..].parse::<u8>().is_ok();
     if !(mods.ctrl || mods.alt || function_key) {
         return None;
@@ -42,16 +41,6 @@ pub fn format(mods: Modifiers, key: Key) -> Option<String> {
     Some(text)
 }
 
-fn code(key: Key) -> Option<Code> {
-    let name = key.name();
-    let code = match name.as_bytes() {
-        [c] if c.is_ascii_uppercase() => format!("Key{name}"),
-        [c] if c.is_ascii_digit() => format!("Digit{name}"),
-        _ => name.to_owned(),
-    };
-    code.parse().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,12 +48,9 @@ mod tests {
     const CTRL_ALT: Modifiers = Modifiers { alt: true, ctrl: true, shift: false, mac_cmd: false, command: true };
 
     #[test]
-    fn text_round_trips_to_a_registrable_hotkey() {
+    fn a_pressed_combination_becomes_text() {
         assert_eq!(format(CTRL_ALT, Key::R).as_deref(), Some("Ctrl+Alt+R"));
-        let expected = HotKey::new(Some(hotkey::Modifiers::CONTROL | hotkey::Modifiers::ALT), Code::KeyR);
-        assert_eq!(parse("Ctrl+Alt+R"), Some(expected));
-        assert_eq!(parse("Ctrl+Shift+5"), Some(HotKey::new(Some(hotkey::Modifiers::CONTROL | hotkey::Modifiers::SHIFT), Code::Digit5)));
-        assert_eq!(parse("F9"), Some(HotKey::new(None, Code::F9)));
+        assert_eq!(format(Modifiers::CTRL | Modifiers::SHIFT, Key::Num5).as_deref(), Some("Ctrl+Shift+5"));
     }
 
     #[test]
@@ -80,12 +66,5 @@ mod tests {
         assert_eq!(format(CTRL_ALT, Key::ControlLeft), None);
         assert_eq!(format(CTRL_ALT, Key::AltRight), None);
         assert_eq!(format(Modifiers::SHIFT, Key::ShiftLeft), None);
-    }
-
-    #[test]
-    fn invalid_text_is_rejected() {
-        assert_eq!(parse(""), None);
-        assert_eq!(parse("Ctrl+Alt+"), None);
-        assert_eq!(parse("Hyper+R"), None);
     }
 }

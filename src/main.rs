@@ -27,6 +27,8 @@ use std::time::Duration;
 const ICON_RGBA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon64.rgba"));
 
 fn main() -> eframe::Result {
+    #[cfg(target_os = "linux")]
+    platform::sys::register_app();
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--selftest") {
         platform::sys::attach_console();

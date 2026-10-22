@@ -11,7 +11,6 @@ repository = "https://github.com/25Dark25/obs-lite"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "7.0.0"
 eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts"] }
-global-hotkey = "0.8.0"
 nnnoiseless = { version = "0.5.2", default-features = false }
 png = "0.18.1"
 rfd = "0.17.2"
@@ -19,6 +18,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 
 [target.'cfg(windows)'.dependencies]
+global-hotkey = "0.8.0"
 raw-window-handle = "0.6.2"
 tray-icon = { version = "0.26.0", default-features = false }
 wasapi = "0.26.0"
@@ -27,8 +27,9 @@ windows-capture = "2.0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The ScreenCast portal (D-Bus), driven with pollster.
-ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "screencast"] }
+ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "global_shortcuts", "screencast"] }
 eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+futures-util = { version = "0.3.34", default-features = false }
 gstreamer = "0.25.4"
 gstreamer-app = "0.25.2"
 gstreamer-video = "0.25.4"
