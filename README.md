@@ -49,7 +49,8 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spa
   corner of the recording). **Properties**: capture the cursor, *Select Region…* to record only part
   of the source, and the webcam's corner and size.
 - **Audio Mixer**: desktop audio and *Mic/Aux*, each with a meter, volume slider and mute button
-  (mute also works while recording).
+  (mute also works while recording). If the channels together go over the maximum, a limiter
+  lowers the volume at those moments instead of letting it distort, and the mixer says so.
 - **Controls**: *Start Recording* (with a pause button next to it while recording), *Start Replay
   Buffer* (with a *Save Replay* button next to it while it runs), *Settings* and *Exit*.
 - **Settings**: *General* (language, minimize to tray, hide obs-lite from capture), *Output*

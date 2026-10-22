@@ -3,13 +3,14 @@
 //! Each input runs on its own thread; the platform code (`platform::audio`) captures 48 kHz
 //! stereo f32 and hands it over with `InputShared::deliver`. Loopback capture delivers nothing
 //! while the system is silent, so the mixer is driven by the recording clock and pads gaps
-//! with silence; this keeps the audio track aligned with the video timestamps.
+//! with silence; this keeps the audio track aligned with the video timestamps. A limiter keeps
+//! the sum of the inputs from clipping.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nnnoiseless::DenoiseState;
 
@@ -23,6 +24,13 @@ pub const CHANNELS: usize = 2;
 const MAX_BUFFERED: usize = SAMPLE_RATE as usize * CHANNELS / 2; // 500 ms
 /// Latency above which the mixer drops the oldest input samples.
 const MAX_LATENCY: usize = SAMPLE_RATE as usize * CHANNELS / 10; // 100 ms
+/// How long the limiter keeps a reduction before giving it back; longer than a cycle of the
+/// lowest sounds, so the gain does not wobble within a sustained sound (which distorts it).
+const HOLD: f32 = 0.05;
+/// How long the limiter then takes to give back most of the volume it took (time constant).
+const RELEASE: f32 = 0.2;
+/// How long the mixer reports limiting after it last happened, so the UI can show it.
+const LIMITING_HOLD: Duration = Duration::from_millis(1500);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum InputKind {
@@ -182,6 +190,8 @@ impl Denoiser {
 /// Mixes the given inputs into 16-bit PCM following the recording clock.
 pub struct Mixer {
     stop: Arc<AtomicBool>,
+    /// When the inputs last added up to more than full scale.
+    limited_at: Arc<Mutex<Option<Instant>>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -195,10 +205,11 @@ impl Mixer {
         mut sink: impl FnMut(Vec<u8>) + Send + 'static,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
+        let limited_at: Arc<Mutex<Option<Instant>>> = Arc::default();
         let thread = thread::Builder::new()
             .name("audio-mixer".into())
             .spawn({
-                let stop = stop.clone();
+                let (stop, limited_at) = (stop.clone(), limited_at.clone());
                 move || {
                     while !ready.load(Ordering::Acquire) {
                         if stop.load(Ordering::Relaxed) {
@@ -210,6 +221,7 @@ impl Mixer {
                     clear();
                     let mut produced: u64 = 0;
                     let mut mix = Vec::new();
+                    let mut limiter = Limiter::new();
                     while !stop.load(Ordering::Relaxed) {
                         thread::sleep(Duration::from_millis(10));
                         if clock.is_paused() {
@@ -224,6 +236,9 @@ impl Mixer {
                         }
                         produced += frames as u64;
                         mix_block(&inputs, frames * CHANNELS, &mut mix);
+                        if limiter.process(&mut mix) {
+                            *limited_at.lock().unwrap() = Some(Instant::now());
+                        }
                         let pcm =
                             mix.iter().flat_map(|s| ((s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16).to_le_bytes());
                         sink(pcm.collect());
@@ -231,7 +246,13 @@ impl Mixer {
                 }
             })
             .expect("spawn mixer thread");
-        Self { stop, thread: Some(thread) }
+        Self { stop, limited_at, thread: Some(thread) }
+    }
+
+    /// Whether the inputs went over full scale in the last moments, so the limiter is lowering
+    /// the volume: a sign that some volume should come down.
+    pub fn limiting(&self) -> bool {
+        self.limited_at.lock().unwrap().is_some_and(|t| t.elapsed() < LIMITING_HOLD)
     }
 }
 
@@ -241,6 +262,50 @@ impl Drop for Mixer {
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
+    }
+}
+
+/// Keeps the mix within full scale. Each input is at most full scale, but together they can
+/// add up to more, which used to be clipped flat. When that would happen the gain drops at once
+/// to just fit, stays there for `HOLD` and recovers over about `RELEASE`; a mix that fits
+/// passes unchanged.
+struct Limiter {
+    gain: f32,
+    /// Frames left before the gain starts to recover.
+    hold: u32,
+    /// Share of the way back to the wanted gain covered per frame.
+    release: f32,
+}
+
+impl Limiter {
+    fn new() -> Self {
+        Self { gain: 1.0, hold: 0, release: 1.0 - (-1.0 / (RELEASE * SAMPLE_RATE as f32)).exp() }
+    }
+
+    /// Limits interleaved stereo in place; returns whether the mix went over full scale.
+    fn process(&mut self, mix: &mut [f32]) -> bool {
+        let mut over = false;
+        for frame in mix.as_chunks_mut::<CHANNELS>().0 {
+            let peak = frame.iter().fold(0f32, |p, s| p.max(s.abs()));
+            // Both channels share the gain, so the stereo image does not shift.
+            let fit = if peak > 1.0 { 1.0 / peak } else { 1.0 };
+            over |= peak > 1.0;
+            if fit <= self.gain {
+                // Also when a held reduction is just enough: keep holding it.
+                if fit < 1.0 {
+                    self.hold = (HOLD * SAMPLE_RATE as f32) as u32;
+                }
+                self.gain = fit;
+            } else if self.hold > 0 {
+                self.hold -= 1;
+            } else {
+                self.gain += (fit - self.gain) * self.release;
+            }
+            if self.gain < 1.0 {
+                frame.iter_mut().for_each(|s| *s *= self.gain);
+            }
+        }
+        over
     }
 }
 
@@ -278,6 +343,43 @@ mod tests {
         mix_block(&[a.clone(), b], 4, &mut out);
         assert_eq!(out, vec![0.6, 0.6, 0.1, 0.1]);
         assert!(a.buffer.lock().unwrap().is_empty());
+    }
+
+    /// A 50 Hz tone: low sounds are where a limiter's gain would wobble from cycle to cycle.
+    fn sine(amplitude: f32, seconds: f32) -> Vec<f32> {
+        let frames = (SAMPLE_RATE as f32 * seconds) as usize;
+        (0..frames)
+            .flat_map(|i| [amplitude * (i as f32 * 50.0 * std::f32::consts::TAU / SAMPLE_RATE as f32).sin(); 2])
+            .collect()
+    }
+
+    #[test]
+    fn inputs_adding_up_past_full_scale_are_limited_not_clipped() {
+        // Two inputs at 0.7 add up to 1.4.
+        let samples = sine(0.7, 0.5).len();
+        let inputs = [input_with(&sine(0.7, 0.5), 1.0), input_with(&sine(0.7, 0.5), 1.0)];
+        let mut mix = Vec::new();
+        mix_block(&inputs, samples, &mut mix);
+        let summed = mix.clone();
+        let limited = Limiter::new().process(&mut mix);
+        assert!(mix.iter().all(|s| s.abs() <= 1.0), "nothing left over full scale");
+        // Past the first cycle (20 ms) the wave keeps its shape: every sample is scaled by about the
+        // same gain, where clipping would leave the peaks at 1/1.4 of the rest.
+        let ratios: Vec<f32> =
+            summed.iter().zip(&mix).skip(SAMPLE_RATE as usize * CHANNELS / 50).filter(|(s, _)| s.abs() > 0.1).map(|(s, o)| o / s).collect();
+        let (low, high) = ratios.iter().fold((f32::MAX, 0f32), |(l, h), r| (l.min(*r), h.max(*r)));
+        assert!(high / low < 1.001, "gain varied from {low} to {high}");
+        assert!((0.70..0.73).contains(&low), "gain {low} is about 1/1.4");
+        assert!(limited);
+    }
+
+    #[test]
+    fn a_mix_within_full_scale_is_untouched() {
+        let mut mix = [sine(0.6, 0.1), sine(-0.4, 0.1)].concat();
+        let before = mix.clone();
+        let mut limiter = Limiter::new();
+        assert!(!limiter.process(&mut mix));
+        assert_eq!(mix, before);
     }
 
     #[test]
