@@ -1,21 +1,21 @@
-//! Audio capture (WASAPI) and a clock-driven mixer.
+//! Audio inputs and a clock-driven mixer.
 //!
-//! Each input runs on its own thread, polling WASAPI in shared mode with automatic
-//! conversion to 48 kHz stereo f32. Loopback capture delivers nothing while the
-//! system is silent, so the mixer is driven by the recording clock and pads gaps
+//! Each input runs on its own thread; the platform code (`platform::audio`) captures 48 kHz
+//! stereo f32 and hands it over with `InputShared::deliver`. Loopback capture delivers nothing
+//! while the system is silent, so the mixer is driven by the recording clock and pads gaps
 //! with silence; this keeps the audio track aligned with the video timestamps.
 
 use std::collections::VecDeque;
-use std::error::Error;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use nnnoiseless::DenoiseState;
-use wasapi::{AudioClient, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 
 use crate::media::Clock;
+
+pub use crate::platform::audio::list_devices;
 
 pub const SAMPLE_RATE: u32 = 48_000;
 pub const CHANNELS: usize = 2;
@@ -32,36 +32,10 @@ pub enum InputKind {
     Application(u32),
 }
 
-impl InputKind {
-    fn direction(self) -> Direction {
-        match self {
-            // Loopback capture opens the render (output) endpoint.
-            Self::System | Self::Application(_) => Direction::Render,
-            Self::Microphone => Direction::Capture,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Device {
     pub id: String,
     pub name: String,
-}
-
-/// Active endpoints for an input kind.
-pub fn list_devices(kind: InputKind) -> Vec<Device> {
-    let list = move || -> Result<Vec<Device>, Box<dyn Error>> {
-        wasapi::initialize_mta().ok()?;
-        let collection = DeviceEnumerator::new()?.get_device_collection(&kind.direction())?;
-        let mut out = Vec::new();
-        for device in &collection {
-            let device = device?;
-            out.push(Device { id: device.get_id()?, name: device.get_friendlyname()? });
-        }
-        Ok(out)
-    };
-    // COM is initialized per thread; keep it off the UI thread.
-    thread::spawn(move || list().map_err(|e| e.to_string())).join().ok().and_then(Result::ok).unwrap_or_default()
 }
 
 /// State shared between an input's capture thread, the mixer and the UI.
@@ -72,6 +46,8 @@ pub struct InputShared {
     stop: AtomicBool,
     buffer: Mutex<VecDeque<f32>>,
     error: Mutex<Option<String>>,
+    /// Only used by the capture thread; kept while noise suppression is on.
+    denoiser: Mutex<Option<Denoiser>>,
 }
 
 impl InputShared {
@@ -83,6 +59,7 @@ impl InputShared {
             stop: AtomicBool::new(false),
             buffer: Mutex::new(VecDeque::with_capacity(MAX_BUFFERED)),
             error: Mutex::new(None),
+            denoiser: Mutex::new(None),
         }
     }
 
@@ -106,6 +83,33 @@ impl InputShared {
     pub fn error(&self) -> Option<String> {
         self.error.lock().unwrap().clone()
     }
+
+    /// Whether the capture thread should stop.
+    pub(crate) fn stopped(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+
+    /// Captured interleaved stereo samples, for the meter and the mixer (denoised if asked).
+    pub(crate) fn deliver(&self, mut samples: Vec<f32>) {
+        let mut denoiser = self.denoiser.lock().unwrap();
+        if self.denoise.load(Ordering::Relaxed) {
+            samples = denoiser.get_or_insert_with(Denoiser::new).process(&samples);
+        } else {
+            *denoiser = None;
+        }
+        drop(denoiser);
+        let peak = samples.iter().fold(0f32, |p, s| p.max(s.abs()));
+        let mut buf = self.buffer.lock().unwrap();
+        buf.extend(samples);
+        let excess = buf.len().saturating_sub(MAX_BUFFERED);
+        buf.drain(..excess);
+        self.peak.store(peak.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Nothing was captured this time: the meter drops to zero.
+    pub(crate) fn silent(&self) {
+        self.peak.store(0, Ordering::Relaxed);
+    }
 }
 
 pub struct Input {
@@ -114,7 +118,7 @@ pub struct Input {
 }
 
 impl Input {
-    /// Starts capturing from `device_id`, or the Windows default endpoint when `None`.
+    /// Starts capturing from `device_id`, or the system default device when `None`.
     pub fn start(kind: InputKind, device_id: Option<String>, gain: f32) -> Self {
         let shared = Arc::new(InputShared::new(gain));
         let thread = thread::Builder::new()
@@ -122,7 +126,7 @@ impl Input {
             .spawn({
                 let shared = shared.clone();
                 move || {
-                    if let Err(e) = capture_loop(kind, device_id.as_deref(), &shared) {
+                    if let Err(e) = crate::platform::audio::capture(kind, device_id.as_deref(), &shared) {
                         *shared.error.lock().unwrap() = Some(e.to_string());
                     }
                     shared.peak.store(0, Ordering::Relaxed);
@@ -140,66 +144,6 @@ impl Drop for Input {
             let _ = t.join();
         }
     }
-}
-
-fn capture_loop(kind: InputKind, device_id: Option<&str>, shared: &InputShared) -> Result<(), Box<dyn Error>> {
-    wasapi::initialize_mta().ok()?;
-    let format = WaveFormat::new(32, 32, &SampleType::Float, SAMPLE_RATE as usize, CHANNELS, None);
-    let (mut client, mode) = match kind {
-        // Process loopback (Windows 10 2004+) only works event-driven.
-        InputKind::Application(pid) => (
-            AudioClient::new_application_loopback_client(pid, true)?,
-            StreamMode::EventsShared { autoconvert: true, buffer_duration_hns: 0 },
-        ),
-        _ => {
-            let enumerator = DeviceEnumerator::new()?;
-            let device = match device_id {
-                Some(id) => enumerator.get_device(id)?,
-                None => enumerator.get_default_device(&kind.direction())?,
-            };
-            (device.get_iaudioclient()?, StreamMode::PollingShared { autoconvert: true, buffer_duration_hns: 1_000_000 })
-        }
-    };
-    client.initialize_client(&format, &Direction::Capture, &mode)?;
-    let event = match mode {
-        StreamMode::EventsShared { .. } => Some(client.set_get_eventhandle()?),
-        _ => None,
-    };
-    let capture = client.get_audiocaptureclient()?;
-    client.start_stream()?;
-
-    let mut raw: VecDeque<u8> = VecDeque::new();
-    let mut denoiser: Option<Denoiser> = None;
-    while !shared.stop.load(Ordering::Relaxed) {
-        capture.read_from_device_to_deque(&mut raw)?;
-        let usable = raw.len() / 4 * 4;
-        if usable > 0 {
-            let bytes: Vec<u8> = raw.drain(..usable).collect();
-            let mut samples: Vec<f32> = bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
-            if shared.denoise.load(Ordering::Relaxed) {
-                samples = denoiser.get_or_insert_with(Denoiser::new).process(&samples);
-            } else {
-                denoiser = None;
-            }
-            let peak = samples.iter().fold(0f32, |p, s| p.max(s.abs()));
-            let mut buf = shared.buffer.lock().unwrap();
-            buf.extend(samples);
-            let excess = buf.len().saturating_sub(MAX_BUFFERED);
-            buf.drain(..excess);
-            shared.peak.store(peak.to_bits(), Ordering::Relaxed);
-        } else {
-            shared.peak.store(0, Ordering::Relaxed);
-        }
-        match &event {
-            // Times out while the application is silent; that is fine.
-            Some(event) => {
-                let _ = event.wait_for_event(20);
-            }
-            None => thread::sleep(Duration::from_millis(5)),
-        }
-    }
-    client.stop_stream()?;
-    Ok(())
 }
 
 /// RNNoise noise suppression (as in OBS's filter). It works on mono 10 ms frames at 48 kHz,

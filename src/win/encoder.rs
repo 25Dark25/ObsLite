@@ -29,7 +29,7 @@ use windows_capture::frame::Frame;
 use crate::camera::{self, CameraSize, Corner, PixelRect};
 use crate::i18n::tr;
 use crate::media::{self, Clock, Muxer, Packet, TICKS_PER_SECOND};
-use crate::mf::{Aac, Converter, H264, Media, Mp4, VideoEvent};
+use super::mf::{Aac, Converter, H264, Media, Mp4, VideoEvent};
 
 /// Queued NV12 frames (200 ms at 60 fps, about 3 MB each at 1080p). If the encoder falls
 /// further behind, the oldest queued frame is dropped and counted as lagged.

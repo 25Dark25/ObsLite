@@ -7,12 +7,15 @@ mod audio;
 mod camera;
 mod capture;
 mod config;
-mod encoder;
 mod media;
-mod mf;
 mod hotkeys;
 mod tray;
 mod update;
+
+#[cfg(windows)]
+mod win;
+#[cfg(windows)]
+use win as platform;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -22,7 +25,7 @@ const ICON_RGBA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon64.rgba")
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--selftest") {
-        attach_console();
+        platform::sys::attach_console();
         std::process::exit(match selftest(&args[2..]) {
             Ok(()) => 0,
             Err(e) => {
@@ -42,17 +45,6 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native("obs-lite", options, Box::new(|cc| Ok(Box::new(app::App::new(cc)))))
-}
-
-/// Release builds use the GUI subsystem; reattach to the parent console for selftest output.
-fn attach_console() {
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn AttachConsole(process_id: u32) -> i32;
-    }
-    unsafe {
-        AttachConsole(u32::MAX);
-    }
 }
 
 /// Records the first monitor plus system audio without UI, using the same pipeline as the app.
