@@ -14,10 +14,13 @@ cargo test --locked
 
 | Test | Checks |
 |---|---|
-| `encoder::clock_excludes_paused_time` | The recording clock stops while paused. |
-| `encoder::replay_keeps_the_last_seconds_from_a_keyframe` | The replay buffer keeps at least its length, from a keyframe, at most one keyframe interval more, and audio from the first frame on. |
-| `encoder::replay_shorter_than_its_length_keeps_everything` | A replay buffer that has run less than its length keeps every packet. |
-| `encoder::replay_starts_at_the_first_keyframe` | Packets before the first keyframe are not kept (they would not play). |
+| `media::clock_excludes_paused_time` | The recording clock stops while paused. |
+| `media::replay_keeps_the_last_seconds_from_a_keyframe` | The replay buffer keeps at least its length, from a keyframe, at most one keyframe interval more, and audio from the first frame on. |
+| `media::replay_shorter_than_its_length_keeps_everything` | A replay buffer that has run less than its length keeps every packet. |
+| `media::replay_starts_at_the_first_keyframe` | Packets before the first keyframe are not kept (they would not play). |
+| `media::a_recording_starts_at_the_next_keyframe_with_the_audio_since_then` | A recording started while encoding asks for a keyframe once, starts on it and keeps only the audio from then on. |
+| `media::a_recording_without_frames_is_an_error` | Stopping a recording before any frame reports an error instead of an empty file. |
+| `media::a_saved_replay_is_interleaved_by_time` | A saved replay writes video and audio in time order, relative to its first keyframe, from another thread. |
 | `mf::software_encoder_encodes_the_canvas` | Without a hardware encoder, the canvas still goes through the GPU colour conversion and the Windows software H.264 encoder (one packet per frame, keyframe first). Skipped where there is no GPU video processor, such as CI. |
 | `audio::mixes_with_gain_and_pads_silence` | Inputs are mixed with their gain; a short input is padded with silence. |
 | `audio::drops_oldest_samples_beyond_latency_bound` | A backed-up input drops its oldest samples instead of drifting. |

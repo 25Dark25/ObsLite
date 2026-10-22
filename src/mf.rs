@@ -43,20 +43,10 @@ use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, HSTRING, Interface, Result};
 
-pub const TICKS_PER_SECOND: i64 = 10_000_000;
+use crate::media::{Packet, TICKS_PER_SECOND};
+
 pub const AUDIO_RATE: u32 = 48_000;
 const AUDIO_CHANNELS: u32 = 2;
-
-/// One encoded video frame or block of audio.
-#[derive(Clone, Debug)]
-pub struct Packet {
-    pub data: Vec<u8>,
-    /// 100 ns units since the recording clock started.
-    pub time: i64,
-    pub duration: i64,
-    /// A video keyframe (playback can start here); always true for audio.
-    pub key: bool,
-}
 
 /// Keeps Media Foundation started while it lives (start-up is reference counted), so a file
 /// can still be finished after the encoder that made it is gone.

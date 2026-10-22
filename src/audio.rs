@@ -15,7 +15,7 @@ use std::time::Duration;
 use nnnoiseless::DenoiseState;
 use wasapi::{AudioClient, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 
-use crate::encoder::Clock;
+use crate::media::Clock;
 
 pub const SAMPLE_RATE: u32 = 48_000;
 pub const CHANNELS: usize = 2;

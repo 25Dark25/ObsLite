@@ -22,7 +22,8 @@ use windows_capture::window::Window;
 
 use crate::camera::{CameraSize, Corner};
 use crate::config::{Quality, Region, Resolution};
-use crate::encoder::{Clock, Com, Encoder, EncoderSettings, Outputs};
+use crate::encoder::{Com, Encoder, EncoderSettings, Outputs};
+use crate::media::Clock;
 use crate::i18n::tr;
 
 type BoxError = Box<dyn Error + Send + Sync>;
