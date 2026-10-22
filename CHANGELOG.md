@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Channels that together went over full scale (desktop audio and microphone both loud) were
+  clipped, distorting the recording, while each meter looked fine. A limiter now lowers the
+  volume at those moments, and the mixer shows *Mix at its limit: lower a volume*.
+
 ## [0.3.0] - 2026-10-18
 
 ### Added

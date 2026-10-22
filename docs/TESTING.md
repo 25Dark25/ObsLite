@@ -23,6 +23,8 @@ cargo test --locked
 | `media::a_saved_replay_is_interleaved_by_time` | A saved replay writes video and audio in time order, relative to its first keyframe, from another thread. |
 | `mf::software_encoder_encodes_the_canvas` | Without a hardware encoder, the canvas still goes through the GPU colour conversion and the Windows software H.264 encoder (one packet per frame, keyframe first). Skipped where there is no GPU video processor, such as CI. |
 | `audio::mixes_with_gain_and_pads_silence` | Inputs are mixed with their gain; a short input is padded with silence. |
+| `audio::inputs_adding_up_past_full_scale_are_limited_not_clipped` | Two inputs that add up to 1.4 are brought within full scale with one steady gain, so the wave keeps its shape (a 50 Hz tone: the gain must not wobble from cycle to cycle). |
+| `audio::a_mix_within_full_scale_is_untouched` | The limiter leaves a mix that fits exactly as it is. |
 | `audio::drops_oldest_samples_beyond_latency_bound` | A backed-up input drops its oldest samples instead of drifting. |
 | `config::bitrate_scales_with_pixel_rate` | Quality presets scale with resolution and frame rate, within limits. |
 | `config::resolution_scales_down_only_and_keeps_aspect` | Output scaling never upscales and keeps even dimensions and aspect ratio. |
@@ -109,6 +111,10 @@ provide, so the pipeline is tested by hand before each release. Build with
 22. **Installer**: run the `.msi` by double-clicking it as a standard user: no UAC prompt; the
     *Shortcuts* page has *Create a shortcut on the desktop* unticked; after installing, *Obs Lite*
     is in the Start menu with the obs-lite icon and starts. Uninstall from *Settings › Apps*.
+23. **Mix limit**: play a tone at about −3 dB on the desktop and another on the microphone, and
+    record. *Mix at its limit: lower a volume* must show in the mixer while recording; the file's
+    tones must have no clipping harmonics (compare with each tone at −9 dB, which must not show
+    the notice).
 
 Check each MP4's duration, resolution, frame rate and audio track in its *Properties › Details*
 tab or with `ffprobe`.
@@ -204,6 +210,17 @@ installed in `~/.local/share/applications`, as the Flatpak will have:
 Not verified on Linux: VA-API and NVENC encoders (no GPU in the VM), a real microphone (the VM has
 none), a real webcam, removing the webcam (the camera indicator should go off), denying camera
 access, X11 sessions, desktops other than GNOME.
+
+Mix limiter, same VM: a 440 Hz tone at 0.7 on the desktop (a null sink) and a 660 Hz tone at 0.7 on
+a virtual microphone (a second null sink's monitor), so the mix reaches 1.4. Distortion is the
+energy away from the two tones in seconds 1–5 of the file's audio:
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 43 passed on Linux, 40 on Windows; clippy clean on 1.95 and stable (both) |
+| 23. Before (`main`) | Both meters at −3.1 dB and no notice; distortion −15.3 dB, clipping harmonics at 220, 860, 1540 and 1740 Hz |
+| 23. After | *Mix at its limit* shown while recording; distortion −28.3 dB, no clipping harmonics: what is left sits next to the tones, the gain following peaks that change as the two captures drift in phase |
+| 23. Reference: each tone at 0.35 | No notice; distortion −34.6 dB (the floor of capture and AAC) |
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.

@@ -1165,6 +1165,13 @@ impl App {
             });
             ui.add_space(8.0);
         }
+        let limiting = matches!(&self.rec, RecState::Active { mixer: Some(mixer), .. } if mixer.limiting());
+        if limiting {
+            ui.label(RichText::new(tr!("Mezcla al límite: baja algún volumen", "Mix at its limit: lower a volume")).small().color(RED)).on_hover_text(tr!(
+                "Los canales juntos superan el máximo. Para que no se distorsione, la grabación baja el volumen en esos momentos.",
+                "The channels add up to more than the maximum. To keep it from distorting, the recording lowers the volume at those moments."
+            ));
+        }
         if !any {
             ui.label(RichText::new(tr!("No hay dispositivos de audio activos.\nActívalos en Ajustes › Audio.", "No active audio devices.\nEnable them in Settings › Audio.")).color(TEXT_MUTED));
         }
