@@ -175,7 +175,10 @@ cargo build --release
 .\target\release\obs-lite.exe
 ```
 
-Checks run by CI on every pull request (Windows, Rust 1.95 and stable):
+A Linux version is in progress: on Linux the same commands build it (no extra system packages are
+needed) and show the interface, but it cannot capture or record yet.
+
+Checks run by CI on every pull request (Windows and Ubuntu, Rust 1.95 and stable):
 
 ```powershell
 cargo test --locked
@@ -216,6 +219,8 @@ WASAPI desktop + mic + app ─► mixer paced by the same clock (fills silence)
 - `src/media.rs`: recording clock, encoded packets, recording file and replay buffer.
 - `src/capture.rs`, `src/camera.rs`, `src/audio.rs`: sources, preview and picture helpers, webcam
   overlay, audio inputs, noise suppression and mixer.
+- `src/linux/`: the Linux side, in progress: it builds and shows the interface but cannot capture
+  or record yet.
 - `src/win/`: the Windows side: capture sessions (`capture.rs`), canvas, frame queue and encoder
   (`encoder.rs`), Media Foundation (`mf.rs`), WASAPI (`audio.rs`), webcam (`camera.rs`) and
   system calls (`sys.rs`).

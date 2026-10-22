@@ -2,8 +2,8 @@
 
 ## Automated
 
-Run on every pull request by CI (Windows, Rust 1.95 and stable), together with clippy, a release
-build and `cargo deny`. CI also builds the MSI, validates it (ICE) and runs `installer/test.ps1`,
+Run on every pull request by CI (Windows and Ubuntu, Rust 1.95 and stable), together with clippy,
+a release build and `cargo deny`. `mf::software_encoder_encodes_the_canvas` is Windows-only. CI also builds the MSI, validates it (ICE) and runs `installer/test.ps1`,
 which installs it for the runner's user and checks the files, the *Obs Lite* Start menu shortcut,
 that there is no desktop shortcut by default, the *Installed apps* entry and its icon, a clean
 uninstall, then an install with the desktop shortcut and an upgrade that keeps it:
@@ -32,6 +32,7 @@ cargo test --locked
 | `app::volume_uses_a_squared_curve` | The volume slider maps to gain as `volume²`. |
 | `app::exit_waits_for_the_recording_being_saved` | Closing the app while a recording is being saved waits for the MP4 to be finalized. |
 | `i18n::every_spanish_variant_is_spanish` | The UI is Spanish for every Spanish Windows locale and English otherwise. |
+| `i18n::every_spanish_locale_is_spanish` | The same for POSIX locales (`es_ES.UTF-8`, `es`…), as read on Linux. |
 | `hotkeys::text_round_trips_to_a_registrable_hotkey` | "Ctrl+Alt+R" in the settings becomes the right registered hotkey and back. |
 | `hotkeys::keys_that_would_break_typing_are_rejected` | A hotkey needs Ctrl or Alt unless it is an F-key. |
 | `hotkeys::a_modifier_alone_is_not_a_hotkey` | Pressing Ctrl or Alt alone does not end hotkey capture. |

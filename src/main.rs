@@ -1,4 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Until Linux has its capture and encoding backend, the shared code it will use sits idle there.
+#![cfg_attr(target_os = "linux", allow(dead_code))]
 
 mod i18n;
 
@@ -12,6 +14,10 @@ mod hotkeys;
 mod tray;
 mod update;
 
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+use linux as platform;
 #[cfg(windows)]
 mod win;
 #[cfg(windows)]
@@ -109,7 +115,7 @@ fn selftest(args: &[String]) -> Result<(), String> {
     let (encoder, err) = session.stop();
     let encoder = encoder.ok_or_else(|| err.unwrap_or_else(|| "no frames captured".into()))?;
     let (encoded, lagged) = encoder.stats();
-    let encoder_name = encoder.encoder_name.clone();
+    let encoder_name = encoder.name().to_owned();
     encoder.finish().ok_or("nothing was recorded")?.finish()?;
     if let Some(replay) = replay {
         let path = out.with_file_name(format!("{}-replay.mp4", out.file_stem().unwrap_or_default().display()));

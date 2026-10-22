@@ -143,7 +143,7 @@ pub struct Encoder {
     /// The newest webcam picture, scaled, and where it goes: (x, y, width, height).
     overlay_texture: Mutex<Option<(Com<ID3D11Texture2D>, PixelRect)>>,
     /// Name of the H.264 encoder in use, for diagnostics.
-    pub encoder_name: String,
+    encoder_name: String,
     /// Dropped last, after everything that uses Media Foundation.
     _media: Media,
 }
@@ -298,6 +298,10 @@ impl Encoder {
             }
             ctx.Flush();
         }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.encoder_name
     }
 
     pub fn push_audio(&self, pcm: Vec<u8>) {

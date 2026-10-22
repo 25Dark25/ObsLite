@@ -20,6 +20,16 @@ impl Language {
         crate::platform::sys::system_language()
     }
 
+    /// From a POSIX locale such as "es_ES.UTF-8".
+    #[cfg_attr(windows, allow(dead_code))]
+    pub fn from_locale(locale: &str) -> Self {
+        if locale == "es" || locale.starts_with("es_") || locale.starts_with("es.") || locale.starts_with("es@") {
+            Self::Spanish
+        } else {
+            Self::English
+        }
+    }
+
     /// From a Windows language id.
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn from_lang_id(id: u16) -> Self {
@@ -65,5 +75,15 @@ mod tests {
         assert_eq!(Language::from_lang_id(0x080A), Language::Spanish); // es-MX
         assert_eq!(Language::from_lang_id(0x0409), Language::English); // en-US
         assert_eq!(Language::from_lang_id(0x040C), Language::English); // fr-FR
+    }
+
+    #[test]
+    fn every_spanish_locale_is_spanish() {
+        for locale in ["es_ES.UTF-8", "es_MX", "es", "es.UTF-8", "es_ES@euro"] {
+            assert_eq!(Language::from_locale(locale), Language::Spanish, "{locale}");
+        }
+        for locale in ["en_US.UTF-8", "C", "POSIX", "", "eu_ES.UTF-8", "esperanto"] {
+            assert_eq!(Language::from_locale(locale), Language::English, "{locale}");
+        }
     }
 }

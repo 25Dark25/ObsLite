@@ -18,13 +18,14 @@ env:
 
 jobs:
   test:
-    name: test (${{ matrix.toolchain }})
-    # obs-lite uses Windows-only APIs; it does not build on Linux or macOS.
-    runs-on: windows-latest
+    name: test (${{ matrix.os }}, ${{ matrix.toolchain }})
+    # Windows is the released platform; the Linux version builds but cannot record yet.
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
+        os: [windows-latest, ubuntu-latest]
         # Keep the first entry in sync with `rust-version` in Cargo.toml.
         toolchain: ["1.95", stable]
     steps:

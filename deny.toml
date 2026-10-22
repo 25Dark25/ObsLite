@@ -1,12 +1,19 @@
 # cargo-deny configuration: https://embarkstudios.github.io/cargo-deny/
 
 [graph]
-# obs-lite only builds for Windows; ignore dependencies of other platforms.
-targets = ["x86_64-pc-windows-msvc"]
+# obs-lite builds for Windows and Linux; ignore dependencies of other platforms.
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
 
 [advisories]
-# Fail on any RustSec advisory (vulnerable, unmaintained, unsound or yanked).
-ignore = []
+# Fail on any RustSec advisory (vulnerable, unmaintained, unsound or yanked), except:
+ignore = [
+    # zbus folded these into itself and no longer maintains them as separate crates; zbus 5,
+    # which ksni (the Linux tray icon, through tray-icon) uses, still depends on them. No known
+    # vulnerability. Drop these once ksni moves to a zbus without them.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: unmaintained as a standalone crate (merged into zbus)" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained as a standalone crate (merged into zbus)" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained as a standalone crate (merged into zbus)" },
+]
 
 [licenses]
 # Every license here is compatible with distributing obs-lite under MIT.
@@ -20,6 +27,7 @@ allow = [
     "OFL-1.1",          # egui's bundled fonts
     "Ubuntu-font-1.0",  # egui's bundled fonts
     "Unicode-3.0",      # unicode-ident
+    "Unlicense",        # ksni (Linux tray icon)
     "Zlib",
 ]
 confidence-threshold = 0.9
