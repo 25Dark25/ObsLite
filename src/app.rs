@@ -15,15 +15,13 @@ use eframe::egui::{
     self, Align, Align2, Button, Color32, ComboBox, CornerRadius, FontId, Layout, Margin, Rect, RichText, Sense,
     Slider, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2,
 };
-use global_hotkey::hotkey::HotKey;
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
 use crate::audio::{self, Device, Input, InputKind, Mixer};
 use crate::camera::{self, Camera, CameraConfig, CameraDevice, CameraFrame, CameraSize, Corner};
 use crate::capture::{self, RecordConfig, Session, SessionOptions, Source, SourceId};
 use crate::platform::encoder::{Encoder, PendingFile};
 use crate::config::{Config, Hotkeys, Quality, Region, Resolution};
-use crate::hotkeys;
+use crate::hotkeys::{self, Binding, GlobalHotkeys};
 use crate::i18n::{self, Language, tr};
 use crate::tray::{Tray, TrayCommand, TrayState};
 use crate::update::{self, Release};
@@ -130,9 +128,9 @@ pub struct App {
     settings: Option<SettingsDialog>,
     cpu: CpuMeter,
     actions: Arc<Mutex<Vec<Action>>>,
-    hotkey_manager: Option<GlobalHotKeyManager>,
-    /// Registered hotkeys and their actions, shared with the hotkey event handler.
-    bindings: Arc<Mutex<Vec<(HotKey, Action)>>>,
+    hotkeys: Option<GlobalHotkeys>,
+    /// The action of each bound hotkey, by index, shared with the hotkey handler.
+    bound_actions: Arc<Mutex<Vec<Action>>>,
     /// The main window, for excluding it from capture.
     native_window: Option<isize>,
     tray: Option<Tray>,
@@ -152,9 +150,18 @@ impl App {
         let config = Config::load();
         i18n::set(config.language.unwrap_or_else(Language::system));
         let actions = Arc::new(Mutex::new(Vec::new()));
-        let bindings = Arc::new(Mutex::new(Vec::new()));
-        let (hotkey_manager, hotkey_error) = match hotkey_manager(&cc.egui_ctx, actions.clone(), bindings.clone()) {
-            Ok(manager) => (Some(manager), None),
+        let bound_actions: Arc<Mutex<Vec<Action>>> = Arc::default();
+        let on_press = {
+            let (actions, bound, ctx) = (actions.clone(), bound_actions.clone(), cc.egui_ctx.clone());
+            move |index: usize| {
+                if let Some(action) = bound.lock().unwrap().get(index).copied() {
+                    actions.lock().unwrap().push(action);
+                    ctx.request_repaint();
+                }
+            }
+        };
+        let (hotkeys, hotkey_error) = match GlobalHotkeys::new(on_press) {
+            Ok(hotkeys) => (Some(hotkeys), None),
             Err(e) => (None, Some(e)),
         };
 
@@ -184,8 +191,8 @@ impl App {
             settings: None,
             cpu: CpuMeter { last: None, percent: 0.0 },
             actions,
-            hotkey_manager,
-            bindings,
+            hotkeys,
+            bound_actions,
             native_window: crate::platform::sys::window_handle(cc),
             tray: None,
             tray_commands: Arc::new(Mutex::new(Vec::new())),
@@ -194,7 +201,8 @@ impl App {
             update_check: None,
             jobs: Vec::new(),
         };
-        if app.config.check_updates {
+        // On Linux the Flatpak is updated by the system instead.
+        if cfg!(windows) && app.config.check_updates {
             let (tx, rx) = mpsc::channel();
             let ctx = cc.egui_ctx.clone();
             thread::spawn(move || {
@@ -639,6 +647,9 @@ impl App {
         for action in actions {
             self.handle(ctx, action);
         }
+        if let Some(e) = self.hotkeys.as_ref().and_then(GlobalHotkeys::take_error) {
+            self.set_status(tr!("Atajos globales no disponibles: {}", "Global hotkeys unavailable: {}", e), None, true);
+        }
         if let Some(rx) = &self.update_check
             && let Ok(release) = rx.try_recv()
         {
@@ -787,26 +798,24 @@ impl App {
 
     /// Registers the configured hotkeys, reporting the ones another application already uses.
     fn bind_hotkeys(&mut self) {
-        let Some(manager) = &self.hotkey_manager else { return };
+        let Some(hotkeys) = &mut self.hotkeys else { return };
         let Hotkeys { record, pause, screenshot, mute_mic, replay, save_replay } = &self.config.hotkeys;
         let wanted = [
-            (record, Action::ToggleRecording),
-            (pause, Action::TogglePause),
-            (screenshot, Action::Screenshot),
-            (mute_mic, Action::ToggleMicMute),
-            (replay, Action::ToggleReplay),
-            (save_replay, Action::SaveReplay),
+            (record, Action::ToggleRecording, "record", tr!("Iniciar / Detener Grabación", "Start / Stop Recording")),
+            (pause, Action::TogglePause, "pause", tr!("Pausar / Reanudar Grabación", "Pause / Resume Recording")),
+            (screenshot, Action::Screenshot, "screenshot", tr!("Hacer captura de pantalla", "Take Screenshot")),
+            (mute_mic, Action::ToggleMicMute, "mute-mic", tr!("Silenciar / Activar Mic/Aux", "Mute / Unmute Mic/Aux")),
+            (replay, Action::ToggleReplay, "replay", tr!("Iniciar / Detener búfer de repetición", "Start / Stop Replay Buffer")),
+            (save_replay, Action::SaveReplay, "save-replay", tr!("Guardar repetición", "Save Replay")),
         ];
-        let mut bindings = Vec::new();
-        let mut failed = Vec::new();
-        for (text, action) in wanted {
-            let Some(text) = text else { continue };
-            match hotkeys::parse(text) {
-                Some(hotkey) if manager.register(hotkey).is_ok() => bindings.push((hotkey, action)),
-                _ => failed.push(text.clone()),
-            }
-        }
-        *self.bindings.lock().unwrap() = bindings;
+        let (bindings, actions): (Vec<Binding>, Vec<Action>) = wanted
+            .into_iter()
+            .filter_map(|(text, action, id, description)| {
+                Some((Binding { id, description: description.to_owned(), text: text.clone()? }, action))
+            })
+            .unzip();
+        *self.bound_actions.lock().unwrap() = actions;
+        let failed = hotkeys.bind(&bindings);
         if !failed.is_empty() {
             let list = failed.join(", ");
             self.set_status(tr!("Atajos no disponibles (¿los usa otra aplicación?): {}", "Hotkeys unavailable (used by another application?): {}", list), None, true);
@@ -814,10 +823,8 @@ impl App {
     }
 
     fn unbind_hotkeys(&mut self) {
-        let bindings = std::mem::take(&mut *self.bindings.lock().unwrap());
-        if let Some(manager) = &self.hotkey_manager {
-            let hotkeys: Vec<HotKey> = bindings.iter().map(|(hotkey, _)| *hotkey).collect();
-            let _ = manager.unregister_all(&hotkeys);
+        if let Some(hotkeys) = &mut self.hotkeys {
+            hotkeys.unbind();
         }
     }
 
@@ -1378,12 +1385,16 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
                 ui.label(tr!("Bandeja del sistema", "System Tray"));
                 ui.checkbox(&mut c.minimize_to_tray, tr!("Minimizar a la bandeja del sistema", "Minimize to the system tray"));
                 ui.end_row();
-                ui.label(tr!("Actualizaciones", "Updates"));
-                ui.checkbox(&mut c.check_updates, tr!("Buscar versiones nuevas al iniciar", "Check for new versions at startup"));
-                ui.end_row();
-                ui.label(tr!("Captura", "Capture"));
-                ui.checkbox(&mut c.hide_from_capture, tr!("Ocultar obs-lite de la captura de pantalla", "Hide obs-lite from screen capture"));
-                ui.end_row();
+                // Neither applies on Linux: Flatpak updates the app, and Wayland cannot keep a
+                // window out of screen captures.
+                if cfg!(windows) {
+                    ui.label(tr!("Actualizaciones", "Updates"));
+                    ui.checkbox(&mut c.check_updates, tr!("Buscar versiones nuevas al iniciar", "Check for new versions at startup"));
+                    ui.end_row();
+                    ui.label(tr!("Captura", "Capture"));
+                    ui.checkbox(&mut c.hide_from_capture, tr!("Ocultar obs-lite de la captura de pantalla", "Hide obs-lite from screen capture"));
+                    ui.end_row();
+                }
             });
         }
         SettingsPage::Output => {
@@ -1465,6 +1476,15 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
             });
             ui.add_space(6.0);
             ui.label(RichText::new(tr!("Funcionan aunque obs-lite esté minimizado o en segundo plano.", "They work even when obs-lite is minimized or in the background.")).small().color(TEXT_MUTED));
+            #[cfg(target_os = "linux")]
+            ui.label(
+                RichText::new(tr!(
+                    "El escritorio guarda los atajos: obs-lite le propone estos, y se pueden cambiar en la configuración del sistema.",
+                    "The desktop keeps the shortcuts: obs-lite proposes these, and they can be changed in the system settings."
+                ))
+                .small()
+                .color(TEXT_MUTED),
+            );
         }
     }
 }
@@ -1853,27 +1873,6 @@ fn hotkey_field(ui: &mut egui::Ui, row: usize, slot: &mut Option<String>, captur
     });
 }
 
-/// Creates the hotkey manager and routes presses of the bound hotkeys to `actions`.
-fn hotkey_manager(
-    ctx: &egui::Context,
-    actions: Arc<Mutex<Vec<Action>>>,
-    bindings: Arc<Mutex<Vec<(HotKey, Action)>>>,
-) -> Result<GlobalHotKeyManager, String> {
-    let manager = GlobalHotKeyManager::new().map_err(|e| e.to_string())?;
-    let ctx = ctx.clone();
-    GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
-        if event.state != HotKeyState::Pressed {
-            return;
-        }
-        let action = bindings.lock().unwrap().iter().find(|(hotkey, _)| hotkey.id() == event.id).map(|(_, a)| *a);
-        if let Some(action) = action {
-            actions.lock().unwrap().push(action);
-            ctx.request_repaint();
-        }
-    }));
-    Ok(manager)
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
@@ -1907,8 +1906,8 @@ mod tests {
             settings: None,
             cpu: CpuMeter { last: None, percent: 0.0 },
             actions: Arc::new(Mutex::new(Vec::new())),
-            hotkey_manager: None,
-            bindings: Arc::new(Mutex::new(Vec::new())),
+            hotkeys: None,
+            bound_actions: Arc::default(),
             native_window: None,
             tray: None,
             tray_commands: Arc::new(Mutex::new(Vec::new())),

@@ -2351,6 +2351,7 @@ dependencies = [
  "chrono",
  "dirs",
  "eframe",
+ "futures-util",
  "global-hotkey",
  "gstreamer",
  "gstreamer-app",

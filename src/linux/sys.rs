@@ -28,6 +28,14 @@ pub fn system_language() -> Language {
     Language::from_locale(locale.as_deref().unwrap_or(""))
 }
 
+/// Tells the desktop portals who we are. Outside a sandbox they cannot tell, and some (global
+/// shortcuts, for one) need to know. Inside Flatpak this fails harmlessly.
+pub fn register_app() {
+    if let Ok(id) = ashpd::AppID::try_from(super::APP_ID) {
+        let _ = pollster::block_on(ashpd::register_host_app(id));
+    }
+}
+
 /// Linux programs keep their terminal; nothing to do.
 pub fn attach_console() {}
 
