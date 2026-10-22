@@ -1,5 +1,5 @@
-//! Linux implementation: the ScreenCast portal and PipeWire for capture, GStreamer for audio,
-//! encoding and MP4, and the GlobalShortcuts portal for hotkeys. The webcam is not available yet.
+//! Linux implementation: the ScreenCast and Camera portals and PipeWire for capture,
+//! GStreamer for audio, encoding and MP4, and the GlobalShortcuts portal for hotkeys.
 
 pub mod audio;
 pub mod camera;

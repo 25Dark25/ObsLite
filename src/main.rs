@@ -42,14 +42,16 @@ fn main() -> eframe::Result {
     }
 
     let icon = eframe::egui::IconData { rgba: ICON_RGBA.to_vec(), width: 64, height: 64 };
-    let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("obs-lite")
-            .with_icon(icon)
-            .with_inner_size([1180.0, 800.0])
-            .with_min_inner_size([900.0, 620.0]),
-        ..Default::default()
-    };
+    let viewport = eframe::egui::ViewportBuilder::default()
+        .with_title("obs-lite")
+        .with_icon(icon)
+        .with_inner_size([1180.0, 800.0])
+        .with_min_inner_size([900.0, 620.0]);
+    // The desktop matches the window to the registered app by this id; GNOME only lets the
+    // focused app ask for permissions (camera access).
+    #[cfg(target_os = "linux")]
+    let viewport = viewport.with_app_id(platform::APP_ID);
+    let options = eframe::NativeOptions { viewport, ..Default::default() };
     eframe::run_native("obs-lite", options, Box::new(|cc| Ok(Box::new(app::App::new(cc)))))
 }
 
