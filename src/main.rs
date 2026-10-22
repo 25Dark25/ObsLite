@@ -1,4 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Until Linux has its capture and encoding backend, the shared code it will use sits idle there.
+#![cfg_attr(target_os = "linux", allow(dead_code))]
 
 mod i18n;
 
@@ -7,11 +9,19 @@ mod audio;
 mod camera;
 mod capture;
 mod config;
-mod encoder;
-mod mf;
+mod media;
 mod hotkeys;
 mod tray;
 mod update;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+use linux as platform;
+#[cfg(windows)]
+mod win;
+#[cfg(windows)]
+use win as platform;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -21,7 +31,7 @@ const ICON_RGBA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon64.rgba")
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--selftest") {
-        attach_console();
+        platform::sys::attach_console();
         std::process::exit(match selftest(&args[2..]) {
             Ok(()) => 0,
             Err(e) => {
@@ -41,17 +51,6 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native("obs-lite", options, Box::new(|cc| Ok(Box::new(app::App::new(cc)))))
-}
-
-/// Release builds use the GUI subsystem; reattach to the parent console for selftest output.
-fn attach_console() {
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn AttachConsole(process_id: u32) -> i32;
-    }
-    unsafe {
-        AttachConsole(u32::MAX);
-    }
 }
 
 /// Records the first monitor plus system audio without UI, using the same pipeline as the app.
@@ -116,7 +115,7 @@ fn selftest(args: &[String]) -> Result<(), String> {
     let (encoder, err) = session.stop();
     let encoder = encoder.ok_or_else(|| err.unwrap_or_else(|| "no frames captured".into()))?;
     let (encoded, lagged) = encoder.stats();
-    let encoder_name = encoder.encoder_name.clone();
+    let encoder_name = encoder.name().to_owned();
     encoder.finish().ok_or("nothing was recorded")?.finish()?;
     if let Some(replay) = replay {
         let path = out.with_file_name(format!("{}-replay.mp4", out.file_stem().unwrap_or_default().display()));

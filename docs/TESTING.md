@@ -2,8 +2,8 @@
 
 ## Automated
 
-Run on every pull request by CI (Windows, Rust 1.95 and stable), together with clippy, a release
-build and `cargo deny`. CI also builds the MSI, validates it (ICE) and runs `installer/test.ps1`,
+Run on every pull request by CI (Windows and Ubuntu, Rust 1.95 and stable), together with clippy,
+a release build and `cargo deny`. `mf::software_encoder_encodes_the_canvas` is Windows-only. CI also builds the MSI, validates it (ICE) and runs `installer/test.ps1`,
 which installs it for the runner's user and checks the files, the *Obs Lite* Start menu shortcut,
 that there is no desktop shortcut by default, the *Installed apps* entry and its icon, a clean
 uninstall, then an install with the desktop shortcut and an upgrade that keeps it:
@@ -14,10 +14,13 @@ cargo test --locked
 
 | Test | Checks |
 |---|---|
-| `encoder::clock_excludes_paused_time` | The recording clock stops while paused. |
-| `encoder::replay_keeps_the_last_seconds_from_a_keyframe` | The replay buffer keeps at least its length, from a keyframe, at most one keyframe interval more, and audio from the first frame on. |
-| `encoder::replay_shorter_than_its_length_keeps_everything` | A replay buffer that has run less than its length keeps every packet. |
-| `encoder::replay_starts_at_the_first_keyframe` | Packets before the first keyframe are not kept (they would not play). |
+| `media::clock_excludes_paused_time` | The recording clock stops while paused. |
+| `media::replay_keeps_the_last_seconds_from_a_keyframe` | The replay buffer keeps at least its length, from a keyframe, at most one keyframe interval more, and audio from the first frame on. |
+| `media::replay_shorter_than_its_length_keeps_everything` | A replay buffer that has run less than its length keeps every packet. |
+| `media::replay_starts_at_the_first_keyframe` | Packets before the first keyframe are not kept (they would not play). |
+| `media::a_recording_starts_at_the_next_keyframe_with_the_audio_since_then` | A recording started while encoding asks for a keyframe once, starts on it and keeps only the audio from then on. |
+| `media::a_recording_without_frames_is_an_error` | Stopping a recording before any frame reports an error instead of an empty file. |
+| `media::a_saved_replay_is_interleaved_by_time` | A saved replay writes video and audio in time order, relative to its first keyframe, from another thread. |
 | `mf::software_encoder_encodes_the_canvas` | Without a hardware encoder, the canvas still goes through the GPU colour conversion and the Windows software H.264 encoder (one packet per frame, keyframe first). Skipped where there is no GPU video processor, such as CI. |
 | `audio::mixes_with_gain_and_pads_silence` | Inputs are mixed with their gain; a short input is padded with silence. |
 | `audio::drops_oldest_samples_beyond_latency_bound` | A backed-up input drops its oldest samples instead of drifting. |
@@ -29,6 +32,7 @@ cargo test --locked
 | `app::volume_uses_a_squared_curve` | The volume slider maps to gain as `volume²`. |
 | `app::exit_waits_for_the_recording_being_saved` | Closing the app while a recording is being saved waits for the MP4 to be finalized. |
 | `i18n::every_spanish_variant_is_spanish` | The UI is Spanish for every Spanish Windows locale and English otherwise. |
+| `i18n::every_spanish_locale_is_spanish` | The same for POSIX locales (`es_ES.UTF-8`, `es`…), as read on Linux. |
 | `hotkeys::text_round_trips_to_a_registrable_hotkey` | "Ctrl+Alt+R" in the settings becomes the right registered hotkey and back. |
 | `hotkeys::keys_that_would_break_typing_are_rejected` | A hotkey needs Ctrl or Alt unless it is an F-key. |
 | `hotkeys::a_modifier_alone_is_not_a_hotkey` | Pressing Ctrl or Alt alone does not end hotkey capture. |

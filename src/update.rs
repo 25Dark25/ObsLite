@@ -1,10 +1,6 @@
 //! Looks up the latest obs-lite release on GitHub once at start-up. Settings › General can turn
 //! it off. Nothing is downloaded or installed: the user is only told, with a link.
 
-use windows::Foundation::Uri;
-use windows::Web::Http::HttpClient;
-use windows::core::HSTRING;
-
 const LATEST: &str = "https://api.github.com/repos/25Dark25/obs-lite/releases/latest";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,17 +12,9 @@ pub struct Release {
 /// The latest release, if it is newer than this build. Errors (no network, rate limit…) are
 /// returned so the caller can ignore them.
 pub fn newer_release() -> Result<Option<Release>, String> {
-    let json = fetch(LATEST).map_err(|e| e.to_string())?;
+    let json = crate::platform::sys::http_get(LATEST)?;
     let release = parse(&json).ok_or("unexpected response")?;
     Ok(is_newer(&release.version, env!("CARGO_PKG_VERSION")).then_some(release))
-}
-
-fn fetch(url: &str) -> windows::core::Result<String> {
-    let client = HttpClient::new()?;
-    // GitHub's API rejects requests without a User-Agent.
-    let agent = concat!("obs-lite/", env!("CARGO_PKG_VERSION"));
-    client.DefaultRequestHeaders()?.TryAppendWithoutValidation(&HSTRING::from("User-Agent"), &HSTRING::from(agent))?;
-    Ok(client.GetStringAsync(&Uri::CreateUri(&HSTRING::from(url))?)?.join()?.to_string())
 }
 
 /// Release tag and page from the GitHub API response.

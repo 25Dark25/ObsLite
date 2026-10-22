@@ -21,7 +21,7 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use crate::audio::{self, Device, Input, InputKind, Mixer};
 use crate::camera::{self, Camera, CameraConfig, CameraDevice, CameraFrame, CameraSize, Corner};
 use crate::capture::{self, RecordConfig, Session, SessionOptions, Source, SourceId};
-use crate::encoder::{Encoder, PendingFile};
+use crate::platform::encoder::{Encoder, PendingFile};
 use crate::config::{Config, Hotkeys, Quality, Region, Resolution};
 use crate::hotkeys;
 use crate::i18n::{self, Language, tr};
@@ -134,7 +134,7 @@ pub struct App {
     /// Registered hotkeys and their actions, shared with the hotkey event handler.
     bindings: Arc<Mutex<Vec<(HotKey, Action)>>>,
     /// The main window, for excluding it from capture.
-    hwnd: Option<isize>,
+    native_window: Option<isize>,
     tray: Option<Tray>,
     tray_commands: Arc<Mutex<Vec<TrayCommand>>>,
     /// Minimized to the tray.
@@ -186,7 +186,7 @@ impl App {
             actions,
             hotkey_manager,
             bindings,
-            hwnd: main_window(cc),
+            native_window: crate::platform::sys::window_handle(cc),
             tray: None,
             tray_commands: Arc::new(Mutex::new(Vec::new())),
             hidden: false,
@@ -594,18 +594,8 @@ impl App {
     }
 
     fn set_taskbar_button(&self, visible: bool) {
-        use windows::Win32::Foundation::HWND;
-        use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx};
-        use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
-        let Some(hwnd) = self.hwnd else { return };
-        unsafe {
-            // Already initialized as STA by winit on this thread; this only makes sure.
-            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            let Ok(list) = CoCreateInstance::<_, ITaskbarList>(&TaskbarList, None, CLSCTX_INPROC_SERVER) else { return };
-            if list.HrInit().is_ok() {
-                let hwnd = HWND(hwnd as *mut _);
-                let _ = if visible { list.AddTab(hwnd) } else { list.DeleteTab(hwnd) };
-            }
+        if let Some(window) = self.native_window {
+            crate::platform::sys::set_taskbar_button(window, visible);
         }
     }
 
@@ -832,12 +822,9 @@ impl App {
     }
 
     fn apply_capture_visibility(&self) {
-        use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE};
-        let Some(hwnd) = self.hwnd else { return };
-        let affinity = if self.config.hide_from_capture { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
-        // Fails before Windows 10 2004; the window then simply stays capturable.
-        let _ = unsafe { SetWindowDisplayAffinity(HWND(hwnd as *mut _), affinity) };
+        if let Some(window) = self.native_window {
+            crate::platform::sys::exclude_from_capture(window, self.config.hide_from_capture);
+        }
     }
 
     // ------------------------------------------------------------------ main window
@@ -1540,7 +1527,7 @@ impl CpuMeter {
         if self.last.is_some_and(|(at, _)| now.duration_since(at) < Duration::from_secs(1)) {
             return;
         }
-        let Some(cpu) = process_cpu_time() else { return };
+        let Some(cpu) = crate::platform::sys::process_cpu_time() else { return };
         if let Some((at, before)) = self.last {
             let cores = thread::available_parallelism().map_or(1, |n| n.get()) as f64;
             let wall = now.duration_since(at).as_secs_f64() * 1e7; // 100 ns units
@@ -1548,16 +1535,6 @@ impl CpuMeter {
         }
         self.last = Some((now, cpu));
     }
-}
-
-/// Kernel + user CPU time of this process, in 100 ns units.
-fn process_cpu_time() -> Option<u64> {
-    use windows::Win32::Foundation::FILETIME;
-    use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
-    let (mut created, mut exited, mut kernel, mut user) = Default::default();
-    unsafe { GetProcessTimes(GetCurrentProcess(), &mut created, &mut exited, &mut kernel, &mut user) }.ok()?;
-    let ticks = |t: FILETIME| ((t.dwHighDateTime as u64) << 32) | t.dwLowDateTime as u64;
-    Some(ticks(kernel) + ticks(user))
 }
 
 /// Slider position (0..1) to linear gain; squared for a more natural loudness curve.
@@ -1824,15 +1801,6 @@ fn apply_theme(ctx: &egui::Context) {
     ctx.set_theme(egui::ThemePreference::Dark);
 }
 
-/// The native handle of the main window, if eframe exposes it.
-fn main_window(cc: &eframe::CreationContext<'_>) -> Option<isize> {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    match cc.window_handle().ok()?.as_raw() {
-        RawWindowHandle::Win32(h) => Some(h.hwnd.get()),
-        _ => None,
-    }
-}
-
 /// "(Ctrl+Alt+R)" for tooltips, or nothing when unassigned.
 fn hotkey_hint(hotkey: &Option<String>) -> String {
     hotkey.as_ref().map_or(String::new(), |h| format!("({h})"))
@@ -1929,7 +1897,7 @@ mod tests {
             actions: Arc::new(Mutex::new(Vec::new())),
             hotkey_manager: None,
             bindings: Arc::new(Mutex::new(Vec::new())),
-            hwnd: None,
+            native_window: None,
             tray: None,
             tray_commands: Arc::new(Mutex::new(Vec::new())),
             hidden: false,

@@ -1,4 +1,4 @@
-//! Spanish and English UI text. The language follows Windows unless chosen in Ajustes › General.
+//! Spanish and English UI text. The language follows the system unless chosen in Ajustes › General.
 //!
 //! Strings stay inline as Spanish/English pairs (`tr!`), so there are no keys to keep in sync.
 
@@ -15,12 +15,24 @@ pub enum Language {
 }
 
 impl Language {
-    /// The Windows display language: Spanish for any Spanish variant, English otherwise.
+    /// The system display language: Spanish for any Spanish variant, English otherwise.
     pub fn system() -> Self {
-        Self::from_lang_id(unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() })
+        crate::platform::sys::system_language()
     }
 
-    fn from_lang_id(id: u16) -> Self {
+    /// From a POSIX locale such as "es_ES.UTF-8".
+    #[cfg_attr(windows, allow(dead_code))]
+    pub fn from_locale(locale: &str) -> Self {
+        if locale == "es" || locale.starts_with("es_") || locale.starts_with("es.") || locale.starts_with("es@") {
+            Self::Spanish
+        } else {
+            Self::English
+        }
+    }
+
+    /// From a Windows language id.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn from_lang_id(id: u16) -> Self {
         const LANG_SPANISH: u16 = 0x0A;
         if id & 0x3FF == LANG_SPANISH { Self::Spanish } else { Self::English }
     }
@@ -63,5 +75,15 @@ mod tests {
         assert_eq!(Language::from_lang_id(0x080A), Language::Spanish); // es-MX
         assert_eq!(Language::from_lang_id(0x0409), Language::English); // en-US
         assert_eq!(Language::from_lang_id(0x040C), Language::English); // fr-FR
+    }
+
+    #[test]
+    fn every_spanish_locale_is_spanish() {
+        for locale in ["es_ES.UTF-8", "es_MX", "es", "es.UTF-8", "es_ES@euro"] {
+            assert_eq!(Language::from_locale(locale), Language::Spanish, "{locale}");
+        }
+        for locale in ["en_US.UTF-8", "C", "POSIX", "", "eu_ES.UTF-8", "esperanto"] {
+            assert_eq!(Language::from_locale(locale), Language::English, "{locale}");
+        }
     }
 }
