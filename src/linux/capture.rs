@@ -118,7 +118,7 @@ impl Handler {
             *preview = Some(PreviewFrame { size: [pw, ph], rgba, seq });
             drop(preview);
             if let Some(ctx) = &shared.repaint {
-                ctx.request_repaint();
+                crate::capture::repaint_for_picture(ctx);
             }
         }
         Ok(())

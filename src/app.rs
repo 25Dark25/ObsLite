@@ -16,7 +16,7 @@ use eframe::egui::{
     Slider, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2,
 };
 
-use crate::audio::{self, Device, Input, InputKind, Mixer};
+use crate::audio::{self, Device, Input, InputKind, METER_FLOOR, Mixer};
 use crate::camera::{self, Camera, CameraConfig, CameraDevice, CameraFrame, CameraSize, Corner};
 use crate::capture::{self, RecordConfig, Session, SessionOptions, Source, SourceId};
 use crate::platform::encoder::{Encoder, PendingFile};
@@ -119,6 +119,8 @@ pub struct App {
     camera_texture: Option<TextureHandle>,
     camera_seq: Option<u64>,
     meters: [f32; 3],
+    /// For audio inputs to wake the UI when they start to make sound.
+    ctx: egui::Context,
     texture: Option<TextureHandle>,
     texture_seq: Option<u64>,
     /// Choosing a region on the preview, and the drag in progress (start, end).
@@ -183,6 +185,7 @@ impl App {
             rec: RecState::Idle,
             screenshot: None,
             meters: [0.0; 3],
+            ctx: cc.egui_ctx.clone(),
             texture: None,
             texture_seq: None,
             picking_region: false,
@@ -315,7 +318,7 @@ impl App {
         let Some(exe) = &self.config.app_audio else { return };
         let Some(app) = capture::list_audio_apps().into_iter().find(|a| a.exe.eq_ignore_ascii_case(exe)) else { return };
         let (_, _, gain) = self.channel(InputKind::Application(app.pid));
-        self.app_audio = Some(Input::start(InputKind::Application(app.pid), None, gain));
+        self.app_audio = Some(Input::start(InputKind::Application(app.pid), None, gain, Some(self.ctx.clone())));
     }
 
     fn restart_input(&mut self, kind: InputKind) {
@@ -326,7 +329,7 @@ impl App {
             InputKind::Application(_) => &mut self.app_audio,
         };
         *slot = None; // release the device before reopening it
-        *slot = enabled.then(|| Input::start(kind, device, gain));
+        *slot = enabled.then(|| Input::start(kind, device, gain, Some(self.ctx.clone())));
         if kind == InputKind::Microphone
             && let Some(mic) = &self.mic
         {
@@ -1133,7 +1136,10 @@ impl App {
                 _ => (app_label.clone(), &mut c.app_volume, &mut c.app_muted, &self.app_audio),
             };
             // Disabled devices are not shown, as in OBS.
-            let Some(input) = input else { continue };
+            let Some(input) = input else {
+                self.meters[i] = 0.0;
+                continue;
+            };
             any = true;
             let peak = input.shared.peak() * channel_gain(*volume, *muted);
             // Fast attack, slow release.
@@ -1504,12 +1510,7 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll(ctx);
-        // Keep the timer, CPU and audio meters moving; nothing else needs continuous repaints.
-        if self.active_session().is_some() || self.system.is_some() || self.mic.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(66));
-        } else {
-            ctx.request_repaint_after(Duration::from_secs(1));
-        }
+        ctx.request_repaint_after(repaint_interval(self.active_session().is_some(), &self.meters));
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1579,6 +1580,13 @@ impl CpuMeter {
         }
         self.last = Some((now, cpu));
     }
+}
+
+/// How soon to draw again. Meters move at 15 fps while there is sound, and the timer while
+/// recording; a silent, idle window only needs the CPU figure, once a second (an input that
+/// starts to make sound wakes it at once, and the preview and camera wake it for new pictures).
+fn repaint_interval(active: bool, meters: &[f32]) -> Duration {
+    if active || meters.iter().any(|m| *m > METER_FLOOR) { Duration::from_millis(66) } else { Duration::from_secs(1) }
 }
 
 /// Slider position (0..1) to linear gain; squared for a more natural loudness curve.
@@ -1910,6 +1918,7 @@ mod tests {
             camera_texture: None,
             camera_seq: None,
             meters: [0.0; 3],
+            ctx: egui::Context::default(),
             texture: None,
             texture_seq: None,
             picking_region: false,
@@ -1980,6 +1989,15 @@ mod tests {
     fn mute_silences_regardless_of_volume() {
         assert_eq!(channel_gain(1.0, true), 0.0);
         assert_eq!(channel_gain(0.5, true), 0.0);
+    }
+
+    #[test]
+    fn a_silent_idle_window_repaints_rarely() {
+        let fast = Duration::from_millis(66);
+        assert_eq!(repaint_interval(false, &[0.0, 0.0, 0.0]), Duration::from_secs(1));
+        assert_eq!(repaint_interval(false, &[0.0, 0.2, 0.0]), fast, "a meter is moving");
+        assert_eq!(repaint_interval(false, &[0.002, 0.0, 0.0]), fast, "a meter is still falling");
+        assert_eq!(repaint_interval(true, &[0.0; 3]), fast, "the recording timer runs");
     }
 
     #[test]

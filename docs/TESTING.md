@@ -32,6 +32,7 @@ cargo test --locked
 | `config::settings_saved_with_a_utf8_bom_still_load` | A `settings.json` saved with a UTF-8 BOM (e.g. by Windows PowerShell) still loads. |
 | `app::mute_silences_regardless_of_volume` | Mute wins over any volume. |
 | `app::volume_uses_a_squared_curve` | The volume slider maps to gain as `volume²`. |
+| `app::a_silent_idle_window_repaints_rarely` | The window draws once a second when idle and silent, and at 15 fps while a meter moves or a recording runs. |
 | `app::exit_waits_for_the_recording_being_saved` | Closing the app while a recording is being saved waits for the MP4 to be finalized. |
 | `i18n::every_spanish_variant_is_spanish` | The UI is Spanish for every Spanish Windows locale and English otherwise. |
 | `i18n::every_spanish_locale_is_spanish` | The same for POSIX locales (`es_ES.UTF-8`, `es`…), as read on Linux. |
@@ -49,10 +50,12 @@ cargo test --locked
 | `capture::png_round_trips` | Screenshots are valid PNG with the right pixels. |
 | `capture::crop_keeps_only_the_region` | Screenshots are cropped to the region. |
 | `capture::preview_downscale_averages_every_pixel` | The preview averages every source pixel when scaling down, and is an exact copy at full size. |
+| `capture::preview_downscale_matches_the_straightforward_average` | The faster preview scaling gives exactly the same pixels as adding each source pixel one by one, at odd sizes and with padded rows. |
 | `config::region_is_clipped_to_the_source_with_even_sides` | A region survives the source changing size and keeps even sides for H.264. |
 | `app::a_selection_on_the_preview_maps_to_source_pixels` | A rectangle dragged on the preview becomes the right region, and a click selects nothing. |
 | `audio::denoiser_keeps_the_stream_length_in_whole_frames` | Noise suppression neither loses nor invents samples. |
 | `audio::denoiser_keeps_silence_silent` | Noise suppression adds nothing to silence. |
+| `audio::only_sound_after_silence_wakes_the_ui` | An input wakes the window only when it goes from silence (below −60 dB) to sound. |
 | `camera::overlay_sits_in_the_corner_with_the_camera_aspect` | The webcam overlay's position and size. |
 | `camera::resize_keeps_flat_colour_and_identity` | The webcam scaling. |
 | `linux::camera::row_padding_is_dropped` | Linux only: camera pictures with padded rows are packed, and short buffers are rejected. |
@@ -258,6 +261,20 @@ Later, through the interface of the installed Flatpak, with *Descargas* chosen e
 
 Not verified with the Flatpak: the camera permission dialog for a fresh install; a machine with a
 GPU.
+
+2026-10-23, idle CPU, with the preview of the screen and desktop audio on and nothing playing,
+30 s per run after 12 s of start-up, `main` against the change that draws a silent, idle window
+once a second and scales the preview faster:
+
+| Machine | Before | After |
+|---|---|---|
+| Windows 11 laptop (the one above), 1080p display | 7.4 % of one core (two runs) | 3.9–4.3 % |
+| Ubuntu VM without GPU (window drawn in software) | 37 % | 5.6 % |
+
+Private memory did not change in the VM (55 MB) and rose 3–4 MB on Windows (99 to 102 MB). Most of
+what is left is the preview: each picture is read back from the GPU (about 2.6 ms at 1080p) and
+scaled down (5.4 ms before, 3.0 ms after, measured in a release build). A meter still reacts at
+once when sound starts (checked with a tone after 10 s of silence) and falls back to −inf after.
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.

@@ -22,6 +22,8 @@ pub const SAMPLE_RATE: u32 = 48_000;
 pub const CHANNELS: usize = 2;
 /// Upper bound on buffered samples per input, so idle inputs never grow unbounded.
 const MAX_BUFFERED: usize = SAMPLE_RATE as usize * CHANNELS / 2; // 500 ms
+/// Peak below which a meter shows -inf (−60 dB): silence, as far as the UI is concerned.
+pub const METER_FLOOR: f32 = 0.001;
 /// Latency above which the mixer drops the oldest input samples.
 const MAX_LATENCY: usize = SAMPLE_RATE as usize * CHANNELS / 10; // 100 ms
 /// How long the limiter keeps a reduction before giving it back; longer than a cycle of the
@@ -56,10 +58,12 @@ pub struct InputShared {
     error: Mutex<Option<String>>,
     /// Only used by the capture thread; kept while noise suppression is on.
     denoiser: Mutex<Option<Denoiser>>,
+    /// Woken when the input starts to make sound, so a silent, idle UI can repaint rarely.
+    repaint: Option<eframe::egui::Context>,
 }
 
 impl InputShared {
-    fn new(gain: f32) -> Self {
+    fn new(gain: f32, repaint: Option<eframe::egui::Context>) -> Self {
         Self {
             gain: AtomicU32::new(gain.to_bits()),
             peak: AtomicU32::new(0),
@@ -68,6 +72,7 @@ impl InputShared {
             buffer: Mutex::new(VecDeque::with_capacity(MAX_BUFFERED)),
             error: Mutex::new(None),
             denoiser: Mutex::new(None),
+            repaint,
         }
     }
 
@@ -111,7 +116,13 @@ impl InputShared {
         buf.extend(samples);
         let excess = buf.len().saturating_sub(MAX_BUFFERED);
         buf.drain(..excess);
-        self.peak.store(peak.to_bits(), Ordering::Relaxed);
+        drop(buf);
+        let before = f32::from_bits(self.peak.swap(peak.to_bits(), Ordering::Relaxed));
+        if wakes(before, peak)
+            && let Some(ctx) = &self.repaint
+        {
+            ctx.request_repaint();
+        }
     }
 
     /// Nothing was captured this time: the meter drops to zero.
@@ -126,9 +137,10 @@ pub struct Input {
 }
 
 impl Input {
-    /// Starts capturing from `device_id`, or the system default device when `None`.
-    pub fn start(kind: InputKind, device_id: Option<String>, gain: f32) -> Self {
-        let shared = Arc::new(InputShared::new(gain));
+    /// Starts capturing from `device_id`, or the system default device when `None`. `repaint` is
+    /// woken when the input goes from silence to sound.
+    pub fn start(kind: InputKind, device_id: Option<String>, gain: f32, repaint: Option<eframe::egui::Context>) -> Self {
+        let shared = Arc::new(InputShared::new(gain, repaint));
         let thread = thread::Builder::new()
             .name(format!("audio-{kind:?}"))
             .spawn({
@@ -265,6 +277,11 @@ impl Drop for Mixer {
     }
 }
 
+/// Whether a peak going from `before` to `now` is sound starting after silence.
+fn wakes(before: f32, now: f32) -> bool {
+    before <= METER_FLOOR && now > METER_FLOOR
+}
+
 /// Keeps the mix within full scale. Each input is at most full scale, but together they can
 /// add up to more, which used to be clipped flat. When that would happen the gain drops at once
 /// to just fit, stays there for `HOLD` and recovers over about `RELEASE`; a mix that fits
@@ -330,7 +347,7 @@ mod tests {
     use super::*;
 
     fn input_with(samples: &[f32], gain: f32) -> Arc<InputShared> {
-        let input = InputShared::new(gain);
+        let input = InputShared::new(gain, None);
         input.buffer.lock().unwrap().extend(samples);
         Arc::new(input)
     }
@@ -380,6 +397,15 @@ mod tests {
         let mut limiter = Limiter::new();
         assert!(!limiter.process(&mut mix));
         assert_eq!(mix, before);
+    }
+
+    #[test]
+    fn only_sound_after_silence_wakes_the_ui() {
+        assert!(wakes(0.0, 0.5));
+        assert!(wakes(METER_FLOOR, 0.01));
+        assert!(!wakes(0.5, 0.6), "already sounding: the UI is repainting anyway");
+        assert!(!wakes(0.0, 0.0005), "below the floor the meter still shows -inf");
+        assert!(!wakes(0.5, 0.0));
     }
 
     #[test]

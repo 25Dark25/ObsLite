@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   x264). The Flatpak has no network access. Not on Linux: application audio, hiding obs-lite from
   capture and the update notice.
 
+### Changed
+
+- Less CPU while idle: a silent window draws once a second instead of 15 times (it wakes as soon
+  as there is sound), each new preview picture draws once instead of twice, and the preview is
+  scaled about 40 % faster. Idle CPU fell from 7.4 % to about 4 % of one core on the test laptop.
+
 ### Fixed
 
 - Channels that together went over full scale (desktop audio and microphone both loud) were
