@@ -8,6 +8,13 @@ pub use crate::platform::capture::{Session, list_audio_apps, list_sources};
 #[cfg(target_os = "linux")]
 pub use crate::platform::capture::forget_choice;
 
+/// Asks for one repaint, for a new picture to show. egui answers an immediate request with two
+/// repaints (to let layout settle), which a picture does not need; pictures arrive several times
+/// a second, so the second one would be most of the idle drawing.
+pub fn repaint_for_picture(ctx: &eframe::egui::Context) {
+    ctx.request_repaint_after(std::time::Duration::from_millis(1));
+}
+
 /// Preview width until the UI reports how wide the preview is drawn.
 pub(crate) const PREVIEW_DEFAULT_WIDTH: usize = 640;
 

@@ -187,7 +187,7 @@ impl CameraShared {
         *self.latest.lock().unwrap() = Some(Arc::new(frame));
         self.seq.fetch_add(1, Ordering::Relaxed);
         if let Some(ctx) = repaint {
-            ctx.request_repaint();
+            crate::capture::repaint_for_picture(ctx);
         }
     }
 }
