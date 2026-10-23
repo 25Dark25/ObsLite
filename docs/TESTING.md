@@ -277,5 +277,30 @@ what is left is the preview: each picture is read back from the GPU (about 2.6 m
 scaled down (5.4 ms before, 3.0 ms after, measured in a release build). A meter still reacts at
 once when sound starts (checked with a tone after 10 s of silence) and falls back to −inf after.
 
+2026-10-23, release preparation for 0.4.0 (`main` plus the version bump), Windows on the same
+laptop, Linux in the same VM with the 0.4.0 Flatpak built from the release branch and installed from
+its bundle:
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 43 passed on Windows, 49 on Linux (one timing test ignored on both); clippy clean on 1.95 and stable on both |
+| 1. Self-test 6 s 1080p60, 440 Hz tone playing (Windows) | Quick Sync; 352 frames, 0 lagged, 5.87 s, audio −14.1 dB, 0 decode errors |
+| 1. Self-test with pause, 720p and `replay` (Windows) | 1280×720, 3.88 s, 233 frames, 0 lagged; replay 3.85 s; audio −14.1 dB |
+| 2. Interface flow (Windows) | 5.48 s at 1080p60 with the tone at −14.1 dB; clicking the "saved" message opened Explorer with the file selected; *File › Show Recordings* opened *Videos* |
+| 4. Hotkeys (Windows) | `Ctrl+Alt+R`, `Ctrl+Alt+P` twice and `Ctrl+Alt+R` with VSCodium focused, 2 s apart: 4.67 s file, pause excluded |
+| 21. Replay buffer (Windows) | Started with the button; meter at −11 dB with the tone; saved replay 17.6 s, first frame a keyframe, audio −14.0 dB, 0 decode errors |
+| 22. Installer | Not run by hand: the maintainer's installed 0.3.0 makes `installer/test.ps1` stop, and a local 0.4.0 MSI would stand in the way of the signed one. The CI `installer` job (install, upgrade, uninstall) passed on `main` |
+| Release workflow, run by hand on `main` (`c09b40a`) | `windows`, `flatpak` and `checksums` jobs passed; `sha256sum --check SHA256SUMS` passes for the zip, the MSI and the bundle; the CI-built bundle installs in the VM and has `LICENSE` and the Linux `THIRD-PARTY-LICENSES.html` (GStreamer included) |
+| Flatpak version | `flatpak info` shows 0.4.0; `appstreamcli validate` passes |
+| 1. Self-test inside the Flatpak, 8 s with `replay`, tone playing | x264; 1280×720 at 60 fps, 479 frames, 0 lagged, audio −13.5 dB; replay 3.90 s; 0 decode errors |
+| 24. After `flatpak permission-reset` | The sharing dialog names the app ("Obs Lite quiere compartir su pantalla"). The camera, configured but no longer allowed, asked while that dialog had the focus and got "cancelled"; choosing it again showed *Camera* in the menu and *Allow Obs Lite to Use the Camera?*; *Deny* showed an error, and allowing it afterwards (as the privacy settings do) brought the overlay back |
+| Bug found and fixed | That error read "Portal request was cancelled"; it now says to choose the camera again or allow it in the privacy settings (#26, test added) |
+| 24. Recording to the folder chosen earlier with *Browse* | 4.67 s, 1280×720, in `~/Descargas`, 0 decode errors |
+
+Not repeated for 0.4.0: steps 3 and 5–20 on Windows, whose code did not change since 0.3.0
+(except the preview scaling, which gives the same pixels and has a test); step 23 on Windows (it
+needs two sound inputs; checked in the VM); the tray menu on Windows (unchanged); the Flatpak on a
+machine with a GPU.
+
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.

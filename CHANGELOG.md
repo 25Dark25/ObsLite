@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-23
+
 ### Added
 
-- Linux version, as a Flatpak (`obs-lite-X.Y.Z-linux-x86_64.flatpak`): the same interface,
+- Linux version, as a Flatpak (`obs-lite-0.4.0-linux-x86_64.flatpak`): the same interface,
   recording, pause, region, replay buffer, webcam, screenshots, tray icon and global hotkeys. The
   screen or window is chosen in the desktop's sharing dialog (PipeWire, so Wayland works), global
   hotkeys and the webcam go through the desktop, and encoding uses GStreamer (VA-API, NVENC or
@@ -95,7 +97,8 @@ changes.
 - Minimum supported Rust version: 1.95.
 - Releases ship `THIRD-PARTY-LICENSES.html` with the licenses of the bundled crates.
 
-[Unreleased]: https://github.com/25Dark25/obs-lite/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/25Dark25/obs-lite/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/25Dark25/obs-lite/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/25Dark25/obs-lite/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/25Dark25/obs-lite/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/25Dark25/obs-lite/compare/v0.1.0...v0.2.0
