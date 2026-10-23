@@ -1,7 +1,8 @@
 # obs-lite
 
-Lightweight screen recorder for Windows: a single ~7 MB `.exe`, with no bundled runtime or browser.
-The interface follows OBS Studio, so OBS users find everything where they expect it.
+Lightweight screen recorder for Windows and Linux: on Windows a single ~7 MB `.exe`, on Linux a
+~4 MB Flatpak, with no bundled browser. The interface follows OBS Studio, so OBS users find
+everything where they expect it.
 
 | | Idle (preview + audio) | Recording 1080p60 + audio |
 |---|---|---|
@@ -9,12 +10,13 @@ The interface follows OBS Studio, so OBS users find everything where they expect
 | CPU (16 threads) | ~0.5 % | ~1.5 % |
 
 Measured on Windows 11 on a laptop with an RTX 4060 GPU, encoding on its Intel integrated GPU
-(Quick Sync), without a webcam; your numbers will vary. About 40 MB of the recording figure is
+(Quick Sync), without a webcam; your numbers will vary. Linux has only been measured in a virtual
+machine without a GPU (see [docs/TESTING.md](docs/TESTING.md)), which is not representative. About 40 MB of the recording figure is
 the queue of converted frames that keeps the encoder from dropping frames when it briefly stalls.
 
 > **Status: early (0.3.0).** obs-lite has been tested on a single machine
-> (Windows 11, laptop with Intel and NVIDIA GPUs); see [docs/TESTING.md](docs/TESTING.md) for what was and was not
-> verified. It has not had any security audit or independent code review. Most of the code was
+> (Windows 11, laptop with Intel and NVIDIA GPUs) and, on Linux, only in a virtual machine (Ubuntu
+> 26.04, GNOME); see [docs/TESTING.md](docs/TESTING.md) for what was and was not verified. It has not had any security audit or independent code review. Most of the code was
 > written with an AI coding assistant (Claude Code) and then built and tested as described there.
 > It is not affiliated with the OBS Project and contains no OBS code.
 
@@ -24,6 +26,8 @@ the queue of converted frames that keeps the encoder from dropping frames when i
 - A GPU with a working driver (NVIDIA, Intel or AMD). Its hardware H.264 encoder is used; without
   one, the Windows software encoder takes over (more CPU). Tested: Intel Quick Sync, and the
   software encoder.
+- Linux: Flatpak, PipeWire and a desktop with the screen-sharing portal (GNOME, KDE Plasma and
+  most Wayland desktops). Tested: GNOME 50 on Wayland, with the x264 software encoder.
 
 ## Quick start
 
@@ -34,8 +38,13 @@ the queue of converted frames that keeps the encoder from dropping frames when i
      box, to the desktop. A newer `.msi` upgrades it in place; uninstall it from *Settings › Apps*.
    - `obs-lite-X.Y.Z-portable-windows-x64.zip`, the portable version: unzip it anywhere and run
      `obs-lite.exe`. There is nothing to install.
+   - `obs-lite-X.Y.Z-linux-x86_64.flatpak`, for Linux. Install it with
+     `flatpak install --user obs-lite-X.Y.Z-linux-x86_64.flatpak` (it fetches the runtime from
+     Flathub the first time) and start *Obs Lite* from the applications menu. A newer bundle
+     installs over it.
 2. Press *Iniciar Grabación* (or `Ctrl+Alt+R`). By default it records the first display Windows
-   reports and desktop audio at 60 fps to your *Videos* folder.
+   reports and desktop audio at 60 fps to your *Videos* folder. On Linux, the desktop first asks
+   which screen or window to share.
 
 ## Interface
 
@@ -98,10 +107,30 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spa
 - Sharp preview at 5 fps: frames are scaled down to the size the preview is drawn at, averaging
   every pixel, so text stays legible.
 
+## Linux
+
+The same interface and recordings, with what Linux desktops allow:
+
+- **Screen or window**: *Sources › + › Screen or Window Capture…* asks the desktop, which shows
+  its sharing dialog. With *Remember this decision* ticked it asks only once; choosing the source
+  again asks again. Works on Wayland and X11 (through PipeWire).
+- **Global hotkeys** go through the desktop, which keeps them: obs-lite proposes its combinations
+  and GNOME asks to confirm them; they can be changed in the system's keyboard settings.
+- **Webcam**: the desktop asks for permission the first time a camera is chosen.
+- **Encoding** with GStreamer: VA-API (Intel/AMD) or NVENC if the GPU has them, otherwise x264.
+- **Not on Linux**: application audio, hiding obs-lite from capture (Wayland cannot keep a window
+  out of a capture) and the update notice.
+- **Privacy**: the Flatpak has no network access. It can use the display, the GPU, the sound
+  server (desktop audio and the microphone; there is no portal for desktop audio) and the *Videos*
+  folder; the screen, the webcam, hotkeys and any other folder go through the desktop, which
+  asks. The full list, with the reason for each, is in
+  [the manifest](packaging/flatpak/io.github._25Dark25.ObsLite.yml).
+
 ## Configuration
 
 Everything is set from the interface (*Ajustes* and the docks) and saved in
-`%APPDATA%\obs-lite\settings.json`. Delete that file to go back to the defaults: first display,
+`%APPDATA%\obs-lite\settings.json` (on Linux,
+`~/.var/app/io.github._25Dark25.ObsLite/config/obs-lite/settings.json`). Delete that file to go back to the defaults: first display,
 cursor captured, desktop audio on, microphone off, 60 fps, native resolution, medium quality,
 output to the *Videos* folder, hotkeys `Ctrl+Alt+R` and `Ctrl+Alt+P`, obs-lite hidden from capture,
 update check on, 20 s replay buffer.
@@ -136,10 +165,17 @@ Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and scre
 - Pausing a recording also pauses the replay buffer: both share one encoder and clock.
 - A replay starts at a keyframe (one every 2 s), so it is up to 2 s longer than the maximum
   replay time.
+- Linux: the Flatpak bundle is not updated by `flatpak update`, and with no network access there
+  is no update notice; new versions are on the Releases page.
+- Linux: a folder outside *Videos* can only be chosen with *Browse*, which grants access to it.
+- Linux: tested only on GNOME in a virtual machine without a GPU, where the window is drawn in
+  software (about a quarter of a CPU core while idle). KDE Plasma, X11, VA-API and NVENC have not
+  been tested.
 
 ## Verifying a release
 
-Each release zip and installer has a detached signature (`.asc`) made with this OpenPGP key:
+Each release zip, installer and Flatpak bundle has a detached signature (`.asc`) made with this
+OpenPGP key:
 
 ```
 A7FC EDEA D7E6 C343 7312  284A 442D A687 E0FF 73EE
@@ -153,7 +189,7 @@ A7FC EDEA D7E6 C343 7312  284A 442D A687 E0FF 73EE
    gpg --fingerprint A7FCEDEAD7E6C3437312284A442DA687E0FF73EE
    ```
 
-2. Verify the signature of the zip (or, the same way, of the `.msi`):
+2. Verify the signature of the zip (or, the same way, of the `.msi` or the `.flatpak`):
 
    ```sh
    gpg --verify obs-lite-0.3.0-portable-windows-x64.zip.asc obs-lite-0.3.0-portable-windows-x64.zip
@@ -176,14 +212,18 @@ cargo build --release
 .\target\release\obs-lite.exe
 ```
 
-A Linux version is in progress. It records the screen or window chosen in the desktop's sharing
-dialog (the ScreenCast portal and PipeWire, so it works on Wayland), with desktop audio and the
-microphone, encoded with GStreamer; pause, region, the replay buffer and the webcam work as on
-Windows. Global hotkeys go through the desktop (the GlobalShortcuts portal), which keeps them: obs-lite
-proposes its combinations and they can be changed in the system settings. The desktop needs to know
-the app for that, so a source build needs a desktop entry named `io.github._25Dark25.ObsLite.desktop`
-in `~/.local/share/applications` (the Flatpak, still to come, brings its own). Not there yet:
-application audio and packaging. To build it (Ubuntu/Debian package names):
+On Linux, the Flatpak is built from the repository root with `flatpak-builder` and the Flathub
+remote (the build has no network, so the crates are vendored first):
+
+```sh
+cargo vendor --locked vendor > /dev/null
+flatpak-builder --user --install-deps-from=flathub --force-clean --install \
+  build-flatpak packaging/flatpak/io.github._25Dark25.ObsLite.yml
+```
+
+A build outside Flatpak needs the GStreamer development files, and a desktop entry named
+`io.github._25Dark25.ObsLite.desktop` in `~/.local/share/applications` for global hotkeys (the
+desktop identifies apps by it; `packaging/flatpak` has one). Ubuntu/Debian package names:
 
 ```sh
 sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev   # to build
@@ -235,7 +275,7 @@ WASAPI desktop + mic + app ─► mixer paced by the same clock (fills silence)
 - `src/media.rs`: recording clock, encoded packets, recording file and replay buffer.
 - `src/capture.rs`, `src/camera.rs`, `src/audio.rs`: sources, preview and picture helpers, webcam
   overlay, audio inputs, noise suppression and mixer.
-- `src/linux/`: the Linux side, in progress: ScreenCast portal (`portal.rs`), PipeWire capture
+- `src/linux/`: the Linux side: ScreenCast portal (`portal.rs`), PipeWire capture
   (`capture.rs`), GStreamer encoding and MP4 (`encoder.rs`), audio (`audio.rs`), webcam through
   the Camera portal (`camera.rs`), hotkeys through the GlobalShortcuts portal (`hotkeys.rs`), system
   calls (`sys.rs`).
@@ -244,6 +284,7 @@ WASAPI desktop + mic + app ─► mixer paced by the same clock (fills silence)
   (`hotkeys.rs`) and system calls (`sys.rs`).
 - `src/hotkeys.rs`: hotkeys as text in the settings; registering them is platform code.
 - `src/config.rs`: settings and their defaults.
+- `packaging/flatpak/`: the Flatpak manifest, desktop entry and AppStream metadata.
 - `build.rs`: draws the icon and embeds it in the executable.
 
 ## Security
