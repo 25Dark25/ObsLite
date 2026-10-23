@@ -69,29 +69,31 @@ pub struct SessionOptions {
 }
 
 /// Area-average downscale of BGRA rows (`pitch` bytes apart) to `size` opaque RGBA. Every
-/// source pixel counts, so text stays legible; picking one pixel per block did not.
+/// source pixel counts, so text stays legible; picking one pixel per block did not. This runs
+/// for every preview picture, so the rows of each output row are first added up as plain
+/// numbers (which the compiler vectorizes), and only then grouped into output columns.
 pub(crate) fn downscale(bgra: &[u8], (w, h): (usize, usize), pitch: usize, size: (usize, usize)) -> Vec<u8> {
     let (pw, ph) = size;
-    let column: Vec<usize> = (0..w).map(|x| x * pw / w).collect();
-    let mut sums = vec![0u32; pw * 3];
-    let mut counts = vec![0u32; pw];
+    // Source column x belongs to output column x * pw / w; `starts[c]..starts[c + 1]` are
+    // the source columns of output column c (empty when the preview is wider than the source).
+    let starts: Vec<usize> = (0..=pw).map(|c| (c * w).div_ceil(pw)).collect();
+    let mut rows = vec![0u32; w * 4];
     let mut rgba = Vec::with_capacity(pw * ph * 4);
     for y in 0..ph {
         let (top, bottom) = (y * h / ph, ((y + 1) * h / ph).max(y * h / ph + 1));
-        sums.fill(0);
-        counts.fill(0);
+        rows.fill(0);
         for sy in top..bottom {
-            let row = &bgra[sy * pitch..sy * pitch + w * 4];
-            for (&c, &[b, g, r, _]) in column.iter().zip(row.as_chunks::<4>().0) {
-                sums[c * 3] += r as u32;
-                sums[c * 3 + 1] += g as u32;
-                sums[c * 3 + 2] += b as u32;
-                counts[c] += 1;
+            for (sum, &v) in rows.iter_mut().zip(&bgra[sy * pitch..sy * pitch + w * 4]) {
+                *sum += v as u32;
             }
         }
-        for (rgb, &n) in sums.as_chunks::<3>().0.iter().zip(&counts) {
-            let n = n.max(1);
-            rgba.extend_from_slice(&[(rgb[0] / n) as u8, (rgb[1] / n) as u8, (rgb[2] / n) as u8, 255]);
+        for span in starts.windows(2) {
+            let mut bgr = [0u32; 3];
+            for px in rows[span[0] * 4..span[1] * 4].as_chunks::<4>().0 {
+                bgr = [bgr[0] + px[0], bgr[1] + px[1], bgr[2] + px[2]];
+            }
+            let n = (((bottom - top) * (span[1] - span[0])) as u32).max(1);
+            rgba.extend_from_slice(&[(bgr[2] / n) as u8, (bgr[1] / n) as u8, (bgr[0] / n) as u8, 255]);
         }
     }
     rgba
@@ -152,6 +154,59 @@ mod tests {
         // Same size: a plain BGRA to RGBA copy.
         let same = downscale(&bgra, (4, 2), 20, (4, 2));
         assert_eq!(same, bgra_to_rgba(&bgra, 4, 2, 20));
+    }
+
+    /// The straightforward version `downscale` must match: each source pixel added to its
+    /// output column one by one.
+    fn reference_downscale(bgra: &[u8], (w, h): (usize, usize), pitch: usize, size: (usize, usize)) -> Vec<u8> {
+        let (pw, ph) = size;
+        let column: Vec<usize> = (0..w).map(|x| x * pw / w).collect();
+        let mut sums = vec![0u32; pw * 3];
+        let mut counts = vec![0u32; pw];
+        let mut rgba = Vec::with_capacity(pw * ph * 4);
+        for y in 0..ph {
+            let (top, bottom) = (y * h / ph, ((y + 1) * h / ph).max(y * h / ph + 1));
+            sums.fill(0);
+            counts.fill(0);
+            for sy in top..bottom {
+                let row = &bgra[sy * pitch..sy * pitch + w * 4];
+                for (&c, &[b, g, r, _]) in column.iter().zip(row.as_chunks::<4>().0) {
+                    sums[c * 3] += r as u32;
+                    sums[c * 3 + 1] += g as u32;
+                    sums[c * 3 + 2] += b as u32;
+                    counts[c] += 1;
+                }
+            }
+            for (rgb, &n) in sums.as_chunks::<3>().0.iter().zip(&counts) {
+                let n = n.max(1);
+                rgba.extend_from_slice(&[(rgb[0] / n) as u8, (rgb[1] / n) as u8, (rgb[2] / n) as u8, 255]);
+            }
+        }
+        rgba
+    }
+
+    #[test]
+    fn preview_downscale_matches_the_straightforward_average() {
+        // Odd sizes and ratios, padded rows, varied pixel values.
+        let (w, h, pitch) = (37, 23, 37 * 4 + 12);
+        let bgra: Vec<u8> = (0..pitch * h).map(|i| (i * 7 % 251) as u8).collect();
+        for size in [(37, 23), (36, 22), (20, 11), (13, 8), (5, 3), (1, 1)] {
+            assert_eq!(downscale(&bgra, (w, h), pitch, size), reference_downscale(&bgra, (w, h), pitch, size), "{size:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "timing, run by hand: cargo test --release preview_downscale_speed -- --ignored --nocapture"]
+    fn preview_downscale_speed() {
+        let (w, h) = (1920, 1080);
+        let bgra: Vec<u8> = (0..w * h * 4).map(|i| (i * 7 % 251) as u8).collect();
+        for (name, f) in [("new", downscale as fn(&[u8], (usize, usize), usize, (usize, usize)) -> Vec<u8>), ("reference", reference_downscale)] {
+            let start = std::time::Instant::now();
+            for _ in 0..50 {
+                std::hint::black_box(f(&bgra, (w, h), w * 4, (868, 488)));
+            }
+            println!("{name}: {:.2} ms", start.elapsed().as_secs_f64() * 1e3 / 50.0);
+        }
     }
 
     #[test]
