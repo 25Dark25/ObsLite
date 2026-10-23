@@ -121,7 +121,8 @@ The same interface and recordings, with what Linux desktops allow:
 - **Webcam**: the desktop asks for permission the first time a camera is chosen.
 - **Encoding** with GStreamer: VA-API (Intel/AMD) or NVENC if the GPU has them, otherwise x264.
 - **Not on Linux**: application audio, hiding obs-lite from capture (Wayland cannot keep a window
-  out of a capture) and the update notice.
+  out of a capture) and the update notice. So a capture of the whole screen shows obs-lite, with
+  its preview inside itself; capture a window instead, or minimize obs-lite while recording.
 - **Privacy**: the Flatpak has no network access. It can use the display, the GPU, the sound
   server (desktop audio and the microphone; there is no portal for desktop audio) and the *Videos*
   folder; the screen, the webcam, hotkeys and any other folder go through the desktop, which
