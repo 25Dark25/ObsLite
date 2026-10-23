@@ -121,6 +121,8 @@ pub struct App {
     meters: [f32; 3],
     /// For audio inputs to wake the UI when they start to make sound.
     ctx: egui::Context,
+    /// When the window was last drawn, to tell when it is not shown (see `preview_hidden`).
+    last_drawn: Instant,
     texture: Option<TextureHandle>,
     texture_seq: Option<u64>,
     /// Choosing a region on the preview, and the drag in progress (start, end).
@@ -186,6 +188,7 @@ impl App {
             screenshot: None,
             meters: [0.0; 3],
             ctx: cc.egui_ctx.clone(),
+            last_drawn: Instant::now(),
             texture: None,
             texture_seq: None,
             picking_region: false,
@@ -1510,10 +1513,15 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll(ctx);
+        let hidden = preview_hidden(ctx.input(|i| i.viewport().visible()), self.last_drawn.elapsed());
+        if let Some(session) = self.active_session().or(self.preview.as_ref()) {
+            session.shared.preview_hidden.store(hidden, Ordering::Relaxed);
+        }
         ctx.request_repaint_after(repaint_interval(self.active_session().is_some(), &self.meters));
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.last_drawn = Instant::now();
         let ctx = ui.ctx().clone();
         self.update_texture(&ctx);
         self.update_camera_texture(&ctx);
@@ -1580,6 +1588,14 @@ impl CpuMeter {
         }
         self.last = Some((now, cpu));
     }
+}
+
+/// Whether the window is not shown, so the capture need not make preview pictures. Windows says
+/// when the window is minimized (`visible`); Wayland never does, but there the compositor stops
+/// asking for frames, so the window is not drawn. A shown window draws at least once a second
+/// (`repaint_interval`).
+fn preview_hidden(visible: Option<bool>, since_drawn: Duration) -> bool {
+    visible == Some(false) || since_drawn > Duration::from_secs(3)
 }
 
 /// How soon to draw again. Meters move at 15 fps while there is sound, and the timer while
@@ -1919,6 +1935,7 @@ mod tests {
             camera_seq: None,
             meters: [0.0; 3],
             ctx: egui::Context::default(),
+            last_drawn: Instant::now(),
             texture: None,
             texture_seq: None,
             picking_region: false,
@@ -1989,6 +2006,16 @@ mod tests {
     fn mute_silences_regardless_of_volume() {
         assert_eq!(channel_gain(1.0, true), 0.0);
         assert_eq!(channel_gain(0.5, true), 0.0);
+    }
+
+    #[test]
+    fn no_preview_pictures_for_a_window_that_is_not_shown() {
+        let just = Duration::from_millis(200);
+        assert!(!preview_hidden(Some(true), just));
+        assert!(!preview_hidden(None, just), "Wayland: drawn recently, so shown");
+        assert!(preview_hidden(Some(false), just), "minimized");
+        assert!(preview_hidden(None, Duration::from_secs(4)), "Wayland: no frames asked for");
+        assert!(!preview_hidden(None, Duration::from_millis(1500)), "an idle window draws once a second");
     }
 
     #[test]
