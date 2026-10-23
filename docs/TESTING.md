@@ -57,6 +57,7 @@ cargo test --locked
 | `camera::resize_keeps_flat_colour_and_identity` | The webcam scaling. |
 | `linux::camera::row_padding_is_dropped` | Linux only: camera pictures with padded rows are packed, and short buffers are rejected. |
 | `linux::sys::document_portal_paths_are_recognised` | Linux only: a folder granted through the folder picker (`/run/user/UID/doc/ID/NAME/…`) is recognised, so its real path can be shown; other paths are left alone. |
+| `linux::sys::a_granted_folder_shows_without_a_trailing_slash` | Linux only: that real path is shown as `/home/…/Descargas`, not `/home/…/Descargas/`. |
 | `tray::idle_icon_is_grey_with_the_same_alpha` | The idle tray icon. |
 | `update::versions_compare_numerically` | Only a strictly newer plain version counts as an update. |
 | `update::release_is_read_from_the_github_response` | The tag and page are read from GitHub's response; an error response gives nothing. |
@@ -245,9 +246,18 @@ its codecs-extra extension), built with `flatpak-builder` 1.4.8 and installed fr
 | Recording 1024×768 at 60 fps | Flatpak: 58 % of one core (x264 in software and the window), 186 MB PSS |
 | Bugs found and fixed | The tray icon failed in the sandbox: `tray-icon` 0.26.0 asked for a D-Bus name Flatpak does not allow; 0.26.1 does not in a sandbox. *File › Show Recordings* and clicking the "saved" message did nothing on Linux (they ran Windows' `explorer`); they now go through the desktop's OpenURI portal. A folder chosen with *Browse* showed as `/run/user/1000/doc/…`; the setting and messages now show its real path |
 
-Not verified with the Flatpak: *Show Recordings*, clicking the "saved" message and the real path
-in the setting and messages, through the interface (the portal calls behind them were checked
-separately); the camera permission dialog for a fresh install; a machine with a GPU.
+Later, through the interface of the installed Flatpak, with *Descargas* chosen earlier:
+
+| Step | Result |
+|---|---|
+| 24. "Saved" message | Shows `/home/dark/Descargas/2026-10-23 16-35-32.mp4`, the real path |
+| 24. Clicking it | Files opens *Descargas* with the new recording selected |
+| 24. *File › Show Recordings* | Files opens *Descargas* |
+| 24. Recording Path setting | Shows the real path and cannot be typed into; *Browse* still changes it |
+| Bug found and fixed | The setting showed `/home/dark/Descargas/`, with a trailing slash (test added; it fails without the fix) |
+
+Not verified with the Flatpak: the camera permission dialog for a fresh install; a machine with a
+GPU.
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.
