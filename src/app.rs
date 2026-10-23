@@ -446,7 +446,7 @@ impl App {
         let name = format!("{} {}.mp4", tr!("Repetición", "Replay"), chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
         let path = self.config.output_dir.join(name);
         self.spawn_job(ctx, move || match std::fs::create_dir_all(path.parent().unwrap_or(&path)).map_err(|e| e.to_string()).and_then(|()| replay.save(path)) {
-            Ok(path) => saved(tr!("Repetición guardada en '{}'", "Replay saved to '{}'", path.display()), path),
+            Ok(path) => saved(tr!("Repetición guardada en '{}'", "Replay saved to '{}'", crate::platform::sys::display_path(&path).display()), path),
             Err(e) => failed(tr!("No se pudo guardar la repetición: {}", "Could not save the replay: {}", e)),
         });
     }
@@ -542,7 +542,7 @@ impl App {
         let file = session.shared.outputs.lock().unwrap().take_file();
         self.set_status(tr!("Guardando grabación…", "Saving recording…"), None, false);
         self.spawn_job(ctx, move || match file.map(PendingFile::finish) {
-            Some(Ok(path)) => saved(tr!("Grabación guardada en '{}'", "Recording saved to '{}'", path.display()), path),
+            Some(Ok(path)) => saved(tr!("Grabación guardada en '{}'", "Recording saved to '{}'", crate::platform::sys::display_path(&path).display()), path),
             Some(Err(e)) => failed(tr!("Error al guardar la grabación: {}", "Error saving the recording: {}", e)),
             None => failed(tr!("no se capturó ningún fotograma", "no frames were captured").into()),
         });
@@ -695,7 +695,7 @@ impl App {
             // Before the status: if the source is gone, its error must not hide where the file went.
             self.restart_preview(ctx);
             match result {
-                Ok(path) => self.set_status(tr!("Grabación guardada en '{}'", "Recording saved to '{}'", path.display()), Some(path), false),
+                Ok(path) => self.set_status(tr!("Grabación guardada en '{}'", "Recording saved to '{}'", crate::platform::sys::display_path(&path).display()), Some(path), false),
                 Err(e) => self.set_status(tr!("Error al guardar la grabación: {}", "Error saving the recording: {}", e), None, true),
             }
         }
@@ -705,7 +705,7 @@ impl App {
         {
             self.screenshot = None;
             match result {
-                Ok(path) => self.set_status(tr!("Captura guardada en '{}'", "Screenshot saved to '{}'", path.display()), Some(path), false),
+                Ok(path) => self.set_status(tr!("Captura guardada en '{}'", "Screenshot saved to '{}'", crate::platform::sys::display_path(&path).display()), Some(path), false),
                 Err(e) => self.set_status(tr!("No se pudo guardar la captura: {}", "Could not save the screenshot: {}", e), None, true),
             }
         }
@@ -844,7 +844,7 @@ impl App {
                     ui.close();
                 }
                 if ui.button(tr!("Mostrar grabaciones", "Show Recordings")).clicked() {
-                    let _ = std::process::Command::new("explorer").arg(&self.config.output_dir).spawn();
+                    crate::platform::sys::open_folder(&self.config.output_dir);
                     ui.close();
                 }
                 if ui.button(tr!("Ajustes", "Settings")).clicked() {
@@ -1250,7 +1250,7 @@ impl App {
                 if let Some(file) = &status.file
                     && label.on_hover_text(tr!("Mostrar en la carpeta", "Show in folder")).clicked()
                 {
-                    let _ = std::process::Command::new("explorer").arg("/select,").arg(file).spawn();
+                    crate::platform::sys::show_in_folder(file);
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1409,8 +1409,13 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
             grid("output").show(ui, |ui| {
                 ui.label(tr!("Ruta de grabación", "Recording Path"));
                 ui.horizontal(|ui| {
-                    let mut path = c.output_dir.display().to_string();
-                    if ui.add(egui::TextEdit::singleline(&mut path).desired_width(290.0)).changed() {
+                    let shown = crate::platform::sys::display_path(&c.output_dir);
+                    let mut path = shown.display().to_string();
+                    // A folder granted through the folder picker (in the Linux sandbox) shows
+                    // where it really is, which cannot be typed back in: only Browse changes it.
+                    let editable = shown == c.output_dir;
+                    let field = egui::TextEdit::singleline(&mut path).desired_width(290.0).interactive(editable);
+                    if ui.add(field).changed() {
                         c.output_dir = PathBuf::from(path);
                     }
                     if ui.button(tr!("Examinar", "Browse")).clicked()
