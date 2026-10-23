@@ -68,7 +68,7 @@ fn selftest(args: &[String]) -> Result<(), String> {
     let resolution = if args.iter().any(|a| a == "720") { config::Resolution::P720 } else { config::Resolution::Native };
 
     let source = capture::list_sources().into_iter().next().ok_or("no capture sources")?;
-    let system = audio::Input::start(audio::InputKind::System, None, 1.0);
+    let system = audio::Input::start(audio::InputKind::System, None, 1.0, None);
     let session = capture::Session::start(
         capture::SessionOptions {
             source: source.id,
