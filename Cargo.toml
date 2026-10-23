@@ -3,7 +3,7 @@ name = "obs-lite"
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.95"
-description = "Lightweight screen recorder for Windows"
+description = "Lightweight screen recorder for Windows and Linux"
 license = "MIT"
 repository = "https://github.com/25Dark25/obs-lite"
 
@@ -26,8 +26,8 @@ windows = { version = "0.62.2", features = ["Foundation", "Win32_Foundation", "W
 windows-capture = "2.0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# The ScreenCast portal (D-Bus), driven with pollster.
-ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "camera", "global_shortcuts", "screencast"] }
+# The desktop portals (D-Bus), driven with pollster.
+ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "camera", "documents", "global_shortcuts", "open_uri", "screencast"] }
 eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
 futures-util = { version = "0.3.34", default-features = false }
 gstreamer = "0.25.4"
@@ -46,4 +46,5 @@ strip = true
 panic = "abort"
 
 [build-dependencies]
+png = "0.18.1"
 winresource = "0.1.34"

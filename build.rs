@@ -1,7 +1,8 @@
 //! Draws the app icon and embeds it in the executable.
 //!
-//! The same drawing is written as a multi-size .ico (for Explorer and the taskbar)
-//! and as raw RGBA (for the window icon), so there is a single source of truth.
+//! The same drawing is written as a multi-size .ico (for Explorer and the taskbar), as raw
+//! RGBA (for the window icon) and as a 256 px PNG (for the Linux desktop entry, installed by
+//! the Flatpak build), so there is a single source of truth.
 
 use std::env;
 use std::fs;
@@ -106,6 +107,11 @@ fn main() {
     fs::write(out.join("icon64.rgba"), render(64)).unwrap();
     let ico_path = out.join("icon.ico");
     fs::write(&ico_path, ico(&[16, 24, 32, 48, 64, 256])).unwrap();
+    let png = fs::File::create(out.join("icon256.png")).unwrap();
+    let mut encoder = png::Encoder::new(png, 256, 256);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.write_header().unwrap().write_image_data(&render(256)).unwrap();
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();

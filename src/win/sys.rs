@@ -1,5 +1,8 @@
 //! Small Windows system calls the rest of the app needs.
 
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
 use windows::Win32::Foundation::HWND;
 
 use crate::i18n::Language;
@@ -60,6 +63,21 @@ pub fn attach_console() {
     unsafe {
         AttachConsole(u32::MAX);
     }
+}
+
+/// Opens `dir` in Explorer.
+pub fn open_folder(dir: &Path) {
+    let _ = Command::new("explorer").arg(dir).spawn();
+}
+
+/// Opens the folder that holds `file` in Explorer, with the file selected.
+pub fn show_in_folder(file: &Path) {
+    let _ = Command::new("explorer").arg("/select,").arg(file).spawn();
+}
+
+/// The path as the user should see it; on Windows, the path itself.
+pub fn display_path(path: &Path) -> PathBuf {
+    path.to_owned()
 }
 
 /// GET `url` and return the body as text.

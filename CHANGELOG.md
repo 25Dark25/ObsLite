@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Linux version, as a Flatpak (`obs-lite-X.Y.Z-linux-x86_64.flatpak`): the same interface,
+  recording, pause, region, replay buffer, webcam, screenshots, tray icon and global hotkeys. The
+  screen or window is chosen in the desktop's sharing dialog (PipeWire, so Wayland works), global
+  hotkeys and the webcam go through the desktop, and encoding uses GStreamer (VA-API, NVENC or
+  x264). The Flatpak has no network access. Not on Linux: application audio, hiding obs-lite from
+  capture and the update notice.
+
 ### Fixed
 
 - Channels that together went over full scale (desktop audio and microphone both loud) were

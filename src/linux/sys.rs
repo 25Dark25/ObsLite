@@ -1,5 +1,14 @@
 //! Small system calls the rest of the app needs, on Linux.
 
+use std::collections::HashMap;
+use std::fs::File;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+use std::thread;
+
+use ashpd::desktop::open_uri::{OpenDirectoryRequest, OpenFileRequest};
+use ashpd::documents::{DocumentID, Documents};
+
 use crate::i18n::Language;
 
 /// No native handle is needed on Linux yet.
@@ -36,9 +45,80 @@ pub fn register_app() {
     }
 }
 
+/// Opens `dir` in the file manager, through the OpenURI portal (which also works in the sandbox).
+pub fn open_folder(dir: &Path) {
+    open_with_portal(dir.to_owned(), false);
+}
+
+/// Opens the folder that holds `file` in the file manager, with the file selected.
+pub fn show_in_folder(file: &Path) {
+    open_with_portal(file.to_owned(), true);
+}
+
+fn open_with_portal(path: PathBuf, select: bool) {
+    // The desktop may take a moment or ask which application to use; not on the UI thread.
+    thread::spawn(move || {
+        let Ok(file) = File::open(&path) else { return };
+        let _ = pollster::block_on(async {
+            if select {
+                OpenDirectoryRequest::default().send(&file).await
+            } else {
+                OpenFileRequest::default().send_file(&file).await
+            }
+        });
+    });
+}
+
+/// The path as the user knows it. A folder chosen in the folder picker reaches the sandbox as
+/// /run/user/UID/doc/ID/NAME, which means nothing to them; the document portal knows where it
+/// really is. Answers are kept, as this is called while drawing.
+pub fn display_path(path: &Path) -> PathBuf {
+    static HOSTS: LazyLock<Mutex<HashMap<String, Option<PathBuf>>>> = LazyLock::new(Mutex::default);
+    let Some((id, rest)) = document_parts(path) else { return path.to_owned() };
+    let host = HOSTS.lock().unwrap().entry(id.clone()).or_insert_with(|| host_path(&id)).clone();
+    host.map_or_else(|| path.to_owned(), |host| host.join(rest))
+}
+
+fn host_path(id: &str) -> Option<PathBuf> {
+    pollster::block_on(async {
+        let id = DocumentID::from(id);
+        let mut paths = Documents::new().await.ok()?.host_paths(std::slice::from_ref(&id)).await.ok()?;
+        paths.remove(&id).map(|p| p.as_ref().to_owned())
+    })
+}
+
+/// For a path in the document portal (/run/user/UID/doc/ID/NAME/...), the document id and what
+/// follows the exported file or folder (NAME).
+fn document_parts(path: &Path) -> Option<(String, PathBuf)> {
+    let mut parts = path.strip_prefix("/run/user").ok()?.components();
+    parts.next()?; // the user id
+    if parts.next()?.as_os_str() != "doc" {
+        return None;
+    }
+    let id = parts.next()?.as_os_str().to_str()?.to_owned();
+    parts.next()?;
+    Some((id, parts.as_path().to_owned()))
+}
+
 /// Linux programs keep their terminal; nothing to do.
 pub fn attach_console() {}
 
 pub fn http_get(_url: &str) -> Result<String, String> {
     Err(super::not_yet())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_portal_paths_are_recognised() {
+        let parts = document_parts(Path::new("/run/user/1000/doc/c674746b/Descargas/clip.mp4"));
+        assert_eq!(parts, Some(("c674746b".to_owned(), PathBuf::from("clip.mp4"))));
+        let parts = document_parts(Path::new("/run/user/1000/doc/c674746b/Descargas"));
+        assert_eq!(parts, Some(("c674746b".to_owned(), PathBuf::new())));
+        assert_eq!(document_parts(Path::new("/home/dark/Vídeos/clip.mp4")), None);
+        assert_eq!(document_parts(Path::new("/run/user/1000/bus")), None);
+        assert_eq!(display_path(Path::new("/home/dark/Vídeos")), PathBuf::from("/home/dark/Vídeos"));
+    }
 }
