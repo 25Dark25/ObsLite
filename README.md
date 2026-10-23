@@ -7,7 +7,7 @@ everything where they expect it.
 | | Idle (preview + audio) | Recording 1080p60 + audio |
 |---|---|---|
 | Private memory | ~100 MB | ~270 MB |
-| CPU (16 threads) | ~0.5 % | ~1.5 % |
+| CPU (16 threads) | ~0.3 % | ~1.5 % |
 
 Measured on Windows 11 on a laptop with an RTX 4060 GPU, encoding on its Intel integrated GPU
 (Quick Sync), without a webcam; your numbers will vary. Linux has only been measured in a virtual
@@ -169,7 +169,7 @@ Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and scre
   is no update notice; new versions are on the Releases page.
 - Linux: a folder outside *Videos* can only be chosen with *Browse*, which grants access to it.
 - Linux: tested only on GNOME in a virtual machine without a GPU, where the window is drawn in
-  software (about a quarter of a CPU core while idle). KDE Plasma, X11, VA-API and NVENC have not
+  software (about 6 % of a CPU core while idle and silent, more while the meters move). KDE Plasma, X11, VA-API and NVENC have not
   been tested.
 
 ## Verifying a release
