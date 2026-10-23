@@ -58,6 +58,7 @@ cargo test --locked
 | `audio::only_sound_after_silence_wakes_the_ui` | An input wakes the window only when it goes from silence (below −60 dB) to sound. |
 | `camera::overlay_sits_in_the_corner_with_the_camera_aspect` | The webcam overlay's position and size. |
 | `camera::resize_keeps_flat_colour_and_identity` | The webcam scaling. |
+| `linux::camera::denied_access_says_how_to_allow_it` | Linux only: when the desktop gives no camera access, the error says to choose the camera again or allow it in the privacy settings, instead of "Portal request was cancelled". |
 | `linux::camera::row_padding_is_dropped` | Linux only: camera pictures with padded rows are packed, and short buffers are rejected. |
 | `linux::sys::document_portal_paths_are_recognised` | Linux only: a folder granted through the folder picker (`/run/user/UID/doc/ID/NAME/…`) is recognised, so its real path can be shown; other paths are left alone. |
 | `linux::sys::a_granted_folder_shows_without_a_trailing_slash` | Linux only: that real path is shown as `/home/…/Descargas`, not `/home/…/Descargas/`. |

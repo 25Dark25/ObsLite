@@ -28,7 +28,21 @@ fn open() -> Result<Option<OwnedFd>, String> {
         }
         Ok(Some(camera.open_pipe_wire_remote(Default::default()).await?))
     })
-    .map_err(|e: ashpd::Error| e.to_string())
+    .map_err(access_error)
+}
+
+/// What to tell the user when the portal gives no access. It answers "cancelled" both when
+/// the user denies access and when the desktop refuses to ask (GNOME only lets the focused
+/// app ask, so a camera started while another dialog is open gets no answer).
+fn access_error(e: ashpd::Error) -> String {
+    match e {
+        ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled) => tr!(
+            "no se concedió acceso a la cámara; elígela de nuevo o permítelo en los ajustes de privacidad del sistema",
+            "camera access was not granted; choose the camera again, or allow it in the system's privacy settings"
+        )
+        .to_owned(),
+        e => e.to_string(),
+    }
 }
 
 /// Whether there is a camera, without asking the user for access.
@@ -129,6 +143,12 @@ fn pack(data: &[u8], stride: usize, width: u32, height: u32) -> Option<Vec<u8>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn denied_access_says_how_to_allow_it() {
+        let message = access_error(ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled));
+        assert!(message.contains("privacy") || message.contains("privacidad"), "{message}");
+    }
 
     #[test]
     fn row_padding_is_dropped() {
