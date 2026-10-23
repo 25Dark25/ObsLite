@@ -2,8 +2,7 @@ name: Release build
 
 # Run by hand on a release tag. It produces the portable zip (executable,
 # LICENSE and third-party license notices), the MSI installer with the same
-# files, the Linux Flatpak bundle, and their SHA-256 as one artifact; the
-# maintainer downloads, verifies and signs them locally.
+# files, the Linux Flatpak bundle, and their SHA-256 as one artifact.
 on:
   workflow_dispatch:
 

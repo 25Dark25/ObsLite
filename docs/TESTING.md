@@ -67,126 +67,66 @@ cargo test --locked
 | `update::release_is_read_from_the_github_response` | The tag and page are read from GitHub's response; an error response gives nothing. |
 | `app::saved_message_survives_a_source_that_is_gone` | When the recorded window is closed, the "saved" message and file link stay, and the source is deselected. |
 
-## Manual
+## Results
 
-Capture and encoding need a GPU and an interactive desktop session, which CI runners do not
-provide, so the pipeline is tested by hand before each release. Build with
-`cargo build --release`, then:
+Capture and encoding need a GPU and a desktop session, which CI runners do not have, so they were
+checked on real machines. What was checked, and what was not:
 
-1. **Self-test**: `obs-lite.exe --selftest 6 a.mp4` and `obs-lite.exe --selftest 6 b.mp4 pause 720`.
-   Move something on screen and play audio while they run. Expect 0 dropped frames, 60 fps and,
-   for `b.mp4`, about 4 s of 1280×720 video.
-2. **Interface flow**: start, stop; the status bar shows the saved path; click it to open the folder.
-3. **Pause**: record, pause about 2 s with the button, resume, stop; the pause must not be in the file.
-4. **Hotkeys**: the same with `Ctrl+Alt+R` and `Ctrl+Alt+P` while another application has focus.
-5. **Window capture**: record a window, resize it smaller and larger, then close it; the recording
-   must stop by itself and the file must play.
-6. **Audio devices**: in *Ajustes › Audio*, pick each desktop and microphone device in turn; the
-   meters must move and no error must appear.
-7. **Exit while recording**: close the window during a recording; the file must play.
-8. **Settings**: change values and press *Cancelar* (nothing changes), then *Aceptar* (they apply
-   and survive a restart).
-9. **Language**: switch between Español and English in *General*; the whole UI and the source names
-   change at once.
-10. **Hide from capture**: with the option on, a screenshot of the desktop must not show the window.
-11. **Screenshot**: from the preview's context menu, the File menu and a hotkey; check the PNG.
-12. **Hotkeys**: assign a combination to each action, press them with another application focused.
-13. **Region**: select a region, record a few seconds and take a screenshot; both must be the
-    region's size and content.
-14. **Noise suppression**: compare the microphone's noise floor in a quiet room with it off and on.
-15. **Tray**: minimize to tray, record with the hotkeys, start/stop from the tray menu, restore with
-    a left click.
-16. **Webcam**: add it, record a static screen for a few seconds (the camera must keep moving), try
-    each corner and size, take a screenshot, remove it (the camera light must go off).
-17. **Black frames**: record 15 s of the screen with the webcam on, then count fully black frames
-    with ffmpeg (none expected):
-    `ffmpeg -i rec.mp4 -vf "signalstats,metadata=print:file=-" -f null - | grep -c "YMAX=1[0-9]$"`
-18. **Application audio**: play a sound in one application, add it with *Application Audio
-    Capture*, turn desktop audio off and record; the file must contain that sound. Capturing a
-    silent application at the same time must give silence.
-19. **Audio/video sync**: record a window that turns white with a short beep once a second, for
-    10 minutes; the beep-to-flash offset (ffmpeg `signalstats` and a band-passed `astats`) must
-    be the same at the start and the end, and video and audio must last the same.
-20. **Software encoder**: in a build where `H264::new` skips the hardware encoders, run step 1;
-    the self-test must print `H264 Encoder MFT` and the files must play with correct colours.
-21. **Replay buffer**: assign hotkeys to *Start / Stop Replay Buffer* and *Save Replay*; start it,
-    wait 25 s and save (about 20–22 s, starting on a keyframe, with audio); start a recording
-    while it runs, pause it, stop it (its length must match, without the pause), save again, stop
-    the buffer. The recording timer must count from the recording's start; the tray menu must
-    offer the same actions.
-22. **Installer**: run the `.msi` by double-clicking it as a standard user: no UAC prompt; the
-    *Shortcuts* page has *Create a shortcut on the desktop* unticked; after installing, *Obs Lite*
-    is in the Start menu with the obs-lite icon and starts. Uninstall from *Settings › Apps*.
-23. **Mix limit**: play a tone at about −3 dB on the desktop and another on the microphone, and
-    record. *Mix at its limit: lower a volume* must show in the mixer while recording; the file's
-    tones must have no clipping harmonics (compare with each tone at −9 dB, which must not show
-    the notice).
-24. **Flatpak** (Linux): install the release bundle with `flatpak install --user`; *Obs Lite* must
-    be in the applications menu with its icon. Check the sharing dialog, a recording to *Videos*,
-    a hotkey from another window, the webcam, the tray icon and its menu, *File › Show
-    Recordings*, clicking the "saved" message, and choosing another folder with *Browse* (the
-    setting and the message must show its real path, and the next recording must land there).
-
-Check each MP4's duration, resolution, frame rate and audio track in its *Properties › Details*
-tab or with `ffprobe`.
-
-### Last results
-
-2026-10-16, Windows 11, RTX 4060 Laptop GPU, Rust 1.99. Steps 1–4 and 6 on commit `96413f0`; steps 5, 7
-and 8 on commit `b6cdad1` plus the settings BOM fix:
+2026-10-16, Windows 11, RTX 4060 Laptop GPU, Rust 1.99, on commits `96413f0` and `b6cdad1` (with the
+settings BOM fix):
 
 | Step | Result |
 |---|---|
-| 1. Self-test, 6 s and 15 s at 1080p60, screen in motion | 60 fps exactly, 0 dropped frames, AAC stereo 48 kHz |
-| 1. Self-test with pause, 720p | 3.65 s, 1280×720, 60 fps |
-| 2. Interface flow | Valid file; status bar shows the saved path |
-| 4. Hotkeys: record, pause 2 s, resume, stop | 5.63 s file (pause excluded) |
-| 5. Window shrunk, grown, then closed | Recording stopped on close; valid file (7.03 s, 626×392, 30 fps); status bar kept *Grabación guardada en …*; source deselected |
-| 6. Every desktop and microphone device (2 + 2) | No errors; signal on the active devices |
-| 7. Exit while recording, and right after *Detener* (while saving) | File finalized in both cases (3.67 s, 1080p30); app exits in 0.2 s |
-| 8. Settings *Aceptar* / *Cancelar* | *Cancelar* kept 30 fps after picking 60; *Aceptar* wrote `fps: 30` to `settings.json` at once and the next recording was 30 fps |
+| Self-test, 6 s and 15 s at 1080p60, screen in motion | 60 fps exactly, 0 dropped frames, AAC stereo 48 kHz |
+| Self-test with pause, 720p | 3.65 s, 1280×720, 60 fps |
+| Interface flow | Valid file; status bar shows the saved path |
+| Hotkeys: record, pause 2 s, resume, stop | 5.63 s file (pause excluded) |
+| Window shrunk, grown, then closed | Recording stopped on close; valid file (7.03 s, 626×392, 30 fps); status bar kept *Grabación guardada en …*; source deselected |
+| Every desktop and microphone device (2 + 2) | No errors; signal on the active devices |
+| Exit while recording, and right after *Detener* (while saving) | File finalized in both cases (3.67 s, 1080p30); app exits in 0.2 s |
+| Settings *Aceptar* / *Cancelar* | *Cancelar* kept 30 fps after picking 60; *Aceptar* wrote `fps: 30` to `settings.json` at once and the next recording was 30 fps |
 | Release workflow artifact (`b6cdad1`), `--selftest 3` | Hashes match the run log; 2.73 s, 1080p60, 0 dropped frames |
 | Resource use | Idle ~85 MB private / 0.3 % CPU; recording 1080p60 ~180 MB / 1.1 % CPU |
 
-2026-10-16, Windows 11, RTX 4060 Laptop GPU, Rust 1.99, `features` branch (steps 9–16):
+2026-10-16, Windows 11, RTX 4060 Laptop GPU, Rust 1.99, `features` branch:
 
 | Step | Result |
 |---|---|
-| 9. Language | English and Spanish switch live; source label "Pantalla 1" / "Display 1" follows |
-| 10. Hide from capture | A GDI screenshot of the desktop shows what is behind the window |
-| 11. Screenshot | Context menu and `Ctrl+Alt+S`: 1920×1080 PNG with correct colours |
-| 12. Hotkeys | `Ctrl+Alt+S` and `Ctrl+Alt+M` assigned by pressing them; both worked; a stray "Ctrl+ControlLeft" capture was found and fixed (test added) |
-| 13. Region | 840×504 region: recording 840×504 at 60 fps, screenshot 840×504 with the selected content |
-| 14. Noise suppression | Built-in microphone, quiet room: noise floor about −76 dBFS off, −105 dBFS on |
-| 15. Tray | Taskbar button removed when minimized; hotkey recording while minimized (3.82 s); tray menu start/stop (5.44 s); left click restores |
-| 16. Webcam | Added from *+ › Video Capture Device*; overlay in the chosen corner of preview and recording. Static window recorded with a 400×300 region and the webcam: 400×300, 60 fps, the camera corner changes every frame while the rest does not |
-| 17. Black frames | Before the fix, counted with ffmpeg: 1 per 15 s on the screen without webcam (also on `main`), 5 per 15 s with it, up to 27 per 10 s in a debug build. After: 0 in 5 webcam recordings and 5 self-tests (6–15 s each), 0 lagged frames |
+| Language | English and Spanish switch live; source label "Pantalla 1" / "Display 1" follows |
+| Hide from capture | A GDI screenshot of the desktop shows what is behind the window |
+| Screenshot | Context menu and `Ctrl+Alt+S`: 1920×1080 PNG with correct colours |
+| Hotkeys | `Ctrl+Alt+S` and `Ctrl+Alt+M` assigned by pressing them; both worked; a stray "Ctrl+ControlLeft" capture was found and fixed (test added) |
+| Region | 840×504 region: recording 840×504 at 60 fps, screenshot 840×504 with the selected content |
+| Noise suppression | Built-in microphone, quiet room: noise floor about −76 dBFS off, −105 dBFS on |
+| Tray | Taskbar button removed when minimized; hotkey recording while minimized (3.82 s); tray menu start/stop (5.44 s); left click restores |
+| Webcam | Added from *+ › Video Capture Device*; overlay in the chosen corner of preview and recording. Static window recorded with a 400×300 region and the webcam: 400×300, 60 fps, the camera corner changes every frame while the rest does not |
+| Black frames | Before the fix, counted with ffmpeg: 1 per 15 s on the screen without webcam (also on `main`), 5 per 15 s with it, up to 27 per 10 s in a debug build. After: 0 in 5 webcam recordings and 5 self-tests (6–15 s each), 0 lagged frames |
 | Preview sharpness | Preview drawn at about 1170 px wide on a 1920×1080 display: text in it is legible (it was 640 px, one pixel per block). Idle CPU 4.2 → 7.5 % of one core (0.3 → 0.5 % of 16 threads), private memory 95 → 98 MB (105 MB maximized) |
 | Update notice | A build labelled 0.2.0 queried the real GitHub API at start-up and showed "Nueva versión 0.2.1 disponible" in the status bar |
-| 18. Application audio | A PowerShell window looping a 440 Hz tone: captured on its own at −14 dBFS while VSCodium, captured at the same time, gave silence; recording with desktop audio off had the tone (mean −14.1 dB, ffmpeg volumedetect); mixer channel and source row shown |
+| Application audio | A PowerShell window looping a 440 Hz tone: captured on its own at −14 dBFS while VSCodium, captured at the same time, gave silence; recording with desktop audio off had the tone (mean −14.1 dB, ffmpeg volumedetect); mixer channel and source row shown |
 
 2026-10-18, Windows 11, laptop with Intel UHD and RTX 4060 GPUs, new encoding engine (capture
 and so encoding on the Intel GPU, *Intel Quick Sync Video H.264 Encoder MFT*):
 
 | Step | Result |
 |---|---|
-| 1. Self-test 6 s 1080p60 | 350 frames, 60 fps, H.264 High, AAC-LC 48 kHz stereo, keyframes at 0/2/4 s, BT.709 signalled, 0 black, 0 decode errors |
-| 1. Self-test with pause, 720p | 1280×720, 3.88 s, 233 frames, 0 black |
-| 5. Window grown and shrunk while recording | Cropped / padded with black as documented; 0 black frames, 0 decode errors |
-| 13. Region | Region past the right edge clipped to 520×360; 0 black frames |
-| 17. Black frames, 15 s with webcam | 890 frames, 0 black |
-| 18. Application audio with a region | Tone at −14.1 dB mean, desktop audio off |
-| 19. Audio/video sync, 10 min | 35 993 frames, 0 lagged; offset 0.211 s at the start and 0.207 s at the end (the same 0.2 s as 0.2.1, so it comes from the test signal); video 599.88 s, audio 599.87 s; private memory 225 → 229 MB |
-| 20. Software encoder | 1080p60: 359 frames, 0 lagged, about one CPU core; 720p with pause: 239 frames; correct colours |
+| Self-test 6 s 1080p60 | 350 frames, 60 fps, H.264 High, AAC-LC 48 kHz stereo, keyframes at 0/2/4 s, BT.709 signalled, 0 black, 0 decode errors |
+| Self-test with pause, 720p | 1280×720, 3.88 s, 233 frames, 0 black |
+| Window grown and shrunk while recording | Cropped / padded with black as documented; 0 black frames, 0 decode errors |
+| Region | Region past the right edge clipped to 520×360; 0 black frames |
+| Black frames, 15 s with webcam | 890 frames, 0 black |
+| Application audio with a region | Tone at −14.1 dB mean, desktop audio off |
+| Audio/video sync, 10 min | 35 993 frames, 0 lagged; offset 0.211 s at the start and 0.207 s at the end (the same 0.2 s as 0.2.1, so it comes from the test signal); video 599.88 s, audio 599.87 s; private memory 225 → 229 MB |
+| Software encoder | 1080p60: 359 frames, 0 lagged, about one CPU core; 720p with pause: 239 frames; correct colours |
 | Resource use | Idle 98 MB / 0.5 % CPU; recording 1080p60 270 MB / 1.5 % CPU (0.2.1: ~350 MB / 1.3 %) |
-| 21. Replay buffer | Self-test with `replay`: 3 s asked, 4.83 s saved (from the keyframe before), audio −14.1 dB. In the app: two replays of 20.87 s and 20.90 s, first frame a keyframe, 0 decode errors; a recording started while it ran lasted 6.00 s for 6 s between hotkeys (forced keyframe), and another, paused 2 s, lasted 5.03 s with a 440 Hz tone at −14.1 dB; private memory 280 MB with both running. A bug where stopping a recording without the replay buffer left the MP4 unfinished was found here and fixed before commit. Not tested: the new tray menu items |
+| Replay buffer | Self-test with `replay`: 3 s asked, 4.83 s saved (from the keyframe before), audio −14.1 dB. In the app: two replays of 20.87 s and 20.90 s, first frame a keyframe, 0 decode errors; a recording started while it ran lasted 6.00 s for 6 s between hotkeys (forced keyframe), and another, paused 2 s, lasted 5.03 s with a 440 Hz tone at −14.1 dB; private memory 280 MB with both running. A bug where stopping a recording without the replay buffer left the MP4 unfinished was found here and fixed before commit. Not tested: the new tray menu items |
 
 2026-10-18, installer (WiX 6.0.2), same machine:
 
 | Step | Result |
 |---|---|
 | `installer/test.ps1` | All 23 checks passed (install, uninstall, desktop shortcut, upgrade 0.2.1 → 0.2.2 keeping it, clean uninstall) |
-| 22. Installer, interactive | Welcome, *Shortcuts* (box unticked), *Ready*, *Completed*; no UAC prompt; installed to `%LOCALAPPDATA%\Programs\obs-lite`; MSI 3.1 MB. Started from the Start menu shortcut, whose icon is the obs-lite one |
+| Installer, interactive | Welcome, *Shortcuts* (box unticked), *Ready*, *Completed*; no UAC prompt; installed to `%LOCALAPPDATA%\Programs\obs-lite`; MSI 3.1 MB. Started from the Start menu shortcut, whose icon is the obs-lite one |
 | `wix msi validate` | Passes; warnings ICE69 (shortcut and executable in different components of the same feature) and ICE91 (per-user folder), expected for a per-user package |
 
 2026-10-18, release preparation for 0.3.0 (`main` plus the version bump), same machine:
@@ -194,8 +134,8 @@ and so encoding on the Intel GPU, *Intel Quick Sync Video H.264 Encoder MFT*):
 | Step | Result |
 |---|---|
 | Automated tests and clippy | 33 passed; clippy clean |
-| 1. Self-test 6 s 1080p60, 440 Hz tone playing | 352 frames, 0 lagged, 5.87 s, audio −14.0 dB |
-| 1. Self-test with pause, 720p and `replay` | 1280×720, 3.87 s, 0 lagged, audio −14.1 dB; replay 3.85 s with audio |
+| Self-test 6 s 1080p60, 440 Hz tone playing | 352 frames, 0 lagged, 5.87 s, audio −14.0 dB |
+| Self-test with pause, 720p and `replay` | 1280×720, 3.87 s, 0 lagged, audio −14.1 dB; replay 3.85 s with audio |
 | `installer/test.ps1` on the 0.3.0 MSI | All checks passed |
 
 2026-10-22, Linux: Ubuntu 26.04.1 LTS (GNOME on Wayland, PipeWire, GStreamer 1.28.2) in a Hyper-V
@@ -204,8 +144,8 @@ VM without a GPU, so x264 in software; desktop audio through the VM's dummy outp
 | Step | Result |
 |---|---|
 | Portal | The sharing dialog appears once ("Remember this decision" ticked); later sessions start without it (restore token), in under 0.1 s |
-| 1. Self-test 8 s with `replay`, test pattern moving and a 440 Hz tone | 1024×768, 60 fps, 479 frames, 0 lagged; H.264 High (x264) + AAC-LC; audio −33.2 dB; 0 decode errors; first frame a keyframe; replay 3.92 s with audio. About 3 s of CPU for 8 s of recording; 117 MB peak memory |
-| 2. Interface flow | The app starts with the preview of the shared screen, the desktop's sharing indicator and the tray icon (red while recording); *Start/Stop Recording* saved a 7.6 s file (456 frames at 60 fps, AAC) to `~/Vídeos` |
+| Self-test 8 s with `replay`, test pattern moving and a 440 Hz tone | 1024×768, 60 fps, 479 frames, 0 lagged; H.264 High (x264) + AAC-LC; audio −33.2 dB; 0 decode errors; first frame a keyframe; replay 3.92 s with audio. About 3 s of CPU for 8 s of recording; 117 MB peak memory |
+| Interface flow | The app starts with the preview of the shared screen, the desktop's sharing indicator and the tray icon (red while recording); *Start/Stop Recording* saved a 7.6 s file (456 frames at 60 fps, AAC) to `~/Vídeos` |
 | Bug found and fixed | Audio was missing from files: video packet times carried GStreamer encoders' 1000-hour offset, so all audio fell before the file's start. Times are now running times (test added; it fails without the fix) |
 
 Later the same day, hotkeys and webcam, same VM; a desktop entry for `io.github._25Dark25.ObsLite`
@@ -214,8 +154,8 @@ installed in `~/.local/share/applications`, as the Flatpak will have:
 | Step | Result |
 |---|---|
 | Automated tests and clippy | 41 passed; clippy clean on 1.95 and stable (Linux and Windows); 38 passed on Windows |
-| 4. Hotkeys | GNOME's *Add Keyboard Shortcuts* dialog listed the proposed combinations; `Ctrl+Alt+R` started a recording with another window focused, `Ctrl+Alt+P` paused and resumed it, `Ctrl+Alt+R` stopped it: 24.65 s file (1479 frames, AAC, 0 decode errors), pauses excluded. Without the desktop entry the portal refuses ("An app id is required") and the status bar says so |
-| 16. Webcam | A virtual camera (`v4l2loopback` fed with a GStreamer test pattern). Before access is granted, *Video Capture Device* shows one "Camera" entry and nothing is asked; choosing it brings GNOME's *Allow Obs Lite to Use the Camera?* dialog; then the overlay shows in the preview and in an 8.45 s recording (507 frames, AAC) and the desktop's camera indicator is on. After a restart the camera comes back without asking and the menu lists it by name; choosing it by name works. Without the desktop entry GNOME asks generically ("Allow Apps…") and the camera works too |
+| Hotkeys | GNOME's *Add Keyboard Shortcuts* dialog listed the proposed combinations; `Ctrl+Alt+R` started a recording with another window focused, `Ctrl+Alt+P` paused and resumed it, `Ctrl+Alt+R` stopped it: 24.65 s file (1479 frames, AAC, 0 decode errors), pauses excluded. Without the desktop entry the portal refuses ("An app id is required") and the status bar says so |
+| Webcam | A virtual camera (`v4l2loopback` fed with a GStreamer test pattern). Before access is granted, *Video Capture Device* shows one "Camera" entry and nothing is asked; choosing it brings GNOME's *Allow Obs Lite to Use the Camera?* dialog; then the overlay shows in the preview and in an 8.45 s recording (507 frames, AAC) and the desktop's camera indicator is on. After a restart the camera comes back without asking and the menu lists it by name; choosing it by name works. Without the desktop entry GNOME asks generically ("Allow Apps…") and the camera works too |
 | Bugs found and fixed | GNOME refused the camera dialog ("Only the focused app is allowed to show a system access dialog") because the window did not carry the app id; it does now. The camera list showed each camera twice; it is deduplicated |
 
 Not verified on Linux: VA-API and NVENC encoders (no GPU in the VM), a real microphone (the VM has
@@ -229,9 +169,9 @@ energy away from the two tones in seconds 1–5 of the file's audio:
 | Step | Result |
 |---|---|
 | Automated tests and clippy | 43 passed on Linux, 40 on Windows; clippy clean on 1.95 and stable (both) |
-| 23. Before (`main`) | Both meters at −3.1 dB and no notice; distortion −15.3 dB, clipping harmonics at 220, 860, 1540 and 1740 Hz |
-| 23. After | *Mix at its limit* shown while recording; distortion −28.3 dB, no clipping harmonics: what is left sits next to the tones, the gain following peaks that change as the two captures drift in phase |
-| 23. Reference: each tone at 0.35 | No notice; distortion −34.6 dB (the floor of capture and AAC) |
+| Before (`main`) | Both meters at −3.1 dB and no notice; distortion −15.3 dB, clipping harmonics at 220, 860, 1540 and 1740 Hz |
+| After | *Mix at its limit* shown while recording; distortion −28.3 dB, no clipping harmonics: what is left sits next to the tones, the gain following peaks that change as the two captures drift in phase |
+| Reference: each tone at 0.35 | No notice; distortion −34.6 dB (the floor of capture and AAC) |
 
 2026-10-23, Flatpak, same VM: runtime `org.freedesktop.Platform` 26.08 (GStreamer 1.28.6, x264 from
 its codecs-extra extension), built with `flatpak-builder` 1.4.8 and installed from the bundle:
@@ -239,13 +179,13 @@ its codecs-extra extension), built with `flatpak-builder` 1.4.8 and installed fr
 | Step | Result |
 |---|---|
 | Build | 3 min; the app is 11.6 MB installed, the bundle 3.6 MB; `desktop-file-validate` and `appstreamcli validate` pass; permissions as listed in the manifest |
-| 24. Install and start | *Obs Lite* in the dock with its icon after the session reloads Flatpak's exports (only needed once, after installing Flatpak itself) |
-| 24. Sharing dialog | Shown the first time; the next starts restored the source without it |
-| 24. Recording | 8.7 s, 1024×768 H.264 High at 60 fps + AAC-LC, 0 decode errors, in `~/Vídeos` |
-| 24. Hotkeys | `Ctrl+Alt+R` started and stopped a recording with another window focused |
-| 24. Webcam | Overlay in the preview (camera access had already been granted to this app id, so no dialog) |
-| 24. Tray | Icon grey when idle and red while recording; its menu shows all actions |
-| 24. Browse | The folder picker (portal) opened; *Descargas* chosen; the next recording (4.6 s) landed in `~/Descargas`. The document portal maps the granted path to `/home/dark/Descargas` (checked from inside the sandbox) |
+| Install and start | *Obs Lite* in the dock with its icon after the session reloads Flatpak's exports (only needed once, after installing Flatpak itself) |
+| Sharing dialog | Shown the first time; the next starts restored the source without it |
+| Recording | 8.7 s, 1024×768 H.264 High at 60 fps + AAC-LC, 0 decode errors, in `~/Vídeos` |
+| Hotkeys | `Ctrl+Alt+R` started and stopped a recording with another window focused |
+| Webcam | Overlay in the preview (camera access had already been granted to this app id, so no dialog) |
+| Tray | Icon grey when idle and red while recording; its menu shows all actions |
+| Browse | The folder picker (portal) opened; *Descargas* chosen; the next recording (4.6 s) landed in `~/Descargas`. The document portal maps the granted path to `/home/dark/Descargas` (checked from inside the sandbox) |
 | Idle, preview and desktop audio | Native build: 24 % of one core, 38 MB anonymous memory. Flatpak: 33 %, 43 MB anonymous plus 84 MB of runtime libraries (file-backed, shared with other apps on the same runtime). Most of the CPU is Mesa drawing the window in software (no GPU in the VM) |
 | Recording 1024×768 at 60 fps | Flatpak: 58 % of one core (x264 in software and the window), 186 MB PSS |
 | Bugs found and fixed | The tray icon failed in the sandbox: `tray-icon` 0.26.0 asked for a D-Bus name Flatpak does not allow; 0.26.1 does not in a sandbox. *File › Show Recordings* and clicking the "saved" message did nothing on Linux (they ran Windows' `explorer`); they now go through the desktop's OpenURI portal. A folder chosen with *Browse* showed as `/run/user/1000/doc/…`; the setting and messages now show its real path |
@@ -254,10 +194,10 @@ Later, through the interface of the installed Flatpak, with *Descargas* chosen e
 
 | Step | Result |
 |---|---|
-| 24. "Saved" message | Shows `/home/dark/Descargas/2026-10-23 16-35-32.mp4`, the real path |
-| 24. Clicking it | Files opens *Descargas* with the new recording selected |
-| 24. *File › Show Recordings* | Files opens *Descargas* |
-| 24. Recording Path setting | Shows the real path and cannot be typed into; *Browse* still changes it |
+| "Saved" message | Shows `/home/dark/Descargas/2026-10-23 16-35-32.mp4`, the real path |
+| Clicking it | Files opens *Descargas* with the new recording selected |
+| *File › Show Recordings* | Files opens *Descargas* |
+| Recording Path setting | Shows the real path and cannot be typed into; *Browse* still changes it |
 | Bug found and fixed | The setting showed `/home/dark/Descargas/`, with a trailing slash (test added; it fails without the fix) |
 
 Not verified with the Flatpak: the camera permission dialog for a fresh install; a machine with a
@@ -284,23 +224,23 @@ its bundle:
 | Step | Result |
 |---|---|
 | Automated tests and clippy | 43 passed on Windows, 49 on Linux (one timing test ignored on both); clippy clean on 1.95 and stable on both |
-| 1. Self-test 6 s 1080p60, 440 Hz tone playing (Windows) | Quick Sync; 352 frames, 0 lagged, 5.87 s, audio −14.1 dB, 0 decode errors |
-| 1. Self-test with pause, 720p and `replay` (Windows) | 1280×720, 3.88 s, 233 frames, 0 lagged; replay 3.85 s; audio −14.1 dB |
-| 2. Interface flow (Windows) | 5.48 s at 1080p60 with the tone at −14.1 dB; clicking the "saved" message opened Explorer with the file selected; *File › Show Recordings* opened *Videos* |
-| 4. Hotkeys (Windows) | `Ctrl+Alt+R`, `Ctrl+Alt+P` twice and `Ctrl+Alt+R` with VSCodium focused, 2 s apart: 4.67 s file, pause excluded |
-| 21. Replay buffer (Windows) | Started with the button; meter at −11 dB with the tone; saved replay 17.6 s, first frame a keyframe, audio −14.0 dB, 0 decode errors |
-| 22. Installer | Not run by hand: the maintainer's installed 0.3.0 makes `installer/test.ps1` stop, and a local 0.4.0 MSI would stand in the way of the signed one. The CI `installer` job (install, upgrade, uninstall) passed on `main` |
+| Self-test 6 s 1080p60, 440 Hz tone playing (Windows) | Quick Sync; 352 frames, 0 lagged, 5.87 s, audio −14.1 dB, 0 decode errors |
+| Self-test with pause, 720p and `replay` (Windows) | 1280×720, 3.88 s, 233 frames, 0 lagged; replay 3.85 s; audio −14.1 dB |
+| Interface flow (Windows) | 5.48 s at 1080p60 with the tone at −14.1 dB; clicking the "saved" message opened Explorer with the file selected; *File › Show Recordings* opened *Videos* |
+| Hotkeys (Windows) | `Ctrl+Alt+R`, `Ctrl+Alt+P` twice and `Ctrl+Alt+R` with VSCodium focused, 2 s apart: 4.67 s file, pause excluded |
+| Replay buffer (Windows) | Started with the button; meter at −11 dB with the tone; saved replay 17.6 s, first frame a keyframe, audio −14.0 dB, 0 decode errors |
+| Installer | Not run on the test machine: its installed 0.3.0 makes `installer/test.ps1` stop, and a local 0.4.0 MSI would stand in the way of the released one. The CI `installer` job (install, upgrade, uninstall) passed on `main` |
 | Release workflow, run by hand on `main` (`c09b40a`) | `windows`, `flatpak` and `checksums` jobs passed; `sha256sum --check SHA256SUMS` passes for the zip, the MSI and the bundle; the CI-built bundle installs in the VM and has `LICENSE` and the Linux `THIRD-PARTY-LICENSES.html` (GStreamer included) |
 | Flatpak version | `flatpak info` shows 0.4.0; `appstreamcli validate` passes |
-| 1. Self-test inside the Flatpak, 8 s with `replay`, tone playing | x264; 1280×720 at 60 fps, 479 frames, 0 lagged, audio −13.5 dB; replay 3.90 s; 0 decode errors |
-| 24. After `flatpak permission-reset` | The sharing dialog names the app ("Obs Lite quiere compartir su pantalla"). The camera, configured but no longer allowed, asked while that dialog had the focus and got "cancelled"; choosing it again showed *Camera* in the menu and *Allow Obs Lite to Use the Camera?*; *Deny* showed an error, and allowing it afterwards (as the privacy settings do) brought the overlay back |
+| Self-test inside the Flatpak, 8 s with `replay`, tone playing | x264; 1280×720 at 60 fps, 479 frames, 0 lagged, audio −13.5 dB; replay 3.90 s; 0 decode errors |
+| After `flatpak permission-reset` | The sharing dialog names the app ("Obs Lite quiere compartir su pantalla"). The camera, configured but no longer allowed, asked while that dialog had the focus and got "cancelled"; choosing it again showed *Camera* in the menu and *Allow Obs Lite to Use the Camera?*; *Deny* showed an error, and allowing it afterwards (as the privacy settings do) brought the overlay back |
 | Bug found and fixed | That error read "Portal request was cancelled"; it now says to choose the camera again or allow it in the privacy settings (#26, test added) |
-| 24. Recording to the folder chosen earlier with *Browse* | 4.67 s, 1280×720, in `~/Descargas`, 0 decode errors |
+| Recording to the folder chosen earlier with *Browse* | 4.67 s, 1280×720, in `~/Descargas`, 0 decode errors |
 
-Not repeated for 0.4.0: steps 3 and 5–20 on Windows, whose code did not change since 0.3.0
-(except the preview scaling, which gives the same pixels and has a test); step 23 on Windows (it
-needs two sound inputs; checked in the VM); the tray menu on Windows (unchanged); the Flatpak on a
-machine with a GPU.
+Not repeated for 0.4.0: the Windows checks whose code did not change since 0.3.0 (the preview
+scaling did change, but gives the same pixels and has a test); the mix limit on Windows (it needs
+two sound inputs; checked in the VM); the tray menu on Windows (unchanged); the Flatpak on a machine
+with a GPU.
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.
