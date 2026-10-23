@@ -19,7 +19,6 @@ env:
 jobs:
   test:
     name: test (${{ matrix.os }}, ${{ matrix.toolchain }})
-    # Windows is the released platform; the Linux version is in progress.
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -86,6 +85,9 @@ jobs:
           echo "$RUNNER_TEMP/cargo-about-0.9.2-x86_64-pc-windows-msvc" >> "$GITHUB_PATH"
       - name: Generate THIRD-PARTY-LICENSES.html
         run: cargo about generate --locked --fail about.hbs -o THIRD-PARTY-LICENSES.html
+      # The Flatpak ships its own, for the Linux dependencies.
+      - name: Generate it for Linux
+        run: cargo about generate --locked --fail --target x86_64-unknown-linux-gnu about.hbs -o THIRD-PARTY-LICENSES-linux.html
 
   installer:
     name: installer
@@ -122,12 +124,38 @@ jobs:
         shell: pwsh
         run: installer/test.ps1 -Msi obs-lite.msi -UpgradeMsi obs-lite-newer.msi
 
+  flatpak:
+    name: flatpak
+    # Builds the Flatpak as release builds do, and validates its desktop entry and metainfo.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder desktop-file-utils appstream
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      - name: Validate desktop entry and metainfo
+        run: |
+          desktop-file-validate packaging/flatpak/io.github._25Dark25.ObsLite.desktop
+          appstreamcli validate --no-net packaging/flatpak/io.github._25Dark25.ObsLite.metainfo.xml
+      # The Flatpak build has no network; it reads the crates from ./vendor.
+      - name: Vendor crates
+        run: cargo vendor --locked vendor > /dev/null
+      - name: Build
+        run: >-
+          flatpak-builder --user --install-deps-from=flathub --disable-rofiles-fuse --force-clean
+          build-flatpak packaging/flatpak/io.github._25Dark25.ObsLite.yml
+
   # Single stable check for the branch ruleset: fails if any job above failed,
   # was cancelled or was skipped.
   all-tests:
     name: all-tests
     if: always()
-    needs: [test, deny, licenses, installer]
+    needs: [test, deny, licenses, installer, flatpak]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
