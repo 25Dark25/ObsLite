@@ -76,7 +76,7 @@ pub fn display_path(path: &Path) -> PathBuf {
     static HOSTS: LazyLock<Mutex<HashMap<String, Option<PathBuf>>>> = LazyLock::new(Mutex::default);
     let Some((id, rest)) = document_parts(path) else { return path.to_owned() };
     let host = HOSTS.lock().unwrap().entry(id.clone()).or_insert_with(|| host_path(&id)).clone();
-    host.map_or_else(|| path.to_owned(), |host| host.join(rest))
+    host.map_or_else(|| path.to_owned(), |host| inside(host, &rest))
 }
 
 fn host_path(id: &str) -> Option<PathBuf> {
@@ -85,6 +85,12 @@ fn host_path(id: &str) -> Option<PathBuf> {
         let mut paths = Documents::new().await.ok()?.host_paths(std::slice::from_ref(&id)).await.ok()?;
         paths.remove(&id).map(|p| p.as_ref().to_owned())
     })
+}
+
+/// `rest` under `host`; nothing under it is `host` itself, without the trailing slash `join`
+/// would add.
+fn inside(host: PathBuf, rest: &Path) -> PathBuf {
+    if rest.as_os_str().is_empty() { host } else { host.join(rest) }
 }
 
 /// For a path in the document portal (/run/user/UID/doc/ID/NAME/...), the document id and what
@@ -120,5 +126,13 @@ mod tests {
         assert_eq!(document_parts(Path::new("/home/dark/Vídeos/clip.mp4")), None);
         assert_eq!(document_parts(Path::new("/run/user/1000/bus")), None);
         assert_eq!(display_path(Path::new("/home/dark/Vídeos")), PathBuf::from("/home/dark/Vídeos"));
+    }
+
+    #[test]
+    fn a_granted_folder_shows_without_a_trailing_slash() {
+        // PathBuf comparison ignores a trailing slash; the text shown does not.
+        let shown = |rest: &str| inside(PathBuf::from("/home/dark/Descargas"), Path::new(rest)).display().to_string();
+        assert_eq!(shown(""), "/home/dark/Descargas");
+        assert_eq!(shown("clip.mp4"), "/home/dark/Descargas/clip.mp4");
     }
 }
