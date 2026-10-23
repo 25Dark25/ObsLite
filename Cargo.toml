@@ -3,7 +3,7 @@ name = "obs-lite"
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.95"
-description = "Lightweight screen recorder for Windows"
+description = "Lightweight screen recorder for Windows and Linux"
 license = "MIT"
 repository = "https://github.com/25Dark25/obs-lite"
 
@@ -46,4 +46,5 @@ strip = true
 panic = "abort"
 
 [build-dependencies]
+png = "0.18.1"
 winresource = "0.1.34"

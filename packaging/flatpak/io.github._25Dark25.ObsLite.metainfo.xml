@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github._25Dark25.ObsLite</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Obs Lite</name>
+  <summary>Record the screen using few resources</summary>
+  <description>
+    <p>
+      A lightweight screen recorder whose interface follows OBS Studio, so OBS users find
+      everything where they expect it. It is not affiliated with the OBS Project.
+    </p>
+    <ul>
+      <li>Records the screen or a window, chosen in the desktop's sharing dialog</li>
+      <li>Desktop audio and microphone, each with a meter, volume and mute</li>
+      <li>Pause, a region of the screen, screenshots and a webcam overlay</li>
+      <li>Replay buffer: keeps the last seconds in memory and saves them on demand</li>
+      <li>Global hotkeys, kept by the desktop</li>
+      <li>H.264 and AAC in MP4, on the GPU when it has an encoder</li>
+    </ul>
+    <p>
+      The interface is in Spanish or English, following the system language.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github._25Dark25.ObsLite.desktop</launchable>
+  <developer id="io.github._25dark25">
+    <name>25Dark25</name>
+  </developer>
+  <url type="homepage">https://github.com/25Dark25/obs-lite</url>
+  <url type="bugtracker">https://github.com/25Dark25/obs-lite/issues</url>
+  <url type="vcs-browser">https://github.com/25Dark25/obs-lite</url>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <releases>
+    <release version="0.3.0" date="2026-10-18"/>
+  </releases>
+</component>
