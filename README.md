@@ -11,13 +11,15 @@ everything where they expect it.
 
 Measured on Windows 11 on a laptop with an RTX 4060 GPU, encoding on its Intel integrated GPU
 (Quick Sync), without a webcam; your numbers will vary. Linux has only been measured in a virtual
-machine without a GPU (see [docs/TESTING.md](docs/TESTING.md)), which is not representative. About 40 MB of the recording figure is
-the queue of converted frames that keeps the encoder from dropping frames when it briefly stalls.
+machine without a GPU (see [docs/TESTING.md](docs/TESTING.md)), which is not representative. About
+40 MB of the recording figure is the queue of converted frames that keeps the encoder from dropping
+frames when it briefly stalls.
 
 > **Status: early (0.4.0).** obs-lite has been tested on a single machine
 > (Windows 11, laptop with Intel and NVIDIA GPUs) and, on Linux, only in a virtual machine (Ubuntu
-> 26.04, GNOME); see [docs/TESTING.md](docs/TESTING.md) for what was and was not verified. It has not had any security audit or independent code review. Most of the code was
-> written with an AI coding assistant (Claude Code) and then built and tested as described there.
+> 26.04, GNOME); see [docs/TESTING.md](docs/TESTING.md) for what was and was not verified. It has
+> not had any security audit or independent code review. Most of the code was written with an AI
+> coding assistant (Claude Code) and then built and tested as described there.
 > It is not affiliated with the OBS Project and contains no OBS code.
 
 ## Requirements
@@ -234,16 +236,6 @@ cargo build --release
 
 It picks the first H.264 encoder GStreamer has: VA-API (Intel/AMD), NVENC, x264, then OpenH264.
 
-Checks run by CI on every pull request (Windows and Ubuntu, Rust 1.95 and stable):
-
-```powershell
-cargo test --locked
-cargo clippy --locked --all-targets -- -D warnings
-cargo build --locked --release
-cargo deny --locked check   # needs cargo-deny; licenses, RustSec advisories, sources
-```
-
-The capture and encoding pipeline needs a GPU and a desktop session, so CI cannot exercise it.
 `--selftest` records the primary display plus desktop audio through the same pipeline as the app:
 
 ```powershell
@@ -253,9 +245,7 @@ The capture and encoding pipeline needs a GPU and a desktop session, so CI canno
 ```
 
 It prints captured, encoded and dropped frame counts. The installer is built from a release build
-with [WiX](https://wixtoolset.org/) 6.0.2 (`installer/build.ps1`), and `installer/test.ps1`
-installs, upgrades and uninstalls it, as CI does. [docs/TESTING.md](docs/TESTING.md) has the
-full manual test protocol and [docs/RELEASING.md](docs/RELEASING.md) the release steps.
+with [WiX](https://wixtoolset.org/) 6.0.2 (`installer/build.ps1`).
 
 ### How it works
 
