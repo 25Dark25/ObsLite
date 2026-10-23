@@ -32,6 +32,7 @@ cargo test --locked
 | `config::settings_saved_with_a_utf8_bom_still_load` | A `settings.json` saved with a UTF-8 BOM (e.g. by Windows PowerShell) still loads. |
 | `app::mute_silences_regardless_of_volume` | Mute wins over any volume. |
 | `app::volume_uses_a_squared_curve` | The volume slider maps to gain as `volume²`. |
+| `app::no_preview_pictures_for_a_window_that_is_not_shown` | No preview pictures are made while the window is minimized (Windows says so) or has not been drawn for 3 s (Wayland only stops asking for frames); a shown idle window draws once a second, so it never counts as hidden. |
 | `app::a_silent_idle_window_repaints_rarely` | The window draws once a second when idle and silent, and at 15 fps while a meter moves or a recording runs. |
 | `app::exit_waits_for_the_recording_being_saved` | Closing the app while a recording is being saved waits for the MP4 to be finalized. |
 | `i18n::every_spanish_variant_is_spanish` | The UI is Spanish for every Spanish Windows locale and English otherwise. |
@@ -241,6 +242,17 @@ Not repeated for 0.4.0: the Windows checks whose code did not change since 0.3.0
 scaling did change, but gives the same pixels and has a test); the mix limit on Windows (it needs
 two sound inputs; checked in the VM); the tray menu on Windows (unchanged); the Flatpak on a machine
 with a GPU.
+
+2026-10-23, after 0.4.0's checks: dependency updates and no preview pictures while the window is not
+shown. Idle CPU with the screen preview and desktop audio on, `main` against the change:
+
+| Check | Result |
+|---|---|
+| Hotkeys with `global-hotkey` 0.9 (Windows) | `Ctrl+Alt+R`, `Ctrl+Alt+P` twice and `Ctrl+Alt+R` with VSCodium focused: 4.60 s file, pause excluded |
+| Windows, minimized | 1.9–2.6 % of one core before, 1.1–1.6 % after (six runs) |
+| Windows, shown | The same before and after (the screen was busy, so about 21 % in both) |
+| Linux VM (Flatpak), minimized with Super+H | The preview stopped 3.3 s after minimizing and came back 0.4 s after the window was shown again. CPU 4.0 % minimized against 4.1 % before the change: on Linux the preview pictures cost little, and the window stops being drawn either way |
+| Linux, frames reaching the capture | About 2 a second while idle, as GNOME sends a new one only when the screen changes; asking PipeWire for at most 5 a second gave 4.7 and more CPU, so it was not done |
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.

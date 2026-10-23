@@ -83,6 +83,9 @@ pub struct Shared {
     pub preview: Mutex<Option<PreviewFrame>>,
     /// Width in screen pixels the preview is drawn at; frames are scaled down to it, not further.
     pub preview_width: AtomicUsize,
+    /// Set while the window is not shown (minimized, or covered where the system says so):
+    /// nothing would draw the preview, so no preview pictures are made.
+    pub preview_hidden: AtomicBool,
     pub frames: AtomicU64,
     /// Drives video and audio timestamps; pausing it pauses the recording.
     pub clock: Arc<Clock>,
@@ -160,6 +163,7 @@ impl GraphicsCaptureApiHandler for Handler {
         }
 
         if let Some(interval) = self.flags.preview_interval
+            && !shared.preview_hidden.load(Ordering::Relaxed)
             && self.last_preview.is_none_or(|t| t.elapsed() >= interval)
         {
             self.last_preview = Some(Instant::now());
@@ -209,6 +213,7 @@ impl Session {
         let shared = Arc::new(Shared {
             preview: Mutex::new(None),
             preview_width: AtomicUsize::new(PREVIEW_DEFAULT_WIDTH),
+            preview_hidden: AtomicBool::new(false),
             frames: AtomicU64::new(0),
             clock: Arc::new(Clock::new()),
             encoder_ready: Arc::new(AtomicBool::new(false)),
