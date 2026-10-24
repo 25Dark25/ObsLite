@@ -1394,7 +1394,6 @@ impl App {
         let response = egui::Modal::new(egui::Id::unique("update"))
             .frame(egui::Frame::new().fill(GREY7).stroke(Stroke::new(1.0, GREY4)).corner_radius(6).inner_margin(16))
             .show(ctx, |ui| {
-                ui.set_width(380.0);
                 ui.heading(tr!("Nueva versión disponible", "New version available"));
                 ui.add_space(8.0);
                 ui.label(tr!(
@@ -1404,17 +1403,18 @@ impl App {
                     env!("CARGO_PKG_VERSION")
                 ));
                 ui.add_space(14.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let download = Button::new(RichText::new(tr!("Descargar", "Download")).color(Color32::WHITE)).fill(PRIMARY);
-                    if ui.add(download.min_size(vec2(90.0, 26.0))).on_hover_text(&release.url).clicked() {
-                        open_url(&release.url);
+                // The buttons, the widest row, set the dialog's width (it differs by language).
+                ui.horizontal(|ui| {
+                    if ui.add(Button::new(tr!("No recordar esta versión", "Don't remind me of this version")).min_size(vec2(0.0, 26.0))).clicked() {
+                        skip = true;
                         ui.close();
                     }
                     if ui.add(Button::new(tr!("Cerrar", "Close")).min_size(vec2(90.0, 26.0))).clicked() {
                         ui.close();
                     }
-                    if ui.add(Button::new(tr!("No recordar esta versión", "Don't remind me of this version")).min_size(vec2(0.0, 26.0))).clicked() {
-                        skip = true;
+                    let download = Button::new(RichText::new(tr!("Descargar", "Download")).color(Color32::WHITE)).fill(PRIMARY);
+                    if ui.add(download.min_size(vec2(90.0, 26.0))).on_hover_text(&release.url).clicked() {
+                        open_url(&release.url);
                         ui.close();
                     }
                 });
@@ -1966,6 +1966,9 @@ mod tests {
 
     use super::*;
 
+    /// The interface language is global; tests that depend on it take this lock.
+    static LANGUAGE: Mutex<()> = Mutex::new(());
+
     fn test_app() -> App {
         App {
             config: Config::default(),
@@ -2040,6 +2043,7 @@ mod tests {
 
     #[test]
     fn saved_message_survives_a_source_that_is_gone() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
         let ctx = egui::Context::default();
         let mut app = test_app();
         // The recorded window was closed: its handle no longer exists.
@@ -2074,6 +2078,54 @@ mod tests {
         app.update_check = Some(rx);
         app.poll(&ctx);
         assert!(!app.update_dialog, "no newer release");
+    }
+
+    #[test]
+    fn update_dialog_buttons_stay_inside_it_in_both_languages() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        for language in [Language::English, Language::Spanish] {
+            i18n::set(language);
+            let mut app = test_app();
+            app.update = Some(Release { version: "10.10.10".into(), url: "https://example.com".into() });
+            app.update_dialog = true;
+            let ctx = egui::Context::default();
+            let input = || egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1280.0, 720.0))),
+                ..Default::default()
+            };
+            // The first passes size the dialog.
+            let mut shapes = Vec::new();
+            for _ in 0..3 {
+                let mut output = ctx.run_ui(input(), |ui| app.update_dialog(ui.ctx()));
+                output.textures_delta.clear(); // no renderer
+                shapes = output.shapes;
+            }
+            let mut flat = Vec::new();
+            let mut pending: Vec<egui::Shape> = shapes.into_iter().map(|c| c.shape).collect();
+            while let Some(shape) = pending.pop() {
+                match shape {
+                    egui::Shape::Vec(inner) => pending.extend(inner),
+                    shape => flat.push(shape),
+                }
+            }
+            let title = tr!("Nueva versión disponible", "New version available");
+            let title_pos = flat
+                .iter()
+                .find_map(|s| match s {
+                    egui::Shape::Text(t) if t.galley.text() == title => Some(t.pos),
+                    _ => None,
+                })
+                .expect("dialog title drawn");
+            // All but the backdrop and the frame, the shapes around the title.
+            let left = flat
+                .iter()
+                .map(egui::Shape::visual_bounding_rect)
+                .filter(|r| r.is_positive() && !r.contains(title_pos))
+                .map(|r| r.min.x)
+                .fold(f32::INFINITY, f32::min);
+            assert!(left >= title_pos.x - 0.5, "{language:?}: something starts at x = {left}, left of the title at {}", title_pos.x);
+        }
+        i18n::set(Language::Spanish);
     }
 
     #[test]

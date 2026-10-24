@@ -67,6 +67,8 @@ cargo test --locked
 | `update::versions_compare_numerically` | Only a strictly newer plain version counts as an update. |
 | `update::release_is_read_from_the_github_response` | The tag and page are read from GitHub's response; an error response gives nothing. |
 | `app::saved_message_survives_a_source_that_is_gone` | When the recorded window is closed, the "saved" message and file link stay, and the source is deselected. |
+| `app::a_new_release_opens_the_dialog_unless_skipped` | A newer release opens the update dialog unless the user chose not to be reminded of that version; the status-bar link shows either way. |
+| `app::update_dialog_buttons_stay_inside_it_in_both_languages` | In Spanish and English, nothing in the update dialog starts left of its title: the buttons fit. |
 
 ## Results
 
