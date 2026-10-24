@@ -136,6 +136,8 @@ pub struct Config {
     pub minimize_to_tray: bool,
     /// Ask GitHub for a newer release at start-up.
     pub check_updates: bool,
+    /// Release whose start-up dialog the user asked not to see again.
+    pub skipped_version: Option<String>,
     pub output_dir: PathBuf,
     pub fps: u32,
     pub resolution: Resolution,
@@ -173,6 +175,7 @@ impl Default for Config {
             hide_from_capture: true,
             minimize_to_tray: false,
             check_updates: true,
+            skipped_version: None,
             output_dir: dirs::video_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from(".")),
             fps: 60,
             resolution: Resolution::Native,
