@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-24
+
 ### Changed
 
 - A newer version is announced in a dialog at start-up, with a button to its download page,
@@ -104,7 +106,8 @@ changes.
 - Minimum supported Rust version: 1.95.
 - Releases ship `THIRD-PARTY-LICENSES.html` with the licenses of the bundled crates.
 
-[Unreleased]: https://github.com/25Dark25/obs-lite/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/25Dark25/obs-lite/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/25Dark25/obs-lite/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/25Dark25/obs-lite/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/25Dark25/obs-lite/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/25Dark25/obs-lite/compare/v0.2.0...v0.2.1
