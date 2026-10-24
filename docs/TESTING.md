@@ -265,8 +265,24 @@ the real check against GitHub found 0.4.0:
 | *Descargar* | Opened the v0.4.0 release page in the browser and closed the dialog |
 | *Cerrar* | Closed it; it came back at the next start |
 | *No recordar esta versión* | Closed it and saved `"skipped_version": "0.4.0"`; at the next start no dialog, the status-bar link still there |
+| English and Spanish, after the layout fix | Title, text and buttons line up in both (in English the buttons used to spill past the left edge) |
 
 Not tested: opening Settings before GitHub answers (the dialog then waits for Settings to close).
+
+2026-10-24, release preparation for 0.4.1 (`main` plus the version bump). Since 0.4.0 only the
+update dialog and the version changed:
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 46 passed on Windows, 52 on Linux (one timing test ignored on both); clippy clean on 1.95 and stable on both |
+| Self-test 6 s 1080p60 (Windows) | Quick Sync; 350 frames, 0 lagged, 5.85 s, first frame a keyframe, audio −35 dB (whatever was playing), 0 decode errors |
+| Self-test with pause, 720p and `replay` (Windows) | 1280×720, 3.88 s, 233 frames, 0 lagged; replay 3.87 s; 0 decode errors |
+| Self-test 6 s with `replay` (Linux VM, release build outside the Flatpak) | x264; 1280×720, 5.88 s, 353 frames, 0 lagged; replay 3.82 s; 0 decode errors |
+| Finding, not new in 0.4.1 | In the VM, with nothing moving on the screen, the self-test failed with "no frames captured": GNOME sent no frame in 6 s. With the pointer moving it passed (the run above). The capture code is the same as in 0.4.0 |
+
+Not repeated for 0.4.1: the interface flow, hotkeys, the replay buffer from the interface, the
+installer on the test machine (the CI `installer` job covers it) and the Flatpak bundle itself
+(the CI `flatpak` job builds it), as none of that changed.
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.
