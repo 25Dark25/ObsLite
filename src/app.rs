@@ -144,6 +144,8 @@ pub struct App {
     /// A newer release, once the start-up check has answered.
     update: Option<Release>,
     update_check: Option<Receiver<Option<Release>>>,
+    /// The dialog telling of `update` is open.
+    update_dialog: bool,
     /// Files being written in the background (a stopped recording, a replay).
     jobs: Vec<JoinHandle<Status>>,
 }
@@ -205,6 +207,7 @@ impl App {
             hidden: false,
             update: None,
             update_check: None,
+            update_dialog: false,
             jobs: Vec::new(),
         };
         // The Flatpak has no network access, for privacy; Linux users follow the Releases page.
@@ -659,6 +662,7 @@ impl App {
         if let Some(rx) = &self.update_check
             && let Ok(release) = rx.try_recv()
         {
+            self.update_dialog = release.as_ref().is_some_and(|r| self.config.skipped_version.as_ref() != Some(&r.version));
             (self.update, self.update_check) = (release, None);
         }
         let commands: Vec<TrayCommand> = self.tray_commands.lock().unwrap().drain(..).collect();
@@ -1270,7 +1274,7 @@ impl App {
                     let text = tr!("Nueva versión {} disponible", "New version {} available", release.version);
                     let link = ui.add(egui::Label::new(RichText::new(text).small().color(PRIMARY_LIGHT).underline()).sense(Sense::click()));
                     if link.on_hover_text(&release.url).clicked() {
-                        let _ = std::process::Command::new("explorer").arg(&release.url).spawn();
+                        open_url(&release.url);
                     }
                 }
             });
@@ -1382,6 +1386,52 @@ impl App {
             None => {}
         }
     }
+
+    /// Waits for the settings dialog to close: OK there would save its older copy of the config.
+    fn update_dialog(&mut self, ctx: &egui::Context) {
+        let Some(release) = self.update.as_ref().filter(|_| self.update_dialog && self.settings.is_none()) else { return };
+        let mut skip = false;
+        let response = egui::Modal::new(egui::Id::unique("update"))
+            .frame(egui::Frame::new().fill(GREY7).stroke(Stroke::new(1.0, GREY4)).corner_radius(6).inner_margin(16))
+            .show(ctx, |ui| {
+                ui.set_width(380.0);
+                ui.heading(tr!("Nueva versión disponible", "New version available"));
+                ui.add_space(8.0);
+                ui.label(tr!(
+                    "Ya está disponible obs-lite {}. Tienes la {}.",
+                    "obs-lite {} is available. You have {}.",
+                    release.version,
+                    env!("CARGO_PKG_VERSION")
+                ));
+                ui.add_space(14.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let download = Button::new(RichText::new(tr!("Descargar", "Download")).color(Color32::WHITE)).fill(PRIMARY);
+                    if ui.add(download.min_size(vec2(90.0, 26.0))).on_hover_text(&release.url).clicked() {
+                        open_url(&release.url);
+                        ui.close();
+                    }
+                    if ui.add(Button::new(tr!("Cerrar", "Close")).min_size(vec2(90.0, 26.0))).clicked() {
+                        ui.close();
+                    }
+                    if ui.add(Button::new(tr!("No recordar esta versión", "Don't remind me of this version")).min_size(vec2(0.0, 26.0))).clicked() {
+                        skip = true;
+                        ui.close();
+                    }
+                });
+            });
+        if skip {
+            self.config.skipped_version = Some(release.version.clone());
+            self.config.save();
+        }
+        if response.should_close() {
+            self.update_dialog = false;
+        }
+    }
+}
+
+/// Opens a web page in the default browser.
+fn open_url(url: &str) {
+    let _ = std::process::Command::new("explorer").arg(url).spawn();
 }
 
 fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Device], mic: &[Device]) {
@@ -1537,6 +1587,7 @@ impl eframe::App for App {
             .frame(egui::Frame::new().fill(GREY8).inner_margin(Margin::same(6)))
             .show(ui, |ui| self.preview_area(ui));
         self.settings_dialog(&ctx);
+        self.update_dialog(&ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -1952,6 +2003,7 @@ mod tests {
             hidden: false,
             update: None,
             update_check: None,
+            update_dialog: false,
             jobs: Vec::new(),
         }
     }
@@ -2000,6 +2052,28 @@ mod tests {
         assert!(status.text.starts_with("Grabación guardada"), "status: {}", status.text);
         assert_eq!(status.file.as_deref(), Some(std::path::Path::new("rec.mp4")));
         assert!(app.selected.is_none(), "the closed window is still shown as the source");
+    }
+
+    #[test]
+    fn a_new_release_opens_the_dialog_unless_skipped() {
+        let ctx = egui::Context::default();
+        let release = Release { version: "9.0.0".into(), url: "https://example.com".into() };
+        for (skipped, dialog) in [(None, true), (Some("8.0.0"), true), (Some("9.0.0"), false)] {
+            let mut app = test_app();
+            app.config.skipped_version = skipped.map(str::to_owned);
+            let (tx, rx) = mpsc::channel();
+            tx.send(Some(release.clone())).unwrap();
+            app.update_check = Some(rx);
+            app.poll(&ctx);
+            assert_eq!(app.update_dialog, dialog, "skipped version: {skipped:?}");
+            assert_eq!(app.update.as_ref(), Some(&release), "the status bar link is always shown");
+        }
+        let mut app = test_app();
+        let (tx, rx) = mpsc::channel();
+        tx.send(None).unwrap();
+        app.update_check = Some(rx);
+        app.poll(&ctx);
+        assert!(!app.update_dialog, "no newer release");
     }
 
     #[test]

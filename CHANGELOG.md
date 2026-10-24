@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A newer version is announced in a dialog at start-up, with a button to its download page,
+  instead of only a small link in the status bar (which stays). "Don't remind me of this version"
+  keeps the dialog away until the next release.
+
 ## [0.4.0] - 2026-10-23
 
 ### Added

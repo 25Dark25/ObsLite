@@ -104,8 +104,10 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spa
   in its own preview.
 - **System tray icon**, with an option to minimize to the tray.
 - **Spanish and English** interface.
-- **Update notice**: at start-up it asks GitHub for the latest release and shows a link if there
-  is a newer one. Nothing is downloaded; Settings › General turns the check off.
+- **Update notice**: at start-up it asks GitHub for the latest release and, if there is a newer
+  one, says so in a dialog with a link to it (and in the status bar). "Don't remind me of this
+  version" stops the dialog until the next release. Nothing is downloaded; Settings › General
+  turns the check off.
 - Sharp preview at 5 fps: frames are scaled down to the size the preview is drawn at, averaging
   every pixel, so text stays legible.
 
