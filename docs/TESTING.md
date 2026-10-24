@@ -256,5 +256,33 @@ shown. Idle CPU with the screen preview and desktop audio on, `main` against the
 | Linux VM (Flatpak), minimized with Super+H | The preview stopped 3.3 s after minimizing and came back 0.4 s after the window was shown again. CPU 4.0 % minimized against 4.1 % before the change: on Linux the preview pictures cost little, and the window stops being drawn either way |
 | Linux, frames reaching the capture | About 2 a second while idle, as GNOME sends a new one only when the screen changes; asking PipeWire for at most 5 a second gave 4.7 and more CPU, so it was not done |
 
+2026-10-24, the update dialog for 0.4.1, on the Windows laptop with a build numbered 0.3.9 so that
+the real check against GitHub found 0.4.0:
+
+| Check | Result |
+|---|---|
+| Start-up | The dialog said "Ya está disponible obs-lite 0.4.0. Tienes la 0.3.9." and the status bar showed the link |
+| *Descargar* | Opened the v0.4.0 release page in the browser and closed the dialog |
+| *Cerrar* | Closed it; it came back at the next start |
+| *No recordar esta versión* | Closed it and saved `"skipped_version": "0.4.0"`; at the next start no dialog, the status-bar link still there |
+| English and Spanish, after the layout fix | Title, text and buttons line up in both (in English the buttons used to spill past the left edge) |
+
+Not tested: opening Settings before GitHub answers (the dialog then waits for Settings to close).
+
+2026-10-24, release preparation for 0.4.1 (`main` plus the version bump). Since 0.4.0 only the
+update dialog and the version changed:
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 46 passed on Windows, 52 on Linux (one timing test ignored on both); clippy clean on 1.95 and stable on both |
+| Self-test 6 s 1080p60 (Windows) | Quick Sync; 350 frames, 0 lagged, 5.85 s, first frame a keyframe, audio −35 dB (whatever was playing), 0 decode errors |
+| Self-test with pause, 720p and `replay` (Windows) | 1280×720, 3.88 s, 233 frames, 0 lagged; replay 3.87 s; 0 decode errors |
+| Self-test 6 s with `replay` (Linux VM, release build outside the Flatpak) | x264; 1280×720, 5.88 s, 353 frames, 0 lagged; replay 3.82 s; 0 decode errors |
+| Finding, not new in 0.4.1 | In the VM, with nothing moving on the screen, the self-test failed with "no frames captured": GNOME sent no frame in 6 s. With the pointer moving it passed (the run above). The capture code is the same as in 0.4.0 |
+
+Not repeated for 0.4.1: the interface flow, hotkeys, the replay buffer from the interface, the
+installer on the test machine (the CI `installer` job covers it) and the Flatpak bundle itself
+(the CI `flatpak` job builds it), as none of that changed.
+
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.
