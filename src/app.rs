@@ -239,7 +239,18 @@ impl App {
         if let Some(e) = hotkey_error {
             app.set_status(tr!("Atajos globales no disponibles: {}", "Global hotkeys unavailable: {}", e), None, true);
         }
+        app.recover_last_recording();
         app
+    }
+
+    /// A recording obs-lite was writing when it stopped (a crash, a power cut) is still a
+    /// fragmented MP4: make it a regular one. A finished recording is left as it is.
+    fn recover_last_recording(&mut self) {
+        let Some(path) = self.config.last_recording.take() else { return };
+        if let Ok(true) = crate::mp4::repair(&path) {
+            let shown = crate::platform::sys::display_path(&path);
+            self.set_status(tr!("Se recuperó la grabación interrumpida '{}'", "Recovered the interrupted recording '{}'", shown.display()), Some(path), false);
+        }
     }
 
     fn is_recording(&self) -> bool {
@@ -446,10 +457,13 @@ impl App {
         let shared = &session.shared;
         // The clock starts with the encoder; if the replay buffer started it, count from now.
         let since = if shared.encoder_ready.load(Ordering::Acquire) { shared.clock.elapsed() } else { Duration::ZERO };
-        let name = format!("{}.mp4", chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
-        shared.outputs.lock().unwrap().start_file(self.config.output_dir.join(name));
+        let path = self.config.output_dir.join(format!("{}.mp4", chrono::Local::now().format("%Y-%m-%d %H-%M-%S")));
+        shared.outputs.lock().unwrap().start_file(path.clone());
         *recording = Some(Recording { since });
         self.status = None;
+        // Saved now, so the next start can repair the file if obs-lite stops while writing it.
+        self.config.last_recording = Some(path);
+        self.config.save();
     }
 
     fn start_replay(&mut self, ctx: &egui::Context) {
@@ -2155,6 +2169,37 @@ mod tests {
             assert!(left >= title_pos.x - 0.5, "{language:?}: something starts at x = {left}, left of the title at {}", title_pos.x);
         }
         i18n::set(Language::Spanish);
+    }
+
+    #[test]
+    fn a_recording_cut_short_is_repaired_at_start_up() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("obs-lite-recover-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cut.mp4");
+        // Writing stopped inside the last fragment's data.
+        let (mut file, _, _) = crate::mp4::tests::fragmented();
+        file.truncate(file.len() - 42);
+        std::fs::write(&path, file).unwrap();
+
+        let mut app = test_app();
+        app.config.last_recording = Some(path.clone());
+        app.recover_last_recording();
+        let status = app.status.as_ref().expect("a status");
+        assert!(status.text.starts_with("Se recuperó la grabación interrumpida"), "status: {}", status.text);
+        assert_eq!(status.file.as_deref(), Some(path.as_path()));
+        assert!(app.config.last_recording.is_none(), "repaired once");
+        assert!(!crate::mp4::repair(&path).unwrap(), "now a regular MP4");
+
+        // A recording that finished (so is regular), or that is gone: nothing to say.
+        for last in [path.clone(), dir.join("gone.mp4")] {
+            let mut app = test_app();
+            app.config.last_recording = Some(last);
+            app.recover_last_recording();
+            assert!(app.status.is_none());
+            assert!(app.config.last_recording.is_none());
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

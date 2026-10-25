@@ -22,6 +22,8 @@ cargo test --locked
 | `media::a_recording_without_frames_is_an_error` | Stopping a recording before any frame reports an error instead of an empty file. |
 | `media::a_saved_replay_is_interleaved_by_time` | A saved replay writes video and audio in time order, relative to its first keyframe, from another thread. |
 | `mp4::a_fragmented_file_becomes_a_regular_one_with_every_sample_in_place` | A fragmented MP4, with fragments laid out as Media Foundation and as GStreamer write them, becomes a regular one in place: one full index at the end, no fragment boxes left, and every sample's bytes, duration, keyframe flag and composition offset read back through the new index. |
+| `mp4::a_file_cut_short_is_repaired_up_to_its_last_whole_fragment` | A file whose writing stopped inside its last fragment's data is refused as a finished file, and repaired into a regular MP4 with the whole fragments before it. |
+| `app::a_recording_cut_short_is_repaired_at_start_up` | At start-up the last recording, if it was cut short, becomes a regular MP4 and the status bar says so with a link; a finished or missing one is left alone without a message. |
 | `mp4::a_regular_file_is_left_alone` | A file that is not fragmented is not touched. |
 | `mp4::data_past_4_gib_is_indexed_with_64_bit_offsets` | Data past 4 GiB gets 64-bit chunk offsets (`co64`). |
 | `mp4::a_duration_too_long_for_32_bits_moves_the_box_to_version_1` | A track longer than 32 bits of its timescale allows gets a version 1 header, keeping its other fields. |
@@ -319,6 +321,18 @@ recording it reports 0 s, as there is no total duration in a fragmented file. Wi
 `first-moov-then-finalise` mode, a recording killed partway did not open, so it is not used. Not
 tested: a recording over 4 GiB end to end (the 64-bit offsets have a unit test), and opening the
 files in video editors (none on the test machines).
+
+2026-10-25, repairing a recording cut short, from the interface: a recording started with the
+button, obs-lite killed after about 6–8 s, then started again:
+
+| | Windows (`taskkill /F`) | Linux VM (`kill -9`) |
+|---|---|---|
+| Left by the kill | Fragmented, 19 fragments | Fragmented, 34 fragments, the last box cut |
+| After starting again | Regular: 5.72 s, 342 frames, no `ffprobe` warnings | Regular: 8.34 s, 480 frames, 0 decode errors |
+| Status bar | "Se recuperó la grabación interrumpida '…'" | The same |
+
+Not tested: a power cut itself (the kill stands in for it; with a power cut the disk may also lose
+what was not yet flushed).
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.

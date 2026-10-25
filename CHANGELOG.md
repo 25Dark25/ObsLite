@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Recordings survive obs-lite or the PC stopping mid-recording (a crash, a power cut): the MP4 is
   written in fragments and keeps all but the last fraction of a second (about 0.3 s on Windows, up
-  to 0.5 s on Linux). A normal stop still leaves a regular MP4, as before.
+  to 0.5 s on Linux). The next start turns such a recording into a regular MP4 and says so in the
+  status bar. A normal stop still leaves a regular MP4, as before.
 
 ### Fixed
 
