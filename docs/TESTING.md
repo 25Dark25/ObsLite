@@ -22,6 +22,7 @@ cargo test --locked
 | `media::a_recording_without_frames_is_an_error` | Stopping a recording before any frame reports an error instead of an empty file. |
 | `media::a_saved_replay_is_interleaved_by_time` | A saved replay writes video and audio in time order, relative to its first keyframe, from another thread. |
 | `win::encoder::a_resized_window_is_scaled_down_to_fit_and_centred` | Windows only: where a resized window goes on the recording: scaled down to fit, never up, centred. |
+| `win::mf::hardware_encoders_give_their_memory_back` | Windows, ignored by default (needs a GPU with a hardware H.264 encoder; `cargo test --release -- --ignored`): five rounds of a new D3D device and a hardware encoder on it, 30 frames each, then everything dropped; the process's GPU memory must not grow. |
 | `mp4::a_fragmented_file_becomes_a_regular_one_with_every_sample_in_place` | A fragmented MP4, with fragments laid out as Media Foundation and as GStreamer write them, becomes a regular one in place: one full index at the end, no fragment boxes left, and every sample's bytes, duration, keyframe flag and composition offset read back through the new index. |
 | `mp4::a_file_cut_short_is_repaired_up_to_its_last_whole_fragment` | A file whose writing stopped inside its last fragment's data is refused as a finished file, and repaired into a regular MP4 with the whole fragments before it. |
 | `app::a_recording_cut_short_is_repaired_at_start_up` | At start-up the last recording, if it was cut short, becomes a regular MP4 and the status bar says so with a link; a finished or missing one is left alone without a message. |
@@ -349,6 +350,28 @@ moving test pattern, recorded at its first size (946×532), then resized every 3
 The recording kept 60 fps throughout (940 frames in 15.67 s), with no decode errors. Not
 tested: a GPU whose video processor cannot scale (the code then falls back to cropping), and
 dragging a window's edge, which resizes it on every frame.
+
+2026-10-25, memory, Windows laptop, private memory of the process (Rust's own heap measured with
+a counting allocator in a build made for it):
+
+| State | Private memory | Rust heap |
+|---|---|---|
+| Idle, window shown | about 100 MB | 4.4 MB |
+| Recording 1080p60 | about 260–275 MB | 4.4 MB |
+| Replay buffer of 20 s | about 340 MB | up to 11 MB |
+
+Nearly all of it is the GPU driver, OpenGL, Media Foundation and Windows capture, not obs-lite's
+own data. Five 8 s recordings in a row, from the interface:
+
+| | Before | After the fix |
+|---|---|---|
+| 8 s after each recording | 248, 363, 486, 608, 710 MB | 124, 110, 102, 108, 102 MB |
+| Idle after the five, a minute later | 676 MB | 102 MB |
+
+Bug found and fixed: each hardware encoder kept the recording's D3D device, with its textures,
+until `ShutdownObject` (never called): about 120 MB per recording. The ignored test above grew
+37 MB per round without the fix (147 MB over four) and fails; with `ShutdownObject` it passes.
+Releasing the encoder's D3D manager alone did not help, so it is not done.
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.

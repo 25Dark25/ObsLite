@@ -284,6 +284,20 @@ pub struct H264 {
     provides_samples: bool,
     _manager: Option<IMFDXGIDeviceManager>,
     pub name: String,
+    /// Last: shuts the encoder down once everything above is released.
+    _activated: Activated,
+}
+
+/// An encoder activated from its `IMFActivate`, shut down when dropped. Releasing the
+/// encoder's interfaces is not enough: until `ShutdownObject`, a hardware encoder keeps the D3D
+/// device it was given alive, with every texture made on it (each 1080p recording left about
+/// 120 MB behind).
+struct Activated(IMFActivate);
+
+impl Drop for Activated {
+    fn drop(&mut self) {
+        let _ = unsafe { self.0.ShutdownObject() };
+    }
 }
 
 impl H264 {
@@ -312,6 +326,8 @@ impl H264 {
         unsafe {
             let name = string_attribute(activate, &MFT_FRIENDLY_NAME_Attribute).unwrap_or_else(|| "H.264 (software)".to_owned());
             let mft: IMFTransform = activate.ActivateObject()?;
+            // Shuts it down also if setting it up fails below.
+            let activated = Activated(activate.clone());
             let manager = if hardware {
                 mft.GetAttributes()?.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)?;
                 let mut token = 0;
@@ -379,6 +395,7 @@ impl H264 {
                 provides_samples,
                 _manager: manager,
                 name,
+                _activated: activated,
             })
         }
     }
@@ -564,6 +581,7 @@ fn to_packet(sample: &IMFSample) -> Result<Packet> {
 pub struct Aac {
     mft: IMFTransform,
     frames: u64,
+    _activated: Activated,
 }
 
 impl Aac {
@@ -578,6 +596,7 @@ impl Aac {
             let activate = take_activates(array, count).into_iter().next();
             let activate = activate.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_NOTIMPL))?;
             let mft: IMFTransform = activate.ActivateObject()?;
+            let activated = Activated(activate);
 
             let audio = |subtype: &GUID| -> Result<IMFMediaType> {
                 let t = MFCreateMediaType()?;
@@ -598,7 +617,7 @@ impl Aac {
             mft.SetInputType(0, &pcm, 0)?;
             mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
             mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
-            Ok(Self { mft, frames: 0 })
+            Ok(Self { mft, frames: 0, _activated: activated })
         }
     }
 
@@ -721,26 +740,22 @@ mod tests {
         D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
         D3D11CreateDevice,
     };
-    use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+    use windows::Win32::Graphics::Dxgi::{DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, IDXGIAdapter3};
     use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 
-    /// A GPU without a usable hardware encoder: the software encoder must still turn the canvas
-    /// into H.264. Skipped where there is no GPU video processor (a CI runner, for one).
-    #[test]
-    fn software_encoder_encodes_the_canvas() {
-        const SIZE: (u32, u32) = (320, 180);
-        const FRAMES: i64 = 10;
+    /// A hardware D3D11 device and a BGRA canvas with its converter, or `None` without a GPU
+    /// video processor (a CI runner, for one).
+    unsafe fn gpu(size: (u32, u32)) -> Option<(ID3D11Device, Converter)> {
         unsafe {
             CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap();
-            let media = Media::start().unwrap();
             let mut device = None;
             let flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
             D3D11CreateDevice(None, D3D_DRIVER_TYPE_HARDWARE, Default::default(), flags, None, D3D11_SDK_VERSION, Some(&mut device), None, None)
-                .unwrap();
-            let device = device.unwrap();
+                .ok()?;
+            let device = device?;
             let desc = D3D11_TEXTURE2D_DESC {
-                Width: SIZE.0,
-                Height: SIZE.1,
+                Width: size.0,
+                Height: size.1,
                 MipLevels: 1,
                 ArraySize: 1,
                 Format: DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -751,35 +766,97 @@ mod tests {
                 MiscFlags: 0,
             };
             let mut canvas = None;
-            device.CreateTexture2D(&desc, None, Some(&mut canvas)).unwrap();
-            let converter = match Converter::new(&device, &canvas.unwrap(), SIZE, SIZE, 1) {
-                Ok(converter) => converter,
+            device.CreateTexture2D(&desc, None, Some(&mut canvas)).ok()?;
+            match Converter::new(&device, &canvas?, size, size, 1) {
+                Ok(converter) => Some((device, converter)),
                 Err(e) => {
                     eprintln!("skipped, no GPU video processor: {e}");
-                    return;
-                }
-            };
-            let activate = software_encoders().unwrap().into_iter().next().expect("no software H.264 encoder");
-            let h264 = H264::open(&device, &activate, false, SIZE, 30, 1_000_000).unwrap();
-
-            let (mut sent, mut packets) = (0, Vec::new());
-            loop {
-                match h264.next_event().unwrap() {
-                    VideoEvent::NeedInput if sent < FRAMES => {
-                        converter.convert(0).unwrap();
-                        h264.push(converter.texture(0), sent * TICKS_PER_SECOND / 30, TICKS_PER_SECOND / 30).unwrap();
-                        sent += 1;
-                    }
-                    VideoEvent::NeedInput => h264.drain().unwrap(),
-                    VideoEvent::HaveOutput => packets.extend(h264.pull().unwrap()),
-                    VideoEvent::Drained => break,
-                    VideoEvent::Other => {}
+                    None
                 }
             }
+        }
+    }
+
+    /// Encodes `frames` frames of the canvas and drains the encoder; returns the packets.
+    fn encode(h264: &H264, converter: &Converter, frames: i64, fps: i64) -> Vec<Packet> {
+        let (mut sent, mut packets) = (0, Vec::new());
+        loop {
+            match h264.next_event().unwrap() {
+                VideoEvent::NeedInput if sent < frames => {
+                    converter.convert(0).unwrap();
+                    h264.push(converter.texture(0), sent * TICKS_PER_SECOND / fps, TICKS_PER_SECOND / fps).unwrap();
+                    sent += 1;
+                }
+                VideoEvent::NeedInput => h264.drain().unwrap(),
+                VideoEvent::HaveOutput => packets.extend(h264.pull().unwrap()),
+                VideoEvent::Drained => return packets,
+                VideoEvent::Other => {}
+            }
+        }
+    }
+
+    /// A GPU without a usable hardware encoder: the software encoder must still turn the canvas
+    /// into H.264. Skipped where there is no GPU video processor (a CI runner, for one).
+    #[test]
+    fn software_encoder_encodes_the_canvas() {
+        const SIZE: (u32, u32) = (320, 180);
+        const FRAMES: i64 = 10;
+        unsafe {
+            let media = Media::start().unwrap();
+            let Some((device, converter)) = gpu(SIZE) else { return };
+            let activate = software_encoders().unwrap().into_iter().next().expect("no software H.264 encoder");
+            let h264 = H264::open(&device, &activate, false, SIZE, 30, 1_000_000).unwrap();
+            let packets = encode(&h264, &converter, FRAMES, 30);
             assert_eq!(packets.len(), FRAMES as usize);
             assert!(packets[0].key);
             assert!(h264.output_type().is_ok());
             drop((h264, converter, media));
+        }
+    }
+
+    /// GPU memory this process uses, local and shared, in bytes.
+    unsafe fn gpu_memory(device: &ID3D11Device) -> u64 {
+        unsafe {
+            let adapter: IDXGIAdapter3 = device.cast::<IDXGIDevice>().unwrap().GetAdapter().unwrap().cast().unwrap();
+            [DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL]
+                .iter()
+                .map(|&group| {
+                    let mut info = Default::default();
+                    adapter.QueryVideoMemoryInfo(0, group, &mut info).unwrap();
+                    info.CurrentUsage
+                })
+                .sum()
+        }
+    }
+
+    /// Every recording makes a new D3D device (its capture session's) and a new hardware
+    /// encoder on it: once a recording is over, the encoder must let the device go, and with it
+    /// every texture made on it. Needs a GPU with a hardware H.264 encoder:
+    /// `cargo test --release -- --ignored`.
+    #[test]
+    #[ignore]
+    fn hardware_encoders_give_their_memory_back() {
+        const SIZE: (u32, u32) = (1920, 1080);
+        unsafe {
+            let media = Media::start().unwrap();
+            // Measures; the devices below come and go.
+            let Some((probe, _)) = gpu((64, 64)) else { return };
+            let mut used = Vec::new();
+            for _ in 0..5 {
+                let (device, converter) = gpu(SIZE).unwrap();
+                let Some(activate) = hardware_encoders(&device).unwrap_or_default().into_iter().next() else {
+                    eprintln!("skipped, no hardware H.264 encoder");
+                    return;
+                };
+                let h264 = H264::open(&device, &activate, true, SIZE, 60, 12_000_000).unwrap();
+                let aac = Aac::new().unwrap();
+                assert_eq!(encode(&h264, &converter, 30, 60).len(), 30);
+                drop((h264, aac, converter, activate, device));
+                used.push(gpu_memory(&probe));
+            }
+            let grown = used[4].saturating_sub(used[0]) as f64 / (1 << 20) as f64;
+            assert!(grown < 10.0, "GPU memory grew {grown:.0} MB over four more recordings: {used:?}");
+            drop(media);
         }
     }
 }
