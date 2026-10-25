@@ -8,7 +8,8 @@ use std::path::Path;
 
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_VIDEO_ENCODER, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_VIDEO_ENCODER, D3D11_BOX, D3D11_VIDEO_COLOR,
+    D3D11_VIDEO_COLOR_0, D3D11_VIDEO_COLOR_RGBA, ID3D11DeviceContext, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC,
     D3D11_USAGE_DEFAULT, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_COLOR_SPACE,
     D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0,
     D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM,
@@ -16,7 +17,7 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator,
     ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
 };
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Media::MediaFoundation::{
     CODECAPI_AVEncCommonMeanBitRate, CODECAPI_AVEncCommonRateControlMode, CODECAPI_AVEncMPVGOPSize,
@@ -71,18 +72,20 @@ fn pack(high: u32, low: u32) -> u64 {
 
 // ------------------------------------------------------------------ colour conversion
 
-/// Converts the BGRA canvas into NV12 textures at the output size, on the GPU.
-pub struct Converter {
+/// A GPU video processor from `input`-sized to `output`-sized pictures.
+struct Processor {
     video_device: ID3D11VideoDevice,
     context: ID3D11VideoContext,
     enumerator: ID3D11VideoProcessorEnumerator,
     processor: ID3D11VideoProcessor,
-    input: ID3D11VideoProcessorInputView,
-    outputs: Vec<(ID3D11Texture2D, ID3D11VideoProcessorOutputView)>,
 }
 
-impl Converter {
-    pub fn new(device: &ID3D11Device, canvas: &ID3D11Texture2D, input: (u32, u32), output: (u32, u32), count: usize) -> Result<Self> {
+fn full_rect((w, h): (u32, u32)) -> RECT {
+    RECT { left: 0, top: 0, right: w as i32, bottom: h as i32 }
+}
+
+impl Processor {
+    fn new(device: &ID3D11Device, input: (u32, u32), output: (u32, u32)) -> Result<Self> {
         unsafe {
             let video_device: ID3D11VideoDevice = device.cast()?;
             let context: ID3D11VideoContext = device.GetImmediateContext()?.cast()?;
@@ -99,50 +102,36 @@ impl Converter {
             };
             let enumerator = video_device.CreateVideoProcessorEnumerator(&desc)?;
             let processor = video_device.CreateVideoProcessor(&enumerator, 0)?;
-            // Full-range RGB in; BT.709 limited-range YCbCr out (what players expect for HD).
-            let rgb_full = D3D11_VIDEO_PROCESSOR_COLOR_SPACE { _bitfield: 0 };
-            let bt709_limited = D3D11_VIDEO_PROCESSOR_COLOR_SPACE { _bitfield: (1 << 2) | (1 << 4) };
-            context.VideoProcessorSetStreamColorSpace(&processor, 0, &rgb_full);
-            context.VideoProcessorSetOutputColorSpace(&processor, &bt709_limited);
             context.VideoProcessorSetStreamAutoProcessingMode(&processor, 0, false);
-            let full = |(w, h): (u32, u32)| RECT { left: 0, top: 0, right: w as i32, bottom: h as i32 };
-            context.VideoProcessorSetStreamSourceRect(&processor, 0, true, Some(&full(input)));
-            context.VideoProcessorSetStreamDestRect(&processor, 0, true, Some(&full(output)));
-            context.VideoProcessorSetOutputTargetRect(&processor, true, Some(&full(output)));
-
-            let view = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
-                FourCC: 0,
-                ViewDimension: D3D11_VPIV_DIMENSION_TEXTURE2D,
-                Anonymous: D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_VPIV { MipSlice: 0, ArraySlice: 0 } },
-            };
-            let mut input_view = None;
-            video_device.CreateVideoProcessorInputView(canvas, &enumerator, &view, Some(&mut input_view))?;
-
-            let mut outputs = Vec::with_capacity(count);
-            for _ in 0..count {
-                let texture = nv12_texture(device, output)?;
-                let view = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
-                    ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
-                    Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_VPOV { MipSlice: 0 } },
-                };
-                let mut output_view = None;
-                video_device.CreateVideoProcessorOutputView(&texture, &enumerator, &view, Some(&mut output_view))?;
-                outputs.push((texture, output_view.expect("CreateVideoProcessorOutputView returned no view")));
-            }
-            Ok(Self {
-                video_device,
-                context,
-                enumerator,
-                processor,
-                input: input_view.expect("CreateVideoProcessorInputView returned no view"),
-                outputs,
-            })
+            context.VideoProcessorSetStreamSourceRect(&processor, 0, true, Some(&full_rect(input)));
+            context.VideoProcessorSetStreamDestRect(&processor, 0, true, Some(&full_rect(output)));
+            context.VideoProcessorSetOutputTargetRect(&processor, true, Some(&full_rect(output)));
+            Ok(Self { video_device, context, enumerator, processor })
         }
     }
 
-    /// Converts the canvas into output texture `slot`.
-    pub fn convert(&self, slot: usize) -> Result<()> {
-        let _ = (&self.video_device, &self.enumerator); // kept alive with the processor
+    fn input_view(&self, texture: &ID3D11Texture2D) -> Result<ID3D11VideoProcessorInputView> {
+        let desc = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
+            FourCC: 0,
+            ViewDimension: D3D11_VPIV_DIMENSION_TEXTURE2D,
+            Anonymous: D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_VPIV { MipSlice: 0, ArraySlice: 0 } },
+        };
+        let mut view = None;
+        unsafe { self.video_device.CreateVideoProcessorInputView(texture, &self.enumerator, &desc, Some(&mut view))? };
+        Ok(view.expect("CreateVideoProcessorInputView returned no view"))
+    }
+
+    fn output_view(&self, texture: &ID3D11Texture2D) -> Result<ID3D11VideoProcessorOutputView> {
+        let desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
+            ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
+            Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_VPOV { MipSlice: 0 } },
+        };
+        let mut view = None;
+        unsafe { self.video_device.CreateVideoProcessorOutputView(texture, &self.enumerator, &desc, Some(&mut view))? };
+        Ok(view.expect("CreateVideoProcessorOutputView returned no view"))
+    }
+
+    fn blit(&self, input: &ID3D11VideoProcessorInputView, output: &ID3D11VideoProcessorOutputView) -> Result<()> {
         let mut stream = D3D11_VIDEO_PROCESSOR_STREAM {
             Enable: true.into(),
             OutputIndex: 0,
@@ -150,19 +139,103 @@ impl Converter {
             PastFrames: 0,
             FutureFrames: 0,
             ppPastSurfaces: std::ptr::null_mut(),
-            pInputSurface: ManuallyDrop::new(Some(self.input.clone())),
+            pInputSurface: ManuallyDrop::new(Some(input.clone())),
             ppFutureSurfaces: std::ptr::null_mut(),
             ppPastSurfacesRight: std::ptr::null_mut(),
             pInputSurfaceRight: ManuallyDrop::new(None),
             ppFutureSurfacesRight: std::ptr::null_mut(),
         };
-        let result = unsafe { self.context.VideoProcessorBlt(&self.processor, &self.outputs[slot].1, 0, std::slice::from_ref(&stream)) };
+        let result = unsafe { self.context.VideoProcessorBlt(&self.processor, output, 0, std::slice::from_ref(&stream)) };
         unsafe { ManuallyDrop::drop(&mut stream.pInputSurface) };
         result
+    }
+}
+
+/// Converts the BGRA canvas into NV12 textures at the output size, on the GPU.
+pub struct Converter {
+    processor: Processor,
+    input: ID3D11VideoProcessorInputView,
+    outputs: Vec<(ID3D11Texture2D, ID3D11VideoProcessorOutputView)>,
+}
+
+impl Converter {
+    pub fn new(device: &ID3D11Device, canvas: &ID3D11Texture2D, input: (u32, u32), output: (u32, u32), count: usize) -> Result<Self> {
+        let processor = Processor::new(device, input, output)?;
+        // Full-range RGB in; BT.709 limited-range YCbCr out (what players expect for HD).
+        let rgb_full = D3D11_VIDEO_PROCESSOR_COLOR_SPACE { _bitfield: 0 };
+        let bt709_limited = D3D11_VIDEO_PROCESSOR_COLOR_SPACE { _bitfield: (1 << 2) | (1 << 4) };
+        unsafe {
+            processor.context.VideoProcessorSetStreamColorSpace(&processor.processor, 0, &rgb_full);
+            processor.context.VideoProcessorSetOutputColorSpace(&processor.processor, &bt709_limited);
+        }
+        let input = processor.input_view(canvas)?;
+        let mut outputs = Vec::with_capacity(count);
+        for _ in 0..count {
+            let texture = nv12_texture(device, output)?;
+            let view = processor.output_view(&texture)?;
+            outputs.push((texture, view));
+        }
+        Ok(Self { processor, input, outputs })
+    }
+
+    /// Converts the canvas into output texture `slot`.
+    pub fn convert(&self, slot: usize) -> Result<()> {
+        self.processor.blit(&self.input, &self.outputs[slot].1)
     }
 
     pub fn texture(&self, slot: usize) -> &ID3D11Texture2D {
         &self.outputs[slot].0
+    }
+}
+
+/// Draws a picture of another size onto the canvas, scaled down to fit (never up), centred,
+/// with black around it: a window resized while it is recorded.
+pub struct Scaler {
+    processor: Processor,
+    /// The picture is copied here first: capture textures cannot be read by the video processor.
+    copy: ID3D11Texture2D,
+    input: ID3D11VideoProcessorInputView,
+    output: ID3D11VideoProcessorOutputView,
+    pub size: (u32, u32),
+}
+
+impl Scaler {
+    pub fn new(device: &ID3D11Device, canvas: &ID3D11Texture2D, size: (u32, u32), canvas_size: (u32, u32), placed: RECT) -> Result<Self> {
+        let processor = Processor::new(device, size, canvas_size)?;
+        let rgb_full = D3D11_VIDEO_PROCESSOR_COLOR_SPACE { _bitfield: 0 };
+        let black = D3D11_VIDEO_COLOR { Anonymous: D3D11_VIDEO_COLOR_0 { RGBA: D3D11_VIDEO_COLOR_RGBA { R: 0.0, G: 0.0, B: 0.0, A: 1.0 } } };
+        unsafe {
+            let (context, p) = (&processor.context, &processor.processor);
+            context.VideoProcessorSetStreamColorSpace(p, 0, &rgb_full);
+            context.VideoProcessorSetOutputColorSpace(p, &rgb_full);
+            context.VideoProcessorSetStreamDestRect(p, 0, true, Some(&placed));
+            context.VideoProcessorSetOutputBackgroundColor(p, false, &black);
+        }
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: size.0,
+            Height: size.1,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let mut copy = None;
+        unsafe { device.CreateTexture2D(&desc, None, Some(&mut copy))? };
+        let copy = copy.expect("CreateTexture2D returned no texture");
+        let input = processor.input_view(&copy)?;
+        let output = processor.output_view(canvas)?;
+        Ok(Self { processor, copy, input, output, size })
+    }
+
+    /// Draws `source`, a `size`-sized picture, onto the canvas.
+    pub fn draw(&self, context: &ID3D11DeviceContext, source: &ID3D11Texture2D) -> Result<()> {
+        let region = D3D11_BOX { left: 0, top: 0, front: 0, right: self.size.0, bottom: self.size.1, back: 1 };
+        unsafe { context.CopySubresourceRegion(&self.copy, 0, 0, 0, 0, source, 0, Some(&region)) };
+        self.processor.blit(&self.input, &self.output)
     }
 }
 

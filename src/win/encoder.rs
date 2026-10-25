@@ -15,6 +15,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_QUERY_DESC, D3D11_QUERY_EVENT,
     D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11DeviceContext, ID3D11Query,
@@ -29,7 +30,7 @@ use windows_capture::frame::Frame;
 use crate::camera::{self, CameraSize, Corner, PixelRect};
 use crate::i18n::tr;
 use crate::media::{self, Clock, Muxer, Packet, TICKS_PER_SECOND};
-use super::mf::{Aac, Converter, H264, Media, Mp4, VideoEvent};
+use super::mf::{Aac, Converter, H264, Media, Mp4, Scaler, VideoEvent};
 
 /// Queued NV12 frames (200 ms at 60 fps, about 3 MB each at 1080p). If the encoder falls
 /// further behind, the oldest queued frame is dropped and counted as lagged.
@@ -47,6 +48,9 @@ pub struct EncoderSettings {
     /// Where the webcam goes, if there is one.
     pub overlay: Option<(Corner, CameraSize)>,
 }
+
+/// A scaler and the frame size it was made for; no scaler if the GPU cannot scale.
+type SizedScaler = ((u32, u32), Option<Com<Scaler>>);
 
 /// COM pointer used from several threads; D3D11 devices are free-threaded and the
 /// immediate context is multithread-protected (see `capture::keep_last_frame`).
@@ -142,6 +146,8 @@ pub struct Encoder {
     overlay: Option<(Corner, CameraSize)>,
     /// The newest webcam picture, scaled, and where it goes: (x, y, width, height).
     overlay_texture: Mutex<Option<(Com<ID3D11Texture2D>, PixelRect)>>,
+    /// For frames of another size than the recording (a resized window).
+    scaler: Mutex<Option<SizedScaler>>,
     /// Name of the H.264 encoder in use, for diagnostics.
     encoder_name: String,
     /// Dropped last, after everything that uses Media Foundation.
@@ -225,24 +231,28 @@ impl Encoder {
             device: Com(device.clone()),
             overlay: s.overlay,
             overlay_texture: Mutex::new(None),
+            scaler: Mutex::new(None),
             encoder_name,
             _media: media,
         })
     }
 
-    /// Draws the part of a captured frame starting at `origin` onto the canvas, with the
-    /// webcam on top (capture thread only).
-    pub fn push_frame(&self, frame: &Frame, origin: (u32, u32)) {
+    /// Draws a captured frame onto the canvas, with the webcam on top (capture thread only):
+    /// the part of it starting at `region`'s origin, or all of it, scaled to fit if the source
+    /// changed size (a resized window).
+    pub fn push_frame(&self, frame: &Frame, region: Option<(u32, u32)>) {
         let canvas = &self.inner.canvas;
         let (ctx, dst, source) = (&canvas.context.0, &canvas.texture.0, frame.as_raw_texture());
         let (w, h) = (frame.width(), frame.height());
         let _gpu = canvas.lock.lock().unwrap();
         unsafe {
-            if origin == (0, 0) && (w, h) == self.input {
+            if region.unwrap_or((0, 0)) == (0, 0) && (w, h) == self.input {
                 ctx.CopyResource(dst, source);
+            } else if region.is_none() && self.draw_scaled(source, (w, h)) {
             } else {
-                // A region, or a resized window: crop, padding with black what is missing.
-                let (left, top) = origin;
+                // A region, or a resized window the GPU cannot scale: crop, padding with black
+                // what is missing.
+                let (left, top) = region.unwrap_or((0, 0));
                 let (right, bottom) = ((left + self.input.0).min(w), (top + self.input.1).min(h));
                 if (right.saturating_sub(left), bottom.saturating_sub(top)) != self.input {
                     ctx.ClearRenderTargetView(&canvas.target.0, &[0.0, 0.0, 0.0, 1.0]);
@@ -258,6 +268,19 @@ impl Encoder {
             ctx.Flush();
         }
         canvas.ready.store(true, Ordering::Release);
+    }
+
+    /// Draws a `size`-sized frame scaled to fit the canvas; false if the GPU cannot. The scaler
+    /// is made again only when the size changes.
+    fn draw_scaled(&self, source: &ID3D11Texture2D, size: (u32, u32)) -> bool {
+        let mut scaler = self.scaler.lock().unwrap();
+        if scaler.as_ref().is_none_or(|(made_for, _)| *made_for != size) {
+            let canvas = &self.inner.canvas.texture.0;
+            let made = Scaler::new(&self.device.0, canvas, size, self.input, fit(size, self.input)).ok().map(Com);
+            *scaler = Some((size, made));
+        }
+        let Some((_, Some(scaler))) = scaler.as_ref() else { return false };
+        scaler.0.draw(&self.inner.canvas.context.0, source).is_ok()
     }
 
     /// Where a `camera`-sized webcam picture goes on the recording, if there is an overlay.
@@ -340,6 +363,21 @@ impl Drop for Encoder {
             }
         }
     }
+}
+
+/// Where a `picture`-sized frame goes on a `canvas`-sized one: scaled down to fit, never up
+/// (so text stays sharp), and centred.
+fn fit((w, h): (u32, u32), (cw, ch): (u32, u32)) -> RECT {
+    let (w, h, cw, ch) = (u64::from(w.max(1)), u64::from(h.max(1)), u64::from(cw), u64::from(ch));
+    let (fw, fh) = if w <= cw && h <= ch {
+        (w, h)
+    } else if cw * h <= ch * w {
+        (cw, h * cw / w)
+    } else {
+        (w * ch / h, ch)
+    };
+    let (left, top) = ((cw - fw) / 2, (ch - fh) / 2);
+    RECT { left: left as i32, top: top as i32, right: (left + fw) as i32, bottom: (top + fh) as i32 }
 }
 
 fn create_canvas(device: &ID3D11Device, (w, h): (u32, u32), output: (u32, u32)) -> windows::core::Result<Canvas> {
@@ -488,5 +526,25 @@ fn encode_audio(inner: &Inner, aac: Com<Aac>, rx: Receiver<Vec<u8>>) {
     }
     if let Ok(packets) = aac.drain() {
         inner.output.lock().unwrap().audio(packets);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(r: RECT) -> (i32, i32, i32, i32) {
+        (r.left, r.top, r.right, r.bottom)
+    }
+
+    #[test]
+    fn a_resized_window_is_scaled_down_to_fit_and_centred() {
+        let canvas = (1280, 720);
+        assert_eq!(rect(fit((1280, 720), canvas)), (0, 0, 1280, 720), "same size");
+        assert_eq!(rect(fit((2560, 1440), canvas)), (0, 0, 1280, 720), "larger, same shape");
+        assert_eq!(rect(fit((2560, 720), canvas)), (0, 180, 1280, 540), "wider: bands above and below");
+        assert_eq!(rect(fit((1280, 1440), canvas)), (320, 0, 960, 720), "taller: bands at the sides");
+        assert_eq!(rect(fit((640, 360), canvas)), (320, 180, 960, 540), "smaller: centred, not enlarged");
+        assert_eq!(rect(fit((1600, 500), canvas)), (0, 160, 1280, 560), "wider than the canvas only: 1280 × 400");
     }
 }

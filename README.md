@@ -156,7 +156,9 @@ Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and scre
   last recording started is repaired; for any other, `ffmpeg -i in.mp4 -c copy out.mp4` turns it
   into a regular MP4.
 - While the Windows session is locked, Windows delivers no new frames.
-- If a window is resized while recording, the image is cropped or padded with black.
+- A window resized while recording keeps the recording's size: on Windows it is scaled down to
+  fit (never up, so a smaller window stays sharp) and centred, with black around it; on Linux it
+  is cropped or padded with black.
 - On a laptop with two GPUs the image is captured, and so encoded, on the GPU driving the display
   (usually the integrated one).
 - A PC without a GPU driver (for example a virtual machine without graphics acceleration) cannot
