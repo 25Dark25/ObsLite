@@ -110,8 +110,8 @@ struct Flags {
 struct Handler {
     flags: Flags,
     last_preview: Option<Instant>,
-    /// Top-left corner of the recorded region, fixed when the encoder is created.
-    origin: (u32, u32),
+    /// Top-left corner of the recorded region, if there is one; fixed when the encoder is created.
+    region: Option<(u32, u32)>,
 }
 
 impl GraphicsCaptureApiHandler for Handler {
@@ -119,7 +119,7 @@ impl GraphicsCaptureApiHandler for Handler {
     type Error = BoxError;
 
     fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-        Ok(Self { flags: ctx.flags, last_preview: None, origin: (0, 0) })
+        Ok(Self { flags: ctx.flags, last_preview: None, region: None })
     }
 
     fn on_frame_arrived(&mut self, frame: &mut Frame, _control: InternalCaptureControl) -> Result<(), Self::Error> {
@@ -133,7 +133,7 @@ impl GraphicsCaptureApiHandler for Handler {
                 let full = (frame.width(), frame.height());
                 let input = match rec.region.and_then(|r| r.fit(full)) {
                     Some(r) => {
-                        self.origin = (r.x, r.y);
+                        self.region = Some((r.x, r.y));
                         (r.width, r.height)
                     }
                     None => (full.0 & !1, full.1 & !1),
@@ -158,7 +158,7 @@ impl GraphicsCaptureApiHandler for Handler {
                 *shared.sizes.lock().unwrap() = Some((input, output));
             }
             if let Some(enc) = encoder.as_ref() {
-                enc.push_frame(frame, self.origin);
+                enc.push_frame(frame, self.region);
             }
         }
 

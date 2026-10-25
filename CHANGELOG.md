@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Windows: a window resized while recording is scaled down to fit the recording and centred,
+  with black around it, instead of cropped or left in the corner. A smaller window is not
+  enlarged, so it stays sharp.
+
 ### Added
 
 - Recordings survive obs-lite or the PC stopping mid-recording (a crash, a power cut): the MP4 is

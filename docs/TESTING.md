@@ -21,6 +21,7 @@ cargo test --locked
 | `media::a_recording_starts_at_the_next_keyframe_with_the_audio_since_then` | A recording started while encoding asks for a keyframe once, starts on it and keeps only the audio from then on. |
 | `media::a_recording_without_frames_is_an_error` | Stopping a recording before any frame reports an error instead of an empty file. |
 | `media::a_saved_replay_is_interleaved_by_time` | A saved replay writes video and audio in time order, relative to its first keyframe, from another thread. |
+| `win::encoder::a_resized_window_is_scaled_down_to_fit_and_centred` | Windows only: where a resized window goes on the recording: scaled down to fit, never up, centred. |
 | `mp4::a_fragmented_file_becomes_a_regular_one_with_every_sample_in_place` | A fragmented MP4, with fragments laid out as Media Foundation and as GStreamer write them, becomes a regular one in place: one full index at the end, no fragment boxes left, and every sample's bytes, duration, keyframe flag and composition offset read back through the new index. |
 | `mp4::a_file_cut_short_is_repaired_up_to_its_last_whole_fragment` | A file whose writing stopped inside its last fragment's data is refused as a finished file, and repaired into a regular MP4 with the whole fragments before it. |
 | `app::a_recording_cut_short_is_repaired_at_start_up` | At start-up the last recording, if it was cut short, becomes a regular MP4 and the status bar says so with a link; a finished or missing one is left alone without a message. |
@@ -333,6 +334,21 @@ button, obs-lite killed after about 6–8 s, then started again:
 
 Not tested: a power cut itself (the kill stands in for it; with a power cut the disk may also lose
 what was not yet flushed).
+
+2026-10-25, a window resized while recording, on the Windows laptop: an `ffplay` window with a
+moving test pattern, recorded at its first size (946×532), then resized every 3 s with
+`SetWindowPos`; one frame from each size, this change against 0.4.1:
+
+| Window | Change | 0.4.1 |
+|---|---|---|
+| 1600×500 | The whole window, scaled down, bands above and below | Only its left part |
+| 640×720 | The whole window, scaled down, bands at the sides | Its top part, black on the right |
+| 480×270 | Centred at its own size | In the top-left corner |
+| Back to 960×540 | As at the start | As at the start |
+
+The recording kept 60 fps throughout (940 frames in 15.67 s), with no decode errors. Not
+tested: a GPU whose video processor cannot scale (the code then falls back to cropping), and
+dragging a window's edge, which resizes it on every frame.
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.
