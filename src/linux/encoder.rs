@@ -400,6 +400,7 @@ fn wait_for_eos(pipeline: &gst::Pipeline) {
 /// The GStreamer MP4 muxer, fed already encoded packets.
 pub struct Mp4 {
     pipeline: gst::Pipeline,
+    path: std::path::PathBuf,
     video: gst_app::AppSrc,
     audio: Option<gst_app::AppSrc>,
     start: i64,
@@ -410,10 +411,15 @@ impl Muxer for Mp4 {
 
     fn create(path: &Path, video: &gst::Caps, audio: Option<&gst::Caps>, start: i64) -> Result<Self, String> {
         gst::init().map_err(|e| e.to_string())?;
-        // The parsers adapt the encoders' caps to what mp4mux accepts.
+        // The parsers adapt the encoders' caps to what mp4mux accepts. The file is written in
+        // half-second fragments, so it plays up to the last one if the process dies; `finish`
+        // makes it a regular MP4. (With mp4mux's own `first-moov-then-finalise` mode, a recording
+        // cut short did not open.)
         let audio_branch = if audio.is_some() { "appsrc name=a format=time ! aacparse ! queue ! mux." } else { "" };
         let pipeline = launch(&format!(
-            "appsrc name=v format=time ! h264parse ! queue ! mp4mux name=mux ! filesink name=file {audio_branch}"
+            "appsrc name=v format=time ! h264parse ! queue \
+             ! mp4mux name=mux fragment-duration=500 \
+             ! filesink name=file {audio_branch}"
         ))?;
         let video_src = by_name::<gst_app::AppSrc>(&pipeline, "v")?;
         video_src.set_caps(Some(video));
@@ -431,7 +437,7 @@ impl Muxer for Mp4 {
         }
         by_name::<gst::Element>(&pipeline, "file")?.set_property("location", path.to_string_lossy().as_ref());
         pipeline.set_state(gst::State::Playing).map_err(|e| e.to_string())?;
-        Ok(Self { pipeline, video: video_src, audio: audio_src, start })
+        Ok(Self { pipeline, path: path.to_owned(), video: video_src, audio: audio_src, start })
     }
 
     fn write(&self, video: bool, packet: &Packet) -> Result<(), String> {
@@ -463,7 +469,11 @@ impl Muxer for Mp4 {
         let message = bus.timed_pop_filtered(gst::ClockTime::from_seconds(60), &[gst::MessageType::Eos, gst::MessageType::Error]);
         let _ = self.pipeline.set_state(gst::State::Null);
         match message.as_ref().map(|m| m.view()) {
-            Some(gst::MessageView::Eos(_)) => Ok(()),
+            Some(gst::MessageView::Eos(_)) => {
+                // If this fails the file stays fragmented, which still plays.
+                let _ = crate::mp4::defragment(&self.path);
+                Ok(())
+            }
             Some(gst::MessageView::Error(e)) => Err(e.error().to_string()),
             _ => Err(tr!("el archivo MP4 no terminó de escribirse", "the MP4 file did not finish writing").to_owned()),
         }

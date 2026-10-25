@@ -21,6 +21,10 @@ cargo test --locked
 | `media::a_recording_starts_at_the_next_keyframe_with_the_audio_since_then` | A recording started while encoding asks for a keyframe once, starts on it and keeps only the audio from then on. |
 | `media::a_recording_without_frames_is_an_error` | Stopping a recording before any frame reports an error instead of an empty file. |
 | `media::a_saved_replay_is_interleaved_by_time` | A saved replay writes video and audio in time order, relative to its first keyframe, from another thread. |
+| `mp4::a_fragmented_file_becomes_a_regular_one_with_every_sample_in_place` | A fragmented MP4, with fragments laid out as Media Foundation and as GStreamer write them, becomes a regular one in place: one full index at the end, no fragment boxes left, and every sample's bytes, duration, keyframe flag and composition offset read back through the new index. |
+| `mp4::a_regular_file_is_left_alone` | A file that is not fragmented is not touched. |
+| `mp4::data_past_4_gib_is_indexed_with_64_bit_offsets` | Data past 4 GiB gets 64-bit chunk offsets (`co64`). |
+| `mp4::a_duration_too_long_for_32_bits_moves_the_box_to_version_1` | A track longer than 32 bits of its timescale allows gets a version 1 header, keeping its other fields. |
 | `mf::software_encoder_encodes_the_canvas` | Without a hardware encoder, the canvas still goes through the GPU colour conversion and the Windows software H.264 encoder (one packet per frame, keyframe first). Skipped where there is no GPU video processor, such as CI. |
 | `audio::mixes_with_gain_and_pads_silence` | Inputs are mixed with their gain; a short input is padded with silence. |
 | `audio::inputs_adding_up_past_full_scale_are_limited_not_clipped` | Two inputs that add up to 1.4 are brought within full scale with one steady gain, so the wave keeps its shape (a 50 Hz tone: the gain must not wobble from cycle to cycle). |
@@ -298,6 +302,23 @@ The application's two copies in 0.4.1 arrive slightly apart, so a steady tone pa
 (+2.9 dB rather than +6 dB). With `ffplay` started after obs-lite, its channel muted, the change
 recorded 1 kHz at −97.1 dBFS and 440 Hz at −31.1 dBFS: desktop audio switches when the recording
 starts. Not tested: a chosen output device (left as before by design).
+
+2026-10-25, recordings written in fragments, made regular when they stop. Windows on the laptop
+(Media Foundation), Linux in the VM (GStreamer), self-tests:
+
+| Check | Windows | Linux |
+|---|---|---|
+| Normal stop, 8 s with `replay` | 7.88 s, 473 frames; replay 3.87 s; one index at the end, old ones as padding | 7.97 s, 478 frames; replay 3.90 s; the same layout |
+| Killed (`taskkill /F`, `kill -9`) partway | Plays: 5.72 s, 342 frames, 0 decode errors | Plays: 12.5 s, 733 frames, 0 decode errors, last fragment cut |
+| Packets of a 30 s fragmented file and of its regular copy (`ffmpeg -f framemd5`) | 3194 and 3194, identical (data and times) | 850 and 850 (8 s), identical |
+| Conversion time; size | 1.3 ms for 30 s; +7 KB (0.07 %) | — |
+| Warnings from `ffprobe -v warning` on the regular files | None | None |
+
+Windows' own media stack (`WMPlayer.OCX`) reads the regular files' durations; for a killed
+recording it reports 0 s, as there is no total duration in a fragmented file. With mp4mux's own
+`first-moov-then-finalise` mode, a recording killed partway did not open, so it is not used. Not
+tested: a recording over 4 GiB end to end (the 64-bit offsets have a unit test), and opening the
+files in video editors (none on the test machines).
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.
