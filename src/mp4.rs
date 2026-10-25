@@ -8,10 +8,17 @@ use std::fs::OpenOptions;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-/// Converts the fragmented MP4 at `path`; a file that is not fragmented is left as it is.
+/// Converts the finished fragmented MP4 at `path`; a file that is not fragmented is left as it is.
 pub fn defragment(path: &Path) -> io::Result<()> {
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
-    convert(&mut file, |f, len| f.set_len(len))
+    convert(&mut file, false, |f, len| f.set_len(len)).map(|_| ())
+}
+
+/// Converts a recording whose writing stopped partway (a crash, a power cut), keeping every whole
+/// fragment. Returns whether it was fragmented: a finished recording is already regular.
+pub fn repair(path: &Path) -> io::Result<bool> {
+    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    convert(&mut file, true, |f, len| f.set_len(len))
 }
 
 fn invalid(what: &str) -> io::Error {
@@ -40,8 +47,11 @@ impl Header {
             }
             n => u64::from(n),
         };
-        if size < 8 || start + size > end {
-            return Err(invalid("box past the end of the file"));
+        if size < 8 {
+            return Err(invalid("bad box size"));
+        }
+        if start + size > end {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "box past the end of the file"));
         }
         Ok(Self { start, size, kind })
     }
@@ -163,7 +173,7 @@ struct Defaults {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Sample {
+pub(crate) struct Sample {
     size: u32,
     duration: u32,
     sync: bool,
@@ -429,18 +439,25 @@ fn rebuild_trak(trak: Vec<Node>, track: &Track, duration: u64, in_movie: u64) ->
         .collect()
 }
 
-/// Converts in place; `truncate` cuts the file when the new index is shorter than what it replaces.
-fn convert<F: Read + Write + Seek>(file: &mut F, truncate: impl FnOnce(&mut F, u64) -> io::Result<()>) -> io::Result<()> {
-    let end = file.seek(SeekFrom::End(0))?;
+/// Converts in place, returning whether the file was fragmented. With `cut_short`, a file whose
+/// writing stopped partway is accepted: its unfinished last box, and any fragment whose data it
+/// held, are dropped. `truncate` cuts the file when the new index ends before the old end.
+fn convert<F: Read + Write + Seek>(file: &mut F, cut_short: bool, truncate: impl FnOnce(&mut F, u64) -> io::Result<()>) -> io::Result<bool> {
+    let len = file.seek(SeekFrom::End(0))?;
     let mut top = Vec::new();
-    let mut at = 0;
-    while at + 8 <= end {
-        let header = Header::read(file, at, end)?;
-        at += header.size;
-        top.push(header);
+    let mut end = 0;
+    while end < len {
+        match Header::read(file, end, len) {
+            Ok(header) => {
+                end += header.size;
+                top.push(header);
+            }
+            Err(e) if cut_short && e.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e),
+        }
     }
     if !top.iter().any(|h| &h.kind == b"moof") {
-        return Ok(());
+        return Ok(false);
     }
     let init_header = top.iter().find(|h| &h.kind == b"moov").ok_or_else(|| invalid("no moov"))?;
     let init = parse(&init_header.read_body(file)?)?;
@@ -469,15 +486,21 @@ fn convert<F: Read + Write + Seek>(file: &mut F, truncate: impl FnOnce(&mut F, u
         }
     }
     for header in top.iter().filter(|h| &h.kind == b"moof") {
+        let before: Vec<(usize, usize)> = tracks.iter().map(|t| (t.samples.len(), t.chunks.len())).collect();
         read_fragment(&header.read_body(file)?, header.start, &mut tracks)?;
-    }
-    for track in &tracks {
-        let mut samples = track.samples.iter();
-        for chunk in &track.chunks {
-            let bytes: u64 = samples.by_ref().take(chunk.samples as usize).map(|s| u64::from(s.size)).sum();
-            if chunk.position + bytes > end {
+        let whole = tracks.iter().zip(&before).all(|(t, &(samples, chunks))| {
+            let mut samples = t.samples[samples..].iter();
+            t.chunks[chunks..].iter().all(|c| c.position + samples.by_ref().take(c.samples as usize).map(|s| u64::from(s.size)).sum::<u64>() <= end)
+        });
+        if !whole {
+            if !cut_short {
                 return Err(invalid("samples past the end of the file"));
             }
+            for (t, (samples, chunks)) in tracks.iter_mut().zip(before) {
+                t.samples.truncate(samples);
+                t.chunks.truncate(chunks);
+            }
+            break;
         }
     }
     let index = full_index(init, &tracks)?;
@@ -488,18 +511,19 @@ fn convert<F: Read + Write + Seek>(file: &mut F, truncate: impl FnOnce(&mut F, u
     file.seek(SeekFrom::Start(at))?;
     file.write_all(&index)?;
     let new_end = at + index.len() as u64;
-    if new_end < end {
+    if new_end < len {
         truncate(file, new_end)?;
     }
     for header in top.iter().filter(|h| &h.kind == b"moof").chain([init_header]) {
         file.seek(SeekFrom::Start(header.start + 4))?;
         file.write_all(b"free")?;
     }
-    file.flush()
+    file.flush()?;
+    Ok(true)
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::io::Cursor;
 
     use super::*;
@@ -625,7 +649,7 @@ mod tests {
     }
 
     /// A fragmented file: three fragments, then a fragment index.
-    fn fragmented() -> (Vec<u8>, Vec<Sample>, Vec<Sample>) {
+    pub(crate) fn fragmented() -> (Vec<u8>, Vec<Sample>, Vec<Sample>) {
         let mut file = [bx(b"ftyp", b"mp42\0\0\0\0mp41isom"), init_moov()].concat();
         let fragments = [
             (video(&[300, 20, 30], &[0, 2000, 0]), audio(2), Style::Absolute),
@@ -697,24 +721,25 @@ mod tests {
         (0..count).map(|i| (file[positions[i]..positions[i] + sizes[i] as usize].to_vec(), durations[i], sync[i], offsets[i])).collect()
     }
 
-    #[test]
-    fn a_fragmented_file_becomes_a_regular_one_with_every_sample_in_place() {
-        let (original, video, audio) = fragmented();
-        let mut cursor = Cursor::new(original.clone());
-        convert(&mut cursor, |c, len| {
+    /// `file` converted in memory.
+    fn converted(file: Vec<u8>, cut_short: bool) -> io::Result<Vec<u8>> {
+        let mut cursor = Cursor::new(file);
+        convert(&mut cursor, cut_short, |c, len| {
             c.get_mut().truncate(len as usize);
             Ok(())
-        })
-        .unwrap();
-        let file = cursor.into_inner();
+        })?;
+        Ok(cursor.into_inner())
+    }
 
-        let kinds: Vec<[u8; 4]> = top_level(&file).into_iter().map(|(_, k)| k).collect();
+    /// Checks that `file` is a regular MP4 holding exactly `video` and `audio`.
+    fn assert_regular(file: &[u8], video: &[Sample], audio: &[Sample]) {
+        let kinds: Vec<[u8; 4]> = top_level(file).into_iter().map(|(_, k)| k).collect();
         assert_eq!(kinds.first(), Some(b"ftyp"));
         assert_eq!(kinds.last(), Some(b"moov"), "one full index, at the end");
         assert_eq!(kinds.iter().filter(|k| *k == b"moov").count(), 1);
         assert!(!kinds.iter().any(|k| k == b"moof" || k == b"mfra"), "boxes: {kinds:?}");
 
-        let (at, _) = *top_level(&file).last().unwrap();
+        let (at, _) = *top_level(file).last().unwrap();
         let moov = parse(&file[at as usize + 8..]).unwrap();
         assert!(find(&moov, b"mvex").is_none(), "no fragment defaults left");
         let traks: Vec<&[Node]> = moov
@@ -726,8 +751,9 @@ mod tests {
             .collect();
         assert_eq!(traks.len(), 2);
 
-        for (track, expected, trak) in [(1, &video, traks[0]), (2, &audio, traks[1])] {
-            let samples = read_back(&file, trak);
+        let mut longest = 0;
+        for (track, expected, trak, scale) in [(1, video, traks[0], 60_000), (2, audio, traks[1], 48_000)] {
+            let samples = read_back(file, trak);
             assert_eq!(samples.len(), expected.len(), "track {track}");
             for (i, ((bytes, duration, sync, offset), want)) in samples.iter().zip(expected.iter()).enumerate() {
                 assert_eq!(*bytes, content(track, i, want.size), "track {track} sample {i} data");
@@ -736,18 +762,33 @@ mod tests {
             let mdhd = leaf(children(trak, b"mdia").unwrap(), b"mdhd").unwrap();
             let total: u64 = expected.iter().map(|s| u64::from(s.duration)).sum();
             assert_eq!(u64::from(u32_at(mdhd, 16).unwrap()), total, "track {track} duration");
+            longest = longest.max((total * 60_000).div_ceil(scale));
         }
-        // The movie lasts as long as its longest track, here the audio (7 × 1024 at 48 kHz, against
-        // 8 × 1000 at 60 kHz), in the movie's timescale (60 000).
-        let mvhd = leaf(&moov, b"mvhd").unwrap();
-        assert_eq!(u64_at(mvhd, 24).unwrap(), 7 * 1024 * 60_000 / 48_000);
+        // The movie lasts as long as its longest track, in the movie's timescale (60 000).
+        assert_eq!(u64_at(leaf(&moov, b"mvhd").unwrap(), 24).unwrap(), longest);
+    }
+
+    #[test]
+    fn a_fragmented_file_becomes_a_regular_one_with_every_sample_in_place() {
+        let (original, video, audio) = fragmented();
+        assert_regular(&converted(original, false).unwrap(), &video, &audio);
+    }
+
+    #[test]
+    fn a_file_cut_short_is_repaired_up_to_its_last_whole_fragment() {
+        // Writing stopped inside the third fragment's data: no fragment index, and part of the
+        // last box missing. The first two fragments hold 6 video and 5 audio samples.
+        let (mut file, video, audio) = fragmented();
+        file.truncate(file.len() - 32 - 10);
+        assert!(converted(file.clone(), false).is_err(), "a finished file must be whole");
+        assert_regular(&converted(file, true).unwrap(), &video[..6], &audio[..5]);
     }
 
     #[test]
     fn a_regular_file_is_left_alone() {
         let regular = [bx(b"ftyp", b"mp42\0\0\0\0mp41isom"), bx(b"mdat", &[1; 50]), bx(b"moov", &[])].concat();
         let mut cursor = Cursor::new(regular.clone());
-        convert(&mut cursor, |_, _| panic!("nothing to cut")).unwrap();
+        assert!(!convert(&mut cursor, true, |_, _| panic!("nothing to cut")).unwrap());
         assert_eq!(cursor.into_inner(), regular);
     }
 

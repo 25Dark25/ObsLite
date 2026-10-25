@@ -86,8 +86,9 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spa
   AMF through Media Foundation), or the Windows software encoder if the GPU has none. A keyframe
   every 2 s; BT.709 colours, signalled in the file.
 - **Recordings survive a crash**: the MP4 is written in fragments, so if obs-lite or the PC stops
-  mid-recording (a crash, a power cut) the file keeps all but the last fraction of a second. A
-  normal stop leaves a regular MP4.
+  mid-recording (a crash, a power cut) the file keeps all but the last fraction of a second, and
+  the next time obs-lite starts it turns that file into a regular MP4. A normal stop leaves a
+  regular MP4.
 - **Constant frame rate** (30 or 60 fps), suitable for video editors. When the screen does not
   change the last frame is repeated; when the machine falls behind, slots are skipped and reported
   as dropped frames.
@@ -150,9 +151,10 @@ Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and scre
 
 - The hardware encoder takes 0.2–1 s to start; that span is not recorded (the status bar shows
   *Preparando…*).
-- A recording cut short by a crash or a power cut stays a fragmented MP4: it plays, but some
-  players show no duration and some editors may not open it. `ffmpeg -i in.mp4 -c copy out.mp4`
-  turns it into a regular MP4.
+- Until obs-lite starts again, a recording cut short by a crash or a power cut is a fragmented
+  MP4: it plays, but some players show no duration and some editors may not open it. Only the
+  last recording started is repaired; for any other, `ffmpeg -i in.mp4 -c copy out.mp4` turns it
+  into a regular MP4.
 - While the Windows session is locked, Windows delivers no new frames.
 - If a window is resized while recording, the image is cropped or padded with black.
 - On a laptop with two GPUs the image is captured, and so encoded, on the GPU driving the display

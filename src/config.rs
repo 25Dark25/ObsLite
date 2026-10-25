@@ -166,6 +166,8 @@ pub struct Config {
     pub hotkeys: Hotkeys,
     /// Seconds the replay buffer keeps.
     pub replay_seconds: u32,
+    /// The last recording started, repaired at start-up in case obs-lite stopped while writing it.
+    pub last_recording: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -198,6 +200,7 @@ impl Default for Config {
             camera: None,
             hotkeys: Hotkeys::default(),
             replay_seconds: 20,
+            last_recording: None,
         }
     }
 }
