@@ -80,7 +80,8 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spa
   without the cursor.
 - **Desktop audio + microphone** mixed together, with volume, mute, meters and device selection.
 - **Application audio**: the sound of a single application (and its child processes), e.g. a game
-  without Discord, as its own mixer channel. Needs Windows 10 version 2004 or later.
+  without Discord, as its own mixer channel; desktop audio then leaves that application out, so it
+  is heard once. Needs Windows 10 version 2004 or later.
 - **H.264 + AAC** to MP4, which plays everywhere: the GPU's hardware encoder (NVENC / Quick Sync /
   AMF through Media Foundation), or the Windows software encoder if the GPU has none. A keyframe
   every 2 s; BT.709 colours, signalled in the file.
@@ -158,9 +159,10 @@ Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and scre
 - Minimize to tray keeps the window minimized and removes its taskbar button (a hidden window would
   stop handling hotkeys); it still appears in Alt+Tab.
 - Noise suppression downmixes the microphone to mono.
-- Application audio is also part of desktop audio: with both on, that application is heard twice.
-  It is chosen among applications with a window and found again by executable name; if the
-  application starts after obs-lite, its audio is picked up when the recording starts.
+- With desktop audio set to a specific output device (not *Default*), desktop audio still includes
+  the application captured on its own, so that application is heard twice. The application is
+  chosen among applications with a window and found again by executable name; if it starts after
+  obs-lite, its audio is picked up when the recording starts.
 - Hotkeys need Ctrl or Alt (F-keys excepted), and are off while Settings is open.
 - Neither the executable nor the installer has an Authenticode signature (they are signed with
   OpenPGP instead), so Windows SmartScreen may warn before running them the first time and the

@@ -12,7 +12,7 @@ use crate::audio::{CHANNELS, Device, InputKind, InputShared, SAMPLE_RATE};
 fn direction(kind: InputKind) -> Direction {
     match kind {
         // Loopback capture opens the render (output) endpoint.
-        InputKind::System | InputKind::Application(_) => Direction::Render,
+        InputKind::System | InputKind::SystemExcept(_) | InputKind::Application(_) => Direction::Render,
         InputKind::Microphone => Direction::Capture,
     }
 }
@@ -37,9 +37,10 @@ pub fn capture(kind: InputKind, device_id: Option<&str>, shared: &InputShared) -
     wasapi::initialize_mta().ok()?;
     let format = WaveFormat::new(32, 32, &SampleType::Float, SAMPLE_RATE as usize, CHANNELS, None);
     let (mut client, mode) = match kind {
-        // Process loopback (Windows 10 2004+) only works event-driven.
-        InputKind::Application(pid) => (
-            AudioClient::new_application_loopback_client(pid, true)?,
+        // Process loopback (Windows 10 2004+) only works event-driven. It includes the process
+        // tree, or excludes it and takes everything else that plays.
+        InputKind::Application(pid) | InputKind::SystemExcept(pid) => (
+            AudioClient::new_application_loopback_client(pid, matches!(kind, InputKind::Application(_)))?,
             StreamMode::EventsShared { autoconvert: true, buffer_duration_hns: 0 },
         ),
         _ => {

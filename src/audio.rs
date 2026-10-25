@@ -37,6 +37,9 @@ const LIMITING_HOLD: Duration = Duration::from_millis(1500);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum InputKind {
     System,
+    /// Desktop audio without one process (and its children), by process id: the application
+    /// captured on its own, which desktop audio would otherwise repeat.
+    SystemExcept(u32),
     Microphone,
     /// The audio of one process (and its children), by process id.
     Application(u32),
@@ -132,6 +135,7 @@ impl InputShared {
 }
 
 pub struct Input {
+    pub kind: InputKind,
     pub shared: Arc<InputShared>,
     thread: Option<JoinHandle<()>>,
 }
@@ -153,7 +157,7 @@ impl Input {
                 }
             })
             .expect("spawn audio thread");
-        Self { shared, thread: Some(thread) }
+        Self { kind, shared, thread: Some(thread) }
     }
 }
 
