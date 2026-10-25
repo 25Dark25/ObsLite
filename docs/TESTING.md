@@ -285,5 +285,25 @@ Not repeated for 0.4.1: the interface flow, hotkeys, the replay buffer from the 
 installer on the test machine (the CI `installer` job covers it) and the Flatpak bundle itself
 (the CI `flatpak` job builds it), as none of that changed.
 
+2026-10-25, the mix limiter with speech, Linux VM, recorded from the interface: a voice
+(`espeak-ng`) on a virtual microphone, quiet (peak −16 dB) for 3 s, loud (−0.5 dB) for 4 s with
+synthetic music (bass, chord and a kick, −0.4 dB) on the desktop, then quiet (−14 dB) alone for
+5 s; together they reach 1.34 (+2.5 dB). Before is `35585bc`, the last commit without the
+limiter; after is 0.4.1. The two captures drift by up to 1.4 ms against each other, so the
+recordings are compared with measures that do not need sample alignment: the voice has nothing
+above 11 kHz and the music is low tones, so energy above 11.5 kHz is made by clipping; levels are
+compared every 50 ms with what was played:
+
+| Measure, loud part unless said | Before | After |
+|---|---|---|
+| Energy above 11.5 kHz against the whole (median; worst quarter second) | −67.3 dB; −37.4 dB | −72.3 dB; −42.2 dB |
+| Level against what was played (median; 5th percentile) | −0.03 dB; −0.9 dB | −0.28 dB; −1.9 dB |
+| Voice against music (median; 10–90 %) | +1.1 dB; −1.9 to +2.3 dB | +0.01 dB; −0.5 to +0.4 dB |
+| Quiet voice in the first 0.5 s after the loud part | +0.3 dB | +0.2 dB: not lowered |
+
+The same with the voice and music 1.4 dB quieter (together 1.13, +1.1 dB): little to clip, and
+both stay near the floor (worst quarter second −57.0 dB before, −53.5 dB after); the quiet voice
+after the loud part is within 0.1 dB in both.
+
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.
