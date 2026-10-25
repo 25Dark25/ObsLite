@@ -7,11 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- Windows: a window resized while recording is scaled down to fit the recording and centred,
-  with black around it, instead of cropped or left in the corner. A smaller window is not
-  enlarged, so it stays sharp.
+## [0.5.0] - 2026-10-25
 
 ### Added
 
@@ -20,11 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to 0.5 s on Linux). The next start turns such a recording into a regular MP4 and says so in the
   status bar. A normal stop still leaves a regular MP4, as before.
 
+### Changed
+
+- Windows: a window resized while recording is scaled down to fit the recording and centred,
+  with black around it, instead of cropped or left in the corner. A smaller window is not
+  enlarged, so it stays sharp.
+
 ### Fixed
 
 - Windows: every recording left about 120 MB of memory behind, so obs-lite grew with each
-  one (676 MB after five). The hardware encoder kept the GPU device of the recording, with its
-  textures, until obs-lite closed; it is now shut down when the recording ends.
+  one (over 600 MB after five). The hardware encoder kept the GPU device of the recording, with
+  its textures, until obs-lite closed; it is now shut down when the recording ends.
 - With application audio on, desktop audio no longer includes that application as well: it is
   heard once instead of twice, and muting its channel silences it. Not when desktop audio is set
   to a specific output device.
@@ -128,7 +130,8 @@ changes.
 - Minimum supported Rust version: 1.95.
 - Releases ship `THIRD-PARTY-LICENSES.html` with the licenses of the bundled crates.
 
-[Unreleased]: https://github.com/25Dark25/obs-lite/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/25Dark25/obs-lite/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/25Dark25/obs-lite/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/25Dark25/obs-lite/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/25Dark25/obs-lite/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/25Dark25/obs-lite/compare/v0.2.1...v0.3.0

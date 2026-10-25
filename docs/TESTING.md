@@ -373,5 +373,23 @@ until `ShutdownObject` (never called): about 120 MB per recording. The ignored t
 37 MB per round without the fix (147 MB over four) and fails; with `ShutdownObject` it passes.
 Releasing the encoder's D3D manager alone did not help, so it is not done.
 
+2026-10-25, release preparation for 0.5.0 (`main` plus the version bump). Since 0.4.1: recordings
+written in fragments and repaired after a crash, a resized window scaled on Windows, the encoder
+leak fixed and application audio no longer repeated; each was tested from the interface in its
+own entry above.
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 54 passed on Windows (two ignored), 59 on Linux (one ignored); clippy clean on 1.95 and stable on both |
+| Self-test 6 s 1080p60 (Windows) | Quick Sync; 352 frames, 0 lagged, 5.87 s, regular MP4, 0 decode errors, no `ffprobe` warnings |
+| Self-test with pause, 720p and `replay` (Windows) | 1280×720, 3.88 s, 233 frames; replay 3.85 s; both regular MP4, 0 decode errors |
+| Self-test killed after 6 s (Windows, `taskkill /F`) | Fragmented MP4 that plays: 5.72 s, 342 frames, 0 decode errors |
+| Self-test 8 s with `replay` (Linux VM) | x264; 472 frames, 0 lagged, 7.87 s; replay 3.78 s; both regular MP4, 0 decode errors |
+| Self-test killed partway (Linux VM, `kill -9`) | Fragmented MP4, last fragment cut, that plays: 12.5 s, 733 frames, 0 decode errors |
+
+Not repeated for 0.5.0: the checks of 0.4.1 whose code did not change (hotkeys, the tray menu, the
+webcam, the installer on the test machine and the Flatpak bundle itself; CI's `installer` and
+`flatpak` jobs build and test them).
+
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.
