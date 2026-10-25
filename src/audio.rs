@@ -390,6 +390,57 @@ mod tests {
         assert!(limited);
     }
 
+    /// Something like speech: a 300 Hz tone in syllables, four a second.
+    fn speech(amplitude: f32, seconds: f32) -> Vec<f32> {
+        let frames = (SAMPLE_RATE as f32 * seconds) as usize;
+        (0..frames)
+            .flat_map(|i| {
+                let t = i as f32 / SAMPLE_RATE as f32;
+                let syllable = (t * 2.0 * std::f32::consts::TAU).sin().abs();
+                [amplitude * syllable * (t * 300.0 * std::f32::consts::TAU).sin(); 2]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_voice_after_loud_audio_comes_back_quickly() {
+        // Quiet speech alone for 0.5 s, then loud music with louder speech for 1 s (peaks up to
+        // 1.3), then quiet speech alone again for 1.5 s.
+        let frame_at = |seconds: f32| (seconds * SAMPLE_RATE as f32) as usize;
+        let (loud_start, loud_end, end) = (frame_at(0.5), frame_at(1.5), frame_at(3.0));
+        let music = [vec![0.0; loud_start * CHANNELS], sine(0.8, 1.0), vec![0.0; (end - loud_end) * CHANNELS]].concat();
+        let voice = [speech(0.2, 0.5), speech(0.5, 1.0), speech(0.2, 1.5)].concat();
+        let mut mix = Vec::new();
+        mix_block(&[input_with(&music, 1.0), input_with(&voice, 1.0)], end * CHANNELS, &mut mix);
+        let summed = mix.clone();
+        let mut limiter = Limiter::new();
+        // In 10 ms blocks, as the mixer thread does.
+        for block in mix.chunks_mut(SAMPLE_RATE as usize / 100 * CHANNELS) {
+            limiter.process(block);
+        }
+        assert!(mix.iter().all(|s| s.abs() <= 1.0), "nothing over full scale");
+        let gains: Vec<(usize, f32)> = summed
+            .iter()
+            .zip(&mix)
+            .enumerate()
+            .filter(|(_, (s, _))| s.abs() > 0.02)
+            .map(|(i, (s, o))| (i / CHANNELS, o / s))
+            .collect();
+        assert!(gains.iter().filter(|(f, _)| *f < loud_start).all(|(_, g)| *g == 1.0), "quiet speech before is untouched");
+        // The gain is shared, so the voice keeps its level against the music; and it is never
+        // lowered more than the loudest peak needs.
+        let peak = summed.iter().fold(0f32, |p, s| p.max(s.abs()));
+        let lowest = gains.iter().fold(1f32, |l, (_, g)| l.min(*g));
+        assert!(lowest >= 1.0 / peak - 1e-4, "lowered to {lowest}, the loudest peak ({peak}) needs {}", 1.0 / peak);
+        // Seconds after the loud part until the voice stays within `ratio` of its level.
+        let back_within = |ratio: f32| {
+            let last_below = gains.iter().filter(|(f, g)| *f >= loud_end && *g < ratio).map(|(f, _)| *f).max();
+            last_below.map_or(0.0, |f| (f - loud_end) as f32 / SAMPLE_RATE as f32)
+        };
+        assert!(back_within(0.891) < 0.3, "the voice took {} s to come back within 1 dB", back_within(0.891));
+        assert!(back_within(0.99) < 1.0, "the voice took {} s to come back within 1 %", back_within(0.99));
+    }
+
     #[test]
     fn a_mix_within_full_scale_is_untouched() {
         let mut mix = [sine(0.6, 0.1), sine(-0.4, 0.1)].concat();

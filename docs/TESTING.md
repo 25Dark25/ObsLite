@@ -24,6 +24,7 @@ cargo test --locked
 | `mf::software_encoder_encodes_the_canvas` | Without a hardware encoder, the canvas still goes through the GPU colour conversion and the Windows software H.264 encoder (one packet per frame, keyframe first). Skipped where there is no GPU video processor, such as CI. |
 | `audio::mixes_with_gain_and_pads_silence` | Inputs are mixed with their gain; a short input is padded with silence. |
 | `audio::inputs_adding_up_past_full_scale_are_limited_not_clipped` | Two inputs that add up to 1.4 are brought within full scale with one steady gain, so the wave keeps its shape (a 50 Hz tone: the gain must not wobble from cycle to cycle). |
+| `audio::a_voice_after_loud_audio_comes_back_quickly` | Quiet speech, then loud music with speech, then quiet speech again: nothing goes over full scale, the voice keeps its level against the music, the mix is never lowered more than its loudest peak needs, and the quiet voice is back within 1 dB in under 0.3 s and within 1 % in under 1 s (measured: 0.06 s and 0.54 s). |
 | `audio::a_mix_within_full_scale_is_untouched` | The limiter leaves a mix that fits exactly as it is. |
 | `audio::drops_oldest_samples_beyond_latency_bound` | A backed-up input drops its oldest samples instead of drifting. |
 | `config::bitrate_scales_with_pixel_rate` | Quality presets scale with resolution and frame rate, within limits. |
