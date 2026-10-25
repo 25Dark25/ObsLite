@@ -301,9 +301,9 @@ compared every 50 ms with what was played:
 | Voice against music (median; 10–90 %) | +1.1 dB; −1.9 to +2.3 dB | +0.01 dB; −0.5 to +0.4 dB |
 | Quiet voice in the first 0.5 s after the loud part | +0.3 dB | +0.2 dB: not lowered |
 
-The same with the voice and music 1.4 dB quieter (together 1.13, +1.1 dB): little to clip, and
-both stay near the floor (worst quarter second −57.0 dB before, −53.5 dB after); the quiet voice
-after the loud part is within 0.1 dB in both.
+The same with the voice and music 1.4 dB quieter (together 1.13, +1.1 dB), where there is little
+to clip: energy above 11.5 kHz −76.0 dB median before and −76.9 dB after, worst quarter second
+−57.0 dB before and −53.5 dB after; the quiet voice after the loud part is within 0.1 dB in both.
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.
