@@ -44,7 +44,7 @@ pub fn list_devices(kind: InputKind) -> Vec<Device> {
 pub fn capture(kind: InputKind, device_id: Option<&str>, shared: &InputShared) -> Result<(), Box<dyn Error>> {
     gst::init()?;
     let device = match (kind, device_id) {
-        (InputKind::Application(_), _) => return Err(super::not_yet().into()),
+        (InputKind::Application(_) | InputKind::SystemExcept(_), _) => return Err(super::not_yet().into()),
         (_, Some(id)) => Some(id.to_owned()),
         (InputKind::System, None) => Some("@DEFAULT_MONITOR@".to_owned()),
         (InputKind::Microphone, None) => None,

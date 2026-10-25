@@ -228,9 +228,10 @@ impl App {
         }
         app.apply_capture_visibility();
         app.refresh_devices();
+        // The application first: desktop audio leaves it out.
+        app.restart_app_audio();
         app.restart_input(InputKind::System);
         app.restart_input(InputKind::Microphone);
-        app.restart_app_audio();
         app.refresh_sources();
         app.restart_preview(&cc.egui_ctx);
         app.restart_camera(&cc.egui_ctx);
@@ -312,14 +313,16 @@ impl App {
     fn channel(&self, kind: InputKind) -> (bool, Option<String>, f32) {
         let c = &self.config;
         match kind {
-            InputKind::System => (c.system_audio, c.system_device.clone(), channel_gain(c.system_volume, c.system_muted)),
+            InputKind::System | InputKind::SystemExcept(_) => {
+                (c.system_audio, c.system_device.clone(), channel_gain(c.system_volume, c.system_muted))
+            }
             InputKind::Microphone => (c.mic, c.mic_device.clone(), channel_gain(c.mic_volume, c.mic_muted)),
             InputKind::Application(_) => (c.app_audio.is_some(), None, channel_gain(c.app_volume, c.app_muted)),
         }
     }
 
     /// Captures the configured application's audio, if that application is running now.
-    fn restart_app_audio(&mut self) {
+    fn start_app_audio(&mut self) {
         self.app_audio = None;
         let Some(exe) = &self.config.app_audio else { return };
         let Some(app) = capture::list_audio_apps().into_iter().find(|a| a.exe.eq_ignore_ascii_case(exe)) else { return };
@@ -327,10 +330,26 @@ impl App {
         self.app_audio = Some(Input::start(InputKind::Application(app.pid), None, gain, Some(self.ctx.clone())));
     }
 
+    /// Restarts the application's capture and, when that changes what desktop audio has to
+    /// leave out, desktop audio too.
+    fn restart_app_audio(&mut self) {
+        self.start_app_audio();
+        let wanted = system_kind(self.app_audio.as_ref().map(|a| a.kind), self.config.system_device.as_deref());
+        if self.system.as_ref().is_some_and(|s| s.kind != wanted) {
+            self.restart_input(InputKind::System);
+        }
+    }
+
     fn restart_input(&mut self, kind: InputKind) {
+        let kind = match kind {
+            InputKind::System | InputKind::SystemExcept(_) => {
+                system_kind(self.app_audio.as_ref().map(|a| a.kind), self.config.system_device.as_deref())
+            }
+            other => other,
+        };
         let (enabled, device, gain) = self.channel(kind);
         let slot = match kind {
-            InputKind::System => &mut self.system,
+            InputKind::System | InputKind::SystemExcept(_) => &mut self.system,
             InputKind::Microphone => &mut self.mic,
             InputKind::Application(_) => &mut self.app_audio,
         };
@@ -1661,6 +1680,16 @@ fn channel_gain(volume: f32, muted: bool) -> f32 {
     if muted { 0.0 } else { volume * volume }
 }
 
+/// Desktop audio leaves out the application captured on its own (`app`), which it would
+/// otherwise repeat. Leaving a process out is not tied to an output device, so with a chosen
+/// one (`system_device`) desktop audio stays that device's whole output.
+fn system_kind(app: Option<InputKind>, system_device: Option<&str>) -> InputKind {
+    match (app, system_device) {
+        (Some(InputKind::Application(pid)), None) => InputKind::SystemExcept(pid),
+        _ => InputKind::System,
+    }
+}
+
 /// Where `region` of a `source`-sized image falls on the preview `canvas`.
 fn region_rect(region: Region, canvas: Rect, source: (u32, u32)) -> Rect {
     let scale = vec2(canvas.width() / source.0 as f32, canvas.height() / source.1 as f32);
@@ -2151,6 +2180,13 @@ mod tests {
         assert_eq!(repaint_interval(false, &[0.0, 0.2, 0.0]), fast, "a meter is moving");
         assert_eq!(repaint_interval(false, &[0.002, 0.0, 0.0]), fast, "a meter is still falling");
         assert_eq!(repaint_interval(true, &[0.0; 3]), fast, "the recording timer runs");
+    }
+
+    #[test]
+    fn desktop_audio_leaves_out_the_application_captured_on_its_own() {
+        assert_eq!(system_kind(Some(InputKind::Application(42)), None), InputKind::SystemExcept(42));
+        assert_eq!(system_kind(None, None), InputKind::System, "no application captured");
+        assert_eq!(system_kind(Some(InputKind::Application(42)), Some("speakers")), InputKind::System, "a chosen output device");
     }
 
     #[test]

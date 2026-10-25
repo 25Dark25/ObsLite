@@ -67,6 +67,7 @@ cargo test --locked
 | `update::versions_compare_numerically` | Only a strictly newer plain version counts as an update. |
 | `update::release_is_read_from_the_github_response` | The tag and page are read from GitHub's response; an error response gives nothing. |
 | `app::saved_message_survives_a_source_that_is_gone` | When the recorded window is closed, the "saved" message and file link stay, and the source is deselected. |
+| `app::desktop_audio_leaves_out_the_application_captured_on_its_own` | With an application captured on its own, desktop audio leaves it out; not with no application, nor with a chosen output device. |
 | `app::a_new_release_opens_the_dialog_unless_skipped` | A newer release opens the update dialog unless the user chose not to be reminded of that version; the status-bar link shows either way. |
 | `app::update_dialog_buttons_stay_inside_it_in_both_languages` | In Spanish and English, nothing in the update dialog starts left of its title: the buttons fit. |
 
@@ -283,6 +284,20 @@ update dialog and the version changed:
 Not repeated for 0.4.1: the interface flow, hotkeys, the replay buffer from the interface, the
 installer on the test machine (the CI `installer` job covers it) and the Flatpak bundle itself
 (the CI `flatpak` job builds it), as none of that changed.
+
+2026-10-25, application audio and desktop audio together, on the Windows laptop: `ffplay` playing
+a 1 kHz tone, captured as application audio, while PowerShell played a 440 Hz tone; 4.9 s
+recordings from the interface with desktop audio on its default device, 0.4.1 against this change:
+
+| Application channel | 0.4.1: 1 kHz / 440 Hz | Change: 1 kHz / 440 Hz |
+|---|---|---|
+| On | −30.8 / −31.2 dBFS (the application twice) | −33.7 / −31.1 dBFS |
+| Muted | −33.7 / −31.1 dBFS (still heard, through desktop audio) | −88.3 / −31.1 dBFS (gone) |
+
+The application's two copies in 0.4.1 arrive slightly apart, so a steady tone partly cancels
+(+2.9 dB rather than +6 dB). With `ffplay` started after obs-lite, its channel muted, the change
+recorded 1 kHz at −97.1 dBFS and 440 Hz at −31.1 dBFS: desktop audio switches when the recording
+starts. Not tested: a chosen output device (left as before by design).
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.

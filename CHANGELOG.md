@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- With application audio on, desktop audio no longer includes that application as well: it is
+  heard once instead of twice, and muting its channel silences it. Not when desktop audio is set
+  to a specific output device.
+
 ## [0.4.1] - 2026-10-24
 
 ### Changed
