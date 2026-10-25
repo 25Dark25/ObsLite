@@ -8,6 +8,7 @@ mod camera;
 mod capture;
 mod config;
 mod media;
+mod mp4;
 mod hotkeys;
 mod tray;
 mod update;

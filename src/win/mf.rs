@@ -36,7 +36,7 @@ use windows::Win32::Media::MediaFoundation::{
     MFT_MESSAGE_NOTIFY_END_OF_STREAM, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_MESSAGE_SET_D3D_MANAGER,
     MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MFT_REGISTER_TYPE_INFO, MF_VERSION, MFSTARTUP_FULL, MFShutdown, MFStartup, MFTEnum2,
     MFTEnumEx,
-    MFTranscodeContainerType_MPEG4, MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
+    MFTranscodeContainerType_FMPEG4, MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
     MFVideoPrimaries_BT709, MFVideoTransFunc_709, MFVideoTransferMatrix_BT709, eAVEncCommonRateControlMode_UnconstrainedVBR, eAVEncH264VProfile_High,
 };
 use windows::Win32::System::Com::CoTaskMemFree;
@@ -574,9 +574,11 @@ impl Aac {
 // ------------------------------------------------------------------ MP4
 
 /// Writes already encoded packets into an MP4 file. Times are shifted so the file starts at
-/// `start` (a video keyframe).
+/// `start` (a video keyframe). The file is fragmented while it is written, so it plays up to its
+/// last fragment (about 0.3 s) if the process dies, and becomes a regular MP4 when finished.
 pub struct Mp4 {
     writer: IMFSinkWriter,
+    path: std::path::PathBuf,
     audio: bool,
     start: i64,
     _media: Media,
@@ -589,7 +591,7 @@ impl Mp4 {
             let mut attributes = None;
             MFCreateAttributes(&mut attributes, 3)?;
             let attributes = attributes.expect("MFCreateAttributes returned nothing");
-            attributes.SetGUID(&MF_TRANSCODE_CONTAINERTYPE, &MFTranscodeContainerType_MPEG4)?;
+            attributes.SetGUID(&MF_TRANSCODE_CONTAINERTYPE, &MFTranscodeContainerType_FMPEG4)?;
             attributes.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 0)?;
             attributes.SetUINT32(&MF_SINK_WRITER_DISABLE_THROTTLING, 1)?;
             let path = std::path::absolute(path).map_err(|_| windows::core::Error::from(windows::Win32::Foundation::E_INVALIDARG))?;
@@ -602,7 +604,7 @@ impl Mp4 {
                 writer.SetInputMediaType(audio_stream, audio, None)?;
             }
             writer.BeginWriting()?;
-            Ok(Self { writer, audio: audio.is_some(), start, _media: media })
+            Ok(Self { writer, path, audio: audio.is_some(), start, _media: media })
         }
     }
 
@@ -631,7 +633,10 @@ impl Mp4 {
     }
 
     pub fn finish(self) -> Result<()> {
-        unsafe { self.writer.Finalize() }
+        unsafe { self.writer.Finalize() }?;
+        // If this fails the file stays fragmented, which still plays.
+        let _ = crate::mp4::defragment(&self.path);
+        Ok(())
     }
 }
 
