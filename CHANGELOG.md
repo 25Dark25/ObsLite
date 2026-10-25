@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Windows: every recording left about 120 MB of memory behind, so obs-lite grew with each
+  one (676 MB after five). The hardware encoder kept the GPU device of the recording, with its
+  textures, until obs-lite closed; it is now shut down when the recording ends.
 - With application audio on, desktop audio no longer includes that application as well: it is
   heard once instead of twice, and muting its channel silences it. Not when desktop audio is set
   to a specific output device.
