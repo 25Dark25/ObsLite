@@ -117,6 +117,30 @@ pub fn crop_rgba(rgba: &[u8], width: u32, region: Region) -> Vec<u8> {
     rows.flat_map(|row| &row[x..x + w]).copied().collect()
 }
 
+/// How a captured frame goes onto a recording `input` pixels in size.
+#[cfg(any(windows, test))]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Placement {
+    /// The frame is the recording's size.
+    Copy,
+    /// Copy what fits from this corner of the frame, black where it does not cover.
+    Crop((u32, u32)),
+    /// A window resized while recording: scale it to fit.
+    Scale,
+}
+
+/// Where a `frame`-sized picture goes: `region` is the top-left corner of the recorded region,
+/// if there is one. A recording is even-sized, so an odd frame loses its last column or row.
+#[cfg(any(windows, test))]
+pub(crate) fn placement(frame: (u32, u32), input: (u32, u32), region: Option<(u32, u32)>) -> Placement {
+    match region {
+        Some((0, 0)) | None if frame == input => Placement::Copy,
+        Some(origin) => Placement::Crop(origin),
+        None if (frame.0 & !1, frame.1 & !1) == input => Placement::Crop((0, 0)),
+        None => Placement::Scale,
+    }
+}
+
 /// Writes an RGBA image as PNG.
 pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
     let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
@@ -131,6 +155,17 @@ pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_odd_sized_frame_is_cropped_not_scaled() {
+        assert_eq!(placement((1001, 701), (1000, 700), None), Placement::Crop((0, 0)));
+        assert_eq!(placement((1000, 700), (1000, 700), None), Placement::Copy);
+        assert_eq!(placement((1000, 700), (1000, 700), Some((0, 0))), Placement::Copy);
+        assert_eq!(placement((1920, 1080), (1000, 700), Some((8, 4))), Placement::Crop((8, 4)));
+        // A window resized while recording.
+        assert_eq!(placement((1200, 800), (1000, 700), None), Placement::Scale);
+        assert_eq!(placement((999, 700), (1000, 700), None), Placement::Scale);
+    }
 
     #[test]
     fn bgra_rows_with_padding_become_packed_rgba() {
