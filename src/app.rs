@@ -1581,10 +1581,18 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
                 (tr!("Silenciar / Activar Mic/Aux", "Mute / Unmute Mic/Aux"), mute_mic),
             ];
             grid("hotkeys").show(ui, |ui| {
+                let mut slots = Vec::new();
+                let mut set = None;
                 for (i, (label, slot)) in rows.into_iter().enumerate() {
                     ui.label(label);
-                    hotkey_field(ui, i, slot, capturing);
+                    if hotkey_field(ui, i, slot, capturing) {
+                        set = Some(i);
+                    }
+                    slots.push(slot);
                     ui.end_row();
+                }
+                if let Some(row) = set {
+                    take_from_others(&mut slots, row);
                 }
             });
             ui.add_space(6.0);
@@ -1978,7 +1986,9 @@ fn hotkey_hint(hotkey: &Option<String>) -> String {
 }
 
 /// OBS-style hotkey field: click it, then press the combination; Escape cancels, × clears.
-fn hotkey_field(ui: &mut egui::Ui, row: usize, slot: &mut Option<String>, capturing: &mut Option<usize>) {
+/// One hotkey's button; true when a new combination was just set.
+fn hotkey_field(ui: &mut egui::Ui, row: usize, slot: &mut Option<String>, capturing: &mut Option<usize>) -> bool {
+    let mut set = false;
     ui.horizontal(|ui| {
         let waiting = *capturing == Some(row);
         let text = if waiting {
@@ -2005,12 +2015,26 @@ fn hotkey_field(ui: &mut egui::Ui, row: usize, slot: &mut Option<String>, captur
             if let Some(text) = pressed {
                 if text.is_some() {
                     *slot = text;
+                    set = true;
                 }
                 *capturing = None;
             }
         }
     });
+    set
 }
+
+/// A combination set for one action is taken from any other that had it: the system would
+/// refuse the second registration, and blame another application.
+fn take_from_others(slots: &mut [&mut Option<String>], row: usize) {
+    let taken = slots[row].clone();
+    for (i, slot) in slots.iter_mut().enumerate() {
+        if i != row && **slot == taken {
+            **slot = None;
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -2231,6 +2255,14 @@ mod tests {
         // Another Escape, with no wait, closes it.
         settings_pass(&ctx, &mut app, vec![escape]);
         assert!(app.settings.is_none());
+    }
+
+    #[test]
+    fn a_hotkey_set_for_one_action_is_taken_from_another() {
+        // F9 was just set for the first action, and the second had it.
+        let (mut a, mut b, mut c) = (Some("F9".to_owned()), Some("F9".to_owned()), None);
+        take_from_others(&mut [&mut a, &mut b, &mut c], 0);
+        assert_eq!((a.as_deref(), b, c), (Some("F9"), None, None));
     }
 
     #[test]
