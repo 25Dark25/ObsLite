@@ -393,3 +393,17 @@ webcam, the installer on the test machine and the Flatpak bundle itself; CI's `i
 
 Not tested at all: NVIDIA (with this engine) and AMD encoders, Windows 10, multiple monitors,
 HDR displays.
+
+2026-10-27, Linux on a laptop with Intel UHD (Raptor Lake) and RTX 4060 GPUs: Pop!_OS 24.04 with
+COSMIC on Wayland, NVIDIA driver 595.104.02, 1920×1080 at 144 Hz. The 0.5.0 Flatpak could not record:
+the VA-API and NVENC encoders take only NV12, and obs-lite gave them I420.
+
+| Step | Result |
+|---|---|
+| Each encoder in the Flatpak (GStreamer 1.28), 120 frames 1080p60 of a test pattern | `vah264enc`, `vah264lpenc` and `nvh264enc` fail to link with I420 and encode with NV12; `x264enc` encodes with both |
+| Automated tests and clippy | 60 passed (one ignored) on 1.95 and stable; clippy clean on both for Linux; the new test fails with I420 (`vah264lpenc does not take I420`) |
+| Self-test 10 s 1080p60, Flatpak built from the change | `vah264enc` (Intel); 581 frames, 0 lagged, 9.68 s, H.264 High + AAC-LC, 0 decode errors |
+
+Not verified: recording with NVENC through obs-lite (VA-API comes first when both are present; only
+the 120-frame test above used NVENC); AMD. The system's GStreamer 1.24 `nvh264enc` (Ubuntu 24.04)
+fails with this driver ("Selected preset not supported") with either format.

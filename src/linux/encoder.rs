@@ -81,7 +81,7 @@ impl Encoder {
     pub fn new(s: EncoderSettings, clock: Arc<Clock>, started: Arc<AtomicBool>, outputs: Arc<Mutex<Outputs>>) -> Result<Self, String> {
         gst::init().map_err(|e| e.to_string())?;
         let fps = s.fps.max(1);
-        let (name, h264) = h264_encoder(s.bitrate, fps)?;
+        let (name, format, h264) = h264_encoder(s.bitrate, fps)?;
         let (iw, ih) = s.input;
         let (ow, oh) = s.output;
         let frame_bytes = iw as u64 * ih as u64 * 4;
@@ -89,7 +89,7 @@ impl Encoder {
             "appsrc name=src is-live=true format=time block=false max-bytes={max} \
                caps=video/x-raw,format=BGRx,width={iw},height={ih},framerate={fps}/1 \
              ! videoconvert n-threads=0 ! videoscale \
-             ! video/x-raw,format=I420,width={ow},height={oh},colorimetry=bt709 \
+             ! video/x-raw,format={format},width={ow},height={oh},colorimetry=bt709 \
              ! {h264} ! h264parse ! video/x-h264,stream-format=avc,alignment=au \
              ! appsink name=sink sync=false",
             max = frame_bytes * (QUEUED_FRAMES + 2),
@@ -339,22 +339,27 @@ fn to_packet(sample: &gst::Sample) -> Option<Packet> {
     })
 }
 
-/// The first available H.264 encoder, hardware first, as a launch fragment named `enc`.
-fn h264_encoder(bitrate: u32, fps: u32) -> Result<(String, String), String> {
+/// H.264 encoders, hardware first: the factory, the raw format it takes (VA-API and NVENC only
+/// take NV12, OpenH264 only I420) and a launch fragment named `enc`.
+fn h264_candidates(bitrate: u32, fps: u32) -> [(&'static str, &'static str, String); 5] {
     let kbps = (bitrate / 1000).max(1);
     // A keyframe every 2 s: where a replay or a new recording can start.
     let gop = fps * 2;
-    let candidates = [
-        ("vah264enc", format!("vah264enc name=enc bitrate={kbps} key-int-max={gop} b-frames=0")),
-        ("vah264lpenc", format!("vah264lpenc name=enc bitrate={kbps} key-int-max={gop} b-frames=0")),
-        ("nvh264enc", format!("nvh264enc name=enc bitrate={kbps} gop-size={gop} bframes=0")),
-        ("x264enc", format!("x264enc name=enc bitrate={kbps} key-int-max={gop} tune=zerolatency speed-preset=veryfast")),
-        ("openh264enc", format!("openh264enc name=enc bitrate={bitrate} gop-size={gop} complexity=low")),
-    ];
-    candidates
+    [
+        ("vah264enc", "NV12", format!("vah264enc name=enc bitrate={kbps} key-int-max={gop} b-frames=0")),
+        ("vah264lpenc", "NV12", format!("vah264lpenc name=enc bitrate={kbps} key-int-max={gop} b-frames=0")),
+        ("nvh264enc", "NV12", format!("nvh264enc name=enc bitrate={kbps} gop-size={gop} bframes=0")),
+        ("x264enc", "I420", format!("x264enc name=enc bitrate={kbps} key-int-max={gop} tune=zerolatency speed-preset=veryfast")),
+        ("openh264enc", "I420", format!("openh264enc name=enc bitrate={bitrate} gop-size={gop} complexity=low")),
+    ]
+}
+
+/// The first available H.264 encoder: its factory, raw format and launch fragment.
+fn h264_encoder(bitrate: u32, fps: u32) -> Result<(String, &'static str, String), String> {
+    h264_candidates(bitrate, fps)
         .into_iter()
-        .find(|(factory, _)| gst::ElementFactory::find(factory).is_some())
-        .map(|(factory, fragment)| (factory.to_owned(), fragment))
+        .find(|(factory, _, _)| gst::ElementFactory::find(factory).is_some())
+        .map(|(factory, format, fragment)| (factory.to_owned(), format, fragment))
         .ok_or_else(|| tr!("no hay ningún codificador H.264 de GStreamer instalado", "no GStreamer H.264 encoder is installed").to_owned())
 }
 
@@ -542,5 +547,15 @@ mod tests {
         assert_eq!(config >> 11, 2);
         assert_eq!((config >> 7) & 0xF, 3);
         assert_eq!((config >> 3) & 0xF, CHANNELS as u16);
+    }
+
+    #[test]
+    fn every_installed_h264_encoder_takes_its_format() {
+        gst::init().unwrap();
+        for (factory, format, _) in h264_candidates(2_000_000, 30) {
+            let Some(found) = gst::ElementFactory::find(factory) else { continue };
+            let caps = gst::Caps::builder("video/x-raw").field("format", format).build();
+            assert!(found.can_sink_any_caps(&caps), "{factory} does not take {format}");
+        }
     }
 }
