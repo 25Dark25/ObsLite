@@ -79,6 +79,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Linux: recording failed at once wherever a hardware H.264 encoder was found: the hardware H.264
   encoders (VA-API and NVENC) only take NV12 pictures, and obs-lite gave them I420. Software
   encoding (x264), used where there is no GPU, was not affected.
+- Escape while setting a hotkey cancels only that, not the whole Settings dialog with its changes.
+- Setting a hotkey that another action has takes it from that action; before, the second one
+  failed and the message blamed another application.
+- While Settings is open, the tray does not start a recording or the replay buffer (it says to
+  close Settings first): OK there then undid part of the new recording's state.
+- An audio device that failed (unplugged, then plugged back in) is tried again when a session
+  starts, or on OK in Settings.
+- A screenshot asked for while a recording is being saved says to wait, instead of asking for a
+  source.
+- The Hotkeys page now says why it is greyed out during a session, as the other pages do.
+- Menus close when a session starts, so an open one can no longer remove the camera or the
+  application audio from a running recording.
+- A minimized window no longer wakes 15 times a second after loud audio.
 
 ## [0.5.0] - 2026-10-25
 

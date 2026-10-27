@@ -268,6 +268,10 @@ impl App {
         matches!(self.rec, RecState::Active { replay: true, .. })
     }
 
+    fn is_session_active(&self) -> bool {
+        matches!(self.rec, RecState::Active { .. })
+    }
+
     /// The capture session of a recording or the replay buffer.
     fn active_session(&self) -> Option<&Session> {
         match &self.rec {
@@ -540,10 +544,19 @@ impl App {
         };
         // One capture session at a time: the recording session also feeds the preview.
         self.preview = None;
+        // A menu left open (the session started from a hotkey) would still change the sources.
+        egui::Popup::close_all(ctx);
 
-        // The application may have started after obs-lite.
+        // The application may have started after obs-lite, and a device that failed (unplugged)
+        // may be back.
         if self.app_audio.is_none() {
             self.restart_app_audio();
+        }
+        if input_failed(&self.system) {
+            self.restart_input(InputKind::System);
+        }
+        if input_failed(&self.mic) {
+            self.restart_input(InputKind::Microphone);
         }
         let inputs: Vec<_> =
             [&self.system, &self.mic, &self.app_audio].into_iter().flatten().map(|i| i.shared.clone()).collect();
@@ -674,6 +687,9 @@ impl App {
 
     /// Saves the newest frame of the current source as a PNG in the recordings folder.
     fn take_screenshot(&mut self, ctx: &egui::Context) {
+        if matches!(self.rec, RecState::Saving(_)) {
+            return self.set_status(tr!("Espera a que se guarde la grabación.", "Wait until the recording is saved."), None, true);
+        }
         let Some(session) = self.active_session().or(self.preview.as_ref()) else {
             return self.set_status(tr!("Añade una fuente con el botón + del panel Fuentes.", "Add a source with the + button in the Sources dock."), None, true);
         };
@@ -726,6 +742,11 @@ impl App {
         let commands: Vec<TrayCommand> = self.tray_commands.lock().unwrap().drain(..).collect();
         for command in commands {
             match command {
+                // Settings applies a copy of the config taken when it opened, which a session started
+                // now would not be in; stopping is fine.
+                TrayCommand::ToggleRecording | TrayCommand::ToggleReplay if self.settings.is_some() && !self.is_session_active() => {
+                    self.set_status(tr!("Cierra los ajustes para empezar.", "Close Settings to start."), None, true);
+                }
                 TrayCommand::ToggleRecording => self.handle(ctx, Action::ToggleRecording),
                 TrayCommand::TogglePause => self.handle(ctx, Action::TogglePause),
                 TrayCommand::ToggleReplay => self.handle(ctx, Action::ToggleReplay),
@@ -859,10 +880,11 @@ impl App {
             self.refresh_sources();
             self.config.source_label = self.selected_source().map(|s| s.label.clone());
         }
-        if system_changed {
+        // OK also tries again a device that failed (unplugged, then plugged back in).
+        if system_changed || input_failed(&self.system) {
             self.restart_input(InputKind::System);
         }
-        if mic_changed {
+        if mic_changed || input_failed(&self.mic) {
             self.restart_input(InputKind::Microphone);
         }
         if let Some(mic) = &self.mic {
@@ -1383,6 +1405,9 @@ impl App {
     fn settings_dialog(&mut self, ctx: &egui::Context) {
         let Some(dialog) = &mut self.settings else { return };
         let recording = matches!(self.rec, RecState::Active { .. });
+        // Read before the dialog runs: Escape there ends the wait for a hotkey, and must not then
+        // also close the dialog.
+        let capturing = dialog.capturing.is_some();
         let mut decision = None;
         let response = egui::Modal::new(egui::Id::unique("settings"))
             .frame(egui::Frame::new().fill(GREY7).stroke(Stroke::new(1.0, GREY4)).corner_radius(6).inner_margin(12))
@@ -1406,7 +1431,8 @@ impl App {
                                 .fill(if selected { PRIMARY } else { Color32::TRANSPARENT })
                                 .min_size(vec2(130.0, 28.0));
                             if ui.add(button).clicked() {
-                                dialog.page = page;
+                                // A hotkey wait only makes sense on its own page.
+                                (dialog.page, dialog.capturing) = (page, None);
                             }
                         }
                     });
@@ -1414,7 +1440,7 @@ impl App {
                     ui.painter().vline(line.center().x, line.y_range(), Stroke::new(1.0, GREY4));
                     ui.allocate_ui_with_layout(vec2(ui.available_width(), body), Layout::top_down(Align::Min), |ui| {
                         ui.set_min_height(body);
-                        if recording && dialog.page != SettingsPage::Hotkeys {
+                        if recording {
                             ui.label(RichText::new(tr!("Detén la grabación y el búfer de repetición para cambiar estos ajustes.", "Stop recording and the replay buffer to change these settings.")).color(YELLOW));
                             ui.add_space(6.0);
                         }
@@ -1434,8 +1460,6 @@ impl App {
                     }
                 });
             });
-        // Escape while waiting for a hotkey cancels that, not the dialog.
-        let capturing = self.settings.as_ref().is_some_and(|d| d.capturing.is_some());
         if response.should_close() && decision.is_none() && !capturing {
             decision = Some(false);
         }
@@ -1605,10 +1629,18 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
                 (tr!("Silenciar / Activar Mic/Aux", "Mute / Unmute Mic/Aux"), mute_mic),
             ];
             grid("hotkeys").show(ui, |ui| {
+                let mut slots = Vec::new();
+                let mut set = None;
                 for (i, (label, slot)) in rows.into_iter().enumerate() {
                     ui.label(label);
-                    hotkey_field(ui, i, slot, capturing);
+                    if hotkey_field(ui, i, slot, capturing) {
+                        set = Some(i);
+                    }
+                    slots.push(slot);
                     ui.end_row();
+                }
+                if let Some(row) = set {
+                    take_from_others(&mut slots, row);
                 }
             });
             ui.add_space(6.0);
@@ -1632,6 +1664,11 @@ impl eframe::App for App {
         let hidden = preview_hidden(ctx.input(|i| i.viewport().visible()), self.last_drawn.elapsed());
         if let Some(session) = self.active_session().or(self.preview.as_ref()) {
             session.shared.preview_hidden.store(hidden, Ordering::Relaxed);
+        }
+        // The meters fall only while drawn: hidden, they would keep the window waking 15 times a
+        // second. They start again from silence when it shows.
+        if hidden {
+            self.meters = [0.0; 3];
         }
         ctx.request_repaint_after(repaint_interval(self.active_session().is_some(), &self.meters));
     }
@@ -2027,7 +2064,9 @@ fn hotkey_hint(hotkey: &Option<String>) -> String {
 }
 
 /// OBS-style hotkey field: click it, then press the combination; Escape cancels, × clears.
-fn hotkey_field(ui: &mut egui::Ui, row: usize, slot: &mut Option<String>, capturing: &mut Option<usize>) {
+/// One hotkey's button; true when a new combination was just set.
+fn hotkey_field(ui: &mut egui::Ui, row: usize, slot: &mut Option<String>, capturing: &mut Option<usize>) -> bool {
+    let mut set = false;
     ui.horizontal(|ui| {
         let waiting = *capturing == Some(row);
         let text = if waiting {
@@ -2054,11 +2093,29 @@ fn hotkey_field(ui: &mut egui::Ui, row: usize, slot: &mut Option<String>, captur
             if let Some(text) = pressed {
                 if text.is_some() {
                     *slot = text;
+                    set = true;
                 }
                 *capturing = None;
             }
         }
     });
+    set
+}
+
+/// A combination set for one action is taken from any other that had it: the system would
+/// refuse the second registration, and blame another application.
+fn take_from_others(slots: &mut [&mut Option<String>], row: usize) {
+    let taken = slots[row].clone();
+    for (i, slot) in slots.iter_mut().enumerate() {
+        if i != row && **slot == taken {
+            **slot = None;
+        }
+    }
+}
+
+/// An audio input that stopped with an error (its device was unplugged, say).
+fn input_failed(input: &Option<Input>) -> bool {
+    input.as_ref().is_some_and(|i| i.shared.error().is_some())
 }
 
 #[cfg(test)]
@@ -2259,6 +2316,48 @@ mod tests {
             assert!(app.config.last_recording.is_none());
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// One pass of the settings dialog with `events` as input.
+    fn settings_pass(ctx: &egui::Context, app: &mut App, events: Vec<egui::Event>) {
+        let mut output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| app.settings_dialog(ui.ctx()));
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn escape_while_waiting_for_a_hotkey_keeps_the_dialog_open() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut app = test_app();
+        app.settings = Some(SettingsDialog { draft: Config::default(), page: SettingsPage::Hotkeys, capturing: Some(0) });
+        let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        let ctx = egui::Context::default();
+        settings_pass(&ctx, &mut app, Vec::new());
+        settings_pass(&ctx, &mut app, vec![escape.clone()]);
+        let dialog = app.settings.as_ref().expect("still open");
+        assert!(dialog.capturing.is_none(), "the wait for a hotkey ended");
+        // Another Escape, with no wait, closes it.
+        settings_pass(&ctx, &mut app, vec![escape]);
+        assert!(app.settings.is_none());
+    }
+
+    #[test]
+    fn a_hotkey_set_for_one_action_is_taken_from_another() {
+        // F9 was just set for the first action, and the second had it.
+        let (mut a, mut b, mut c) = (Some("F9".to_owned()), Some("F9".to_owned()), None);
+        take_from_others(&mut [&mut a, &mut b, &mut c], 0);
+        assert_eq!((a.as_deref(), b, c), (Some("F9"), None, None));
+    }
+
+    #[test]
+    fn the_tray_does_not_start_a_session_while_settings_is_open() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut app = test_app();
+        app.settings = Some(SettingsDialog { draft: Config::default(), page: SettingsPage::General, capturing: None });
+        app.tray_commands.lock().unwrap().push(TrayCommand::ToggleRecording);
+        app.poll(&egui::Context::default());
+        let status = app.status.as_ref().expect("a status");
+        assert!(status.text.contains("ajustes"), "status: {}", status.text);
+        assert!(matches!(app.rec, RecState::Idle));
     }
 
     #[test]
