@@ -4,7 +4,8 @@
 //! docks below; status bar; Settings dialog) and uses its Yami palette and Spanish
 //! wording, so OBS users find everything where they expect it.
 
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
@@ -148,6 +149,8 @@ pub struct App {
     update_dialog: bool,
     /// Files being written in the background (a stopped recording, a replay).
     jobs: Vec<JoinHandle<Status>>,
+    /// Output files named this run, which may not exist yet.
+    named: HashSet<PathBuf>,
 }
 
 impl App {
@@ -209,6 +212,7 @@ impl App {
             update_check: None,
             update_dialog: false,
             jobs: Vec::new(),
+            named: HashSet::new(),
         };
         // The Flatpak has no network access, for privacy; Linux users follow the Releases page.
         if cfg!(windows) && app.config.check_updates {
@@ -239,7 +243,10 @@ impl App {
         if let Some(e) = hotkey_error {
             app.set_status(tr!("Atajos globales no disponibles: {}", "Global hotkeys unavailable: {}", e), None, true);
         }
-        app.recover_last_recording();
+        // Another obs-lite may still be writing that recording.
+        if crate::config::first_instance() {
+            app.recover_last_recording();
+        }
         app
     }
 
@@ -451,6 +458,9 @@ impl App {
     }
 
     fn start_recording(&mut self, ctx: &egui::Context) {
+        if let Some(problem) = self.output_dir_problem() {
+            return self.set_status(problem, None, true);
+        }
         if let Err(e) = std::fs::create_dir_all(&self.config.output_dir) {
             return self.set_status(tr!("No se puede usar la ruta de grabación: {}", "Cannot use the recording path: {}", e), None, true);
         }
@@ -461,7 +471,7 @@ impl App {
         let shared = &session.shared;
         // The clock starts with the encoder; if the replay buffer started it, count from now.
         let since = if shared.encoder_ready.load(Ordering::Acquire) { shared.clock.elapsed() } else { Duration::ZERO };
-        let path = self.config.output_dir.join(format!("{}.mp4", chrono::Local::now().format("%Y-%m-%d %H-%M-%S")));
+        let path = new_output(&self.config.output_dir, None, "mp4", &mut self.named);
         shared.outputs.lock().unwrap().start_file(path.clone());
         *recording = Some(Recording { since });
         self.status = None;
@@ -479,18 +489,31 @@ impl App {
         *replay = true;
     }
 
+    /// Why files cannot go to the recordings folder, if they cannot.
+    fn output_dir_problem(&self) -> Option<String> {
+        crate::platform::sys::volatile(&self.config.output_dir).then(|| {
+            tr!(
+                "La ruta de grabación no está compartida con obs-lite: lo que se guardara ahí se perdería al cerrarlo. Elige la carpeta con Examinar.",
+                "The recording path is not shared with obs-lite: anything saved there would be lost when it closes. Choose the folder with Browse."
+            )
+            .to_owned()
+        })
+    }
+
     /// Saves the replay buffer as a new file, in the background.
     fn save_replay(&mut self, ctx: &egui::Context) {
         let Some(session) = self.active_session().filter(|_| self.is_replaying()) else {
             return self.set_status(tr!("Inicia el búfer de repetición para poder guardar repeticiones.", "Start the replay buffer to save replays."), None, true);
         };
+        if let Some(problem) = self.output_dir_problem() {
+            return self.set_status(problem, None, true);
+        }
         let replay = session.shared.outputs.lock().unwrap().replay();
         let replay = match replay {
             Ok(replay) => replay,
             Err(e) => return self.set_status(tr!("No se pudo guardar la repetición: {}", "Could not save the replay: {}", e), None, true),
         };
-        let name = format!("{} {}.mp4", tr!("Repetición", "Replay"), chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
-        let path = self.config.output_dir.join(name);
+        let path = new_output(&self.config.output_dir, Some(tr!("Repetición", "Replay")), "mp4", &mut self.named);
         self.spawn_job(ctx, move || match std::fs::create_dir_all(path.parent().unwrap_or(&path)).map_err(|e| e.to_string()).and_then(|()| replay.save(path)) {
             Ok(path) => saved(tr!("Repetición guardada en '{}'", "Replay saved to '{}'", crate::platform::sys::display_path(&path).display()), path),
             Err(e) => failed(tr!("No se pudo guardar la repetición: {}", "Could not save the replay: {}", e)),
@@ -670,6 +693,9 @@ impl App {
         let Some(session) = self.active_session().or(self.preview.as_ref()) else {
             return self.set_status(tr!("Añade una fuente con el botón + del panel Fuentes.", "Add a source with the + button in the Sources dock."), None, true);
         };
+        if let Some(problem) = self.output_dir_problem() {
+            return self.set_status(problem, None, true);
+        }
         let (mut width, mut height, mut rgba) = match session.snapshot() {
             Ok(image) => image,
             Err(e) => return self.set_status(tr!("No se pudo hacer la captura: {}", "Could not take the screenshot: {}", e), None, true),
@@ -683,8 +709,7 @@ impl App {
         {
             paste_camera(&mut rgba, width, height, &frame, corner, size);
         }
-        let name = format!("{} {}.png", tr!("Captura", "Screenshot"), chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
-        let path = self.config.output_dir.join(name);
+        let path = new_output(&self.config.output_dir, Some(tr!("Captura", "Screenshot")), "png", &mut self.named);
         let (tx, rx) = mpsc::channel();
         let ctx = ctx.clone();
         // PNG encoding of a large frame takes a moment; keep the UI responsive.
@@ -843,7 +868,8 @@ impl App {
         self.unbind_hotkeys();
     }
 
-    fn apply_settings(&mut self, new: Config) {
+    fn apply_settings(&mut self, mut new: Config) {
+        new.output_dir = typed_output_dir(new.output_dir, &self.config.output_dir);
         let old = std::mem::replace(&mut self.config, new);
         let c = &self.config;
         let system_changed = (old.system_audio, &old.system_device) != (c.system_audio, &c.system_device);
@@ -1733,6 +1759,31 @@ fn repaint_interval(active: bool, meters: &[f32]) -> Duration {
     if active || meters.iter().any(|m| *m > METER_FLOOR) { Duration::from_millis(66) } else { Duration::from_secs(1) }
 }
 
+/// A file in `dir` named after the current time (after `prefix`): never one that exists or was
+/// named before this run, since two saves can come in the same second and files are written
+/// in the background.
+fn new_output(dir: &Path, prefix: Option<&str>, ext: &str, named: &mut HashSet<PathBuf>) -> PathBuf {
+    let time = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
+    let stem = prefix.map_or_else(|| time.to_string(), |p| format!("{p} {time}"));
+    unused_name(dir, &stem, ext, named)
+}
+
+/// `dir/stem.ext`, or `dir/stem (2).ext` and so on if that is taken.
+fn unused_name(dir: &Path, stem: &str, ext: &str, named: &mut HashSet<PathBuf>) -> PathBuf {
+    let path = (1..)
+        .map(|n| dir.join(if n == 1 { format!("{stem}.{ext}") } else { format!("{stem} ({n}).{ext}") }))
+        .find(|p| !named.contains(p) && !p.exists())
+        .expect("an unused name");
+    named.insert(path.clone());
+    path
+}
+
+/// A typed recording path that is empty or relative would put recordings wherever obs-lite was
+/// started from: the previous folder is kept instead.
+fn typed_output_dir(typed: PathBuf, previous: &Path) -> PathBuf {
+    if typed.is_absolute() { typed } else { previous.to_owned() }
+}
+
 /// Slider position (0..1) to linear gain; squared for a more natural loudness curve.
 fn channel_gain(volume: f32, muted: bool) -> f32 {
     if muted { 0.0 } else { volume * volume }
@@ -2115,6 +2166,7 @@ mod tests {
             update_check: None,
             update_dialog: false,
             jobs: Vec::new(),
+            named: HashSet::new(),
         }
     }
 
@@ -2306,6 +2358,31 @@ mod tests {
         let status = app.status.as_ref().expect("a status");
         assert!(status.text.contains("ajustes"), "status: {}", status.text);
         assert!(matches!(app.rec, RecState::Idle));
+    }
+
+    #[test]
+    fn outputs_named_in_the_same_second_get_different_names() {
+        let dir = std::env::temp_dir().join(format!("obs-lite-names-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let name = |n: &str| dir.join(n);
+        let mut named = HashSet::new();
+        assert_eq!(unused_name(&dir, "Replay 1", "mp4", &mut named), name("Replay 1.mp4"));
+        // The first is still being written in the background: its name is taken anyway.
+        assert_eq!(unused_name(&dir, "Replay 1", "mp4", &mut named), name("Replay 1 (2).mp4"));
+        // Files from another run.
+        std::fs::write(name("Replay 1.mp4"), b"").unwrap();
+        std::fs::write(name("Replay 1 (2).mp4"), b"").unwrap();
+        assert_eq!(unused_name(&dir, "Replay 1", "mp4", &mut HashSet::new()), name("Replay 1 (3).mp4"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_typed_recording_path_must_be_absolute() {
+        let previous = Config::default().output_dir;
+        assert_eq!(typed_output_dir(PathBuf::new(), &previous), previous);
+        assert_eq!(typed_output_dir(PathBuf::from("Videos"), &previous), previous);
+        let typed = std::env::temp_dir().join("recordings");
+        assert_eq!(typed_output_dir(typed.clone(), &previous), typed);
     }
 
     #[test]

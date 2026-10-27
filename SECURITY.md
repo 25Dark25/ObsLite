@@ -22,19 +22,22 @@ starts it and installs nothing. Its only network connection is an optional updat
 start-up: one HTTPS request to `api.github.com` for the latest release, which is shown as a link
 and never downloaded (Settings › General turns it off). It reads two inputs it does not fully
 control, `%APPDATA%\obs-lite\settings.json` and that update response, and writes MP4 and PNG files
-to the folder chosen in Settings.
+to the folder chosen in Settings. At start-up it also repairs the last recording named in
+`settings.json` if it was cut short: it reads and rewrites that file, and may shorten it.
 
 On Linux it runs in a Flatpak sandbox without network access. Its permissions are listed, with the
 reason for each, in `packaging/flatpak/io.github._25Dark25.ObsLite.yml`: the display, the GPU,
 the sound server (desktop audio and microphone), the *Videos* folder and the tray. The screen, the
 webcam, global hotkeys and other folders go through desktop portals, which ask the user. It reads
-its `settings.json` and writes MP4 and PNG files in the same way.
+its `settings.json`, repairs the last recording and writes MP4 and PNG files in the same way, and
+reads the token the screen-sharing portal gives to restore the last choice.
 
 In scope:
 
 - Code in this repository and the release files published on its Releases page.
 - A crafted `settings.json` that causes memory corruption or code execution.
-- Recording something other than the selected source, recording after *Detener Grabación*, or
+- A crafted MP4 at the last recording's path that causes memory corruption when it is repaired.
+- Recording something other than the selected source, recording after *Stop Recording*, or
   writing recordings or settings anywhere other than the configured paths.
 - Flatpak permissions broader than the ones listed in the manifest, or used for something else.
 - Release files whose signature or checksum does not match, or problems in the CI workflows that

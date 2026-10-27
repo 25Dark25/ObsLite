@@ -92,7 +92,8 @@ pub fn capture(device: &str, shared: &CameraShared, repaint: Option<&eframe::egu
     gst::init().map_err(|e| e.to_string())?;
     let fd = open()?.ok_or_else(|| tr!("cámara no encontrada", "camera not found").to_owned())?;
     let pipeline = gst::parse::launch(&format!(
-        "pipewiresrc name=src fd={fd} ! videoconvert ! video/x-raw,format=BGRA ! appsink name=sink max-buffers=1 drop=true sync=false",
+        // An unplugged camera ends the stream (otherwise the last picture would stay, frozen).
+        "pipewiresrc name=src fd={fd} on-disconnect=error ! videoconvert ! video/x-raw,format=BGRA ! appsink name=sink max-buffers=1 drop=true sync=false",
         fd = fd.as_raw_fd()
     ))
     .map_err(|e| e.to_string())?
@@ -102,7 +103,7 @@ pub fn capture(device: &str, shared: &CameraShared, repaint: Option<&eframe::egu
         src.set_property("target-object", device);
     }
     let sink = pipeline.by_name("sink").and_then(|e| e.downcast::<gst_app::AppSink>().ok()).ok_or("no sink")?;
-    pipeline.set_state(gst::State::Playing).map_err(|e| e.to_string())?;
+    super::encoder::play(&pipeline)?;
     let bus = pipeline.bus().ok_or("no bus")?;
     let mut result = Ok(());
     while !shared.stopped() {

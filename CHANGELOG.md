@@ -9,8 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Recordings, replays and screenshots made in the same second no longer write over each other: a
+  name already in use gets " (2)", " (3)" and so on.
+- A second obs-lite started while the first is recording no longer "repairs" the recording the
+  first is still writing, which corrupted it.
+- A recording path typed empty or relative in Settings is not taken; recordings went to whatever
+  folder obs-lite was started from.
+- The settings file is replaced whole, so a crash or a full disk while saving no longer resets
+  every setting.
 - Windows: when the hardware encoder fails mid-recording (a GPU reset, a driver error), the
   recording stops with the error instead of hanging on "Saving…", or hanging obs-lite on exit.
+- Windows: desktop audio and the microphone follow the default device: switching to headphones
+  after obs-lite started left them on the old device, and desktop audio was silent in every
+  recording until a restart. An unplugged default device is opened again once there is one.
+- Windows: application audio no longer builds up delay after the system is briefly busy, and
+  packets Windows marks as silence are silent.
+- Windows: the window no longer redraws about 100 times a second while there is sound.
 - Windows: while the encoder was falling behind, a frame could be drawn over before the encoder
   had read it, showing frames out of order or half drawn.
 - A recording that cannot be written (a folder that cannot be written to, a full disk, an encoder
@@ -18,22 +32,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   showed at Stop, audio for the file piled up in memory, and the file was left unfinished even
   when most of it had been written. Now it is finished, keeping what was recorded until then, and
   the message says where. A replay that fails to save is finished too.
+- Turning a recording into a regular MP4 now puts its new index on the disk before the old ones
+  become padding: a power cut right after stopping could leave a file with no index at all.
+- A recording whose conversion was interrupted is finished at the next start with one index, not
+  two (the second one missing samples).
 - Linux: a failing encoder or a full disk is noticed while recording; before, every later packet
   queued in memory and the recording was reported as saved, cut short. If the encoder cannot be
   started, the error is shown instead of sharing the screen again and again.
 - Windows: capture works again on Windows 10 and on Windows 11 before 24H2. obs-lite asked
   Windows for a minimum time between frames, which only 24H2 and later support, so elsewhere no
   source could be previewed, recorded or captured.
+- Windows: the arrow keys and `=` `[` `]` `` ` `` can be global hotkeys.
+- Windows: the webcam overlay picks a mode of at least 25 fps when the camera has one; many
+  webcams offer 720p uncompressed at only 10 fps before 720p compressed at 30.
+- Windows: a camera that changes its picture size mid-stream no longer makes obs-lite read past
+  the end of a picture, and having no camera at all is handled cleanly.
+- Windows: installing a rebuilt package of the version already installed replaces it instead of
+  adding a second Obs Lite to the list of apps.
 - Windows: a window with an odd width or height is recorded sharp, losing its last column or row,
   instead of being scaled down on every frame with a black line at the edge.
+- Flatpak: a recording folder typed by hand that is not shared with obs-lite is refused, with a
+  message to choose it with Browse; recordings, replays and screenshots saved there were in the
+  sandbox's memory and lost when obs-lite closed.
+- Linux: obs-lite's language follows LANGUAGE, as other applications do.
+- Linux: clearing every hotkey releases its combinations; the desktop kept taking them from other
+  applications until obs-lite closed.
+- Linux: an unplugged camera ends with a message instead of leaving its last picture frozen.
+- Linux: a recording path that is not valid UTF-8 is refused instead of the file going elsewhere.
 - Windows: a failed preview picture, or a failed copy kept for screenshots, no longer stops a
   recording.
+- An audio input that stalled for a moment (a busy system) no longer stays late against the video
+  for the rest of the recording; a device a little faster than the clock no longer drifts up to
+  100 ms late either.
 - Windows: windows the desktop hides (suspended Store apps, windows on other virtual desktops) are
   no longer offered as sources or for application audio; capturing them gave no picture.
 - Linux: an H.264 encoder that is installed but fails at its first picture no longer makes the
   recording fail: each one is tried on one picture of the recording's size, and the next is used
   if it fails. For example, Ubuntu 24.04's NVENC encoder (GStreamer 1.24) fails with NVIDIA's
   595 driver; obs-lite then uses the next encoder (software if no other works).
+- `--selftest` with a negative or endless length no longer aborts mid-recording.
 - Linux: when the desktop's screen-sharing portal crashes, the capture now carries on: obs-lite
   starts sharing again from the remembered choice, without the dialog, and a recording keeps going
   with the picture frozen for under a second. Before, the preview was lost and a recording

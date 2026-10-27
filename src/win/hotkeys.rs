@@ -30,6 +30,21 @@ fn parse(text: &str) -> Option<HotKey> {
 }
 
 fn code(key: Key) -> Option<Code> {
+    // Named differently in egui and in keyboard-types.
+    let renamed = match key {
+        Key::ArrowUp => Some(Code::ArrowUp),
+        Key::ArrowDown => Some(Code::ArrowDown),
+        Key::ArrowLeft => Some(Code::ArrowLeft),
+        Key::ArrowRight => Some(Code::ArrowRight),
+        Key::Equals => Some(Code::Equal),
+        Key::OpenBracket => Some(Code::BracketLeft),
+        Key::CloseBracket => Some(Code::BracketRight),
+        Key::Backtick => Some(Code::Backquote),
+        _ => None,
+    };
+    if renamed.is_some() {
+        return renamed;
+    }
     let name = key.name();
     let code = match name.as_bytes() {
         [c] if c.is_ascii_uppercase() => format!("Key{name}"),
@@ -101,6 +116,11 @@ mod tests {
         assert_eq!(parse("Ctrl+Alt+R"), Some(expected));
         assert_eq!(parse("Ctrl+Shift+5"), Some(HotKey::new(Some(hotkey::Modifiers::CONTROL | hotkey::Modifiers::SHIFT), Code::Digit5)));
         assert_eq!(parse("F9"), Some(HotKey::new(None, Code::F9)));
+        // Keys egui and keyboard-types name differently.
+        assert_eq!(parse("Ctrl+Alt+Up"), Some(HotKey::new(Some(hotkey::Modifiers::CONTROL | hotkey::Modifiers::ALT), Code::ArrowUp)));
+        for key in [Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight, Key::Equals, Key::OpenBracket, Key::CloseBracket, Key::Backtick] {
+            assert!(supports(key), "{key:?}");
+        }
     }
 
     #[test]

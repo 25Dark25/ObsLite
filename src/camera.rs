@@ -201,9 +201,35 @@ impl Drop for Camera {
     }
 }
 
+/// Which camera mode to use, of `modes` as (width, height, frames per second): one at least 25
+/// fps if there is one (many webcams offer 720p uncompressed at only 10 fps, and compressed at
+/// 30), then the largest up to 1280 wide, which is plenty for an overlay, then the fastest.
+#[cfg(any(windows, test))]
+pub(crate) fn best_mode(modes: impl IntoIterator<Item = (u32, u32, f64)>) -> Option<usize> {
+    let rank = |(w, h, fps): (u32, u32, f64)| (fps >= 25.0, u64::from(w) * u64::from(h), (fps * 1000.0) as u64);
+    let mut best: Option<(usize, (bool, u64, u64))> = None;
+    for (i, mode) in modes.into_iter().enumerate() {
+        if mode.0 <= 1280 && best.is_none_or(|(_, b)| rank(mode) > b) {
+            best = Some((i, rank(mode)));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_camera_mode_fast_enough_wins_over_a_slow_one() {
+        // Uncompressed 720p at 10 fps listed before compressed 720p at 30.
+        assert_eq!(best_mode([(1280, 720, 10.0), (1280, 720, 30.0), (640, 480, 30.0)]), Some(1));
+        // Nothing fast enough: the largest.
+        assert_eq!(best_mode([(640, 480, 15.0), (1280, 720, 10.0)]), Some(1));
+        // Fast enough beats larger, and nothing wider than 1280.
+        assert_eq!(best_mode([(1280, 720, 10.0), (640, 360, 30.0), (1920, 1080, 30.0)]), Some(1));
+        assert_eq!(best_mode([(1920, 1080, 30.0)]), None);
+    }
 
     #[test]
     fn overlay_sits_in_the_corner_with_the_camera_aspect() {

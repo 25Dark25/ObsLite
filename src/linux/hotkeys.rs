@@ -117,10 +117,18 @@ impl GlobalHotkeys {
         }
         *self.state.ids.lock().unwrap() = bindings.iter().map(|b| b.id).collect();
         self.state.enabled.store(true, Ordering::Release);
-        if !shortcuts.is_empty() {
+        if shortcuts.is_empty() {
+            // None left: the desktop must stop taking the old combinations from other apps.
+            if let Some(previous) = self.state.session.lock().unwrap().take() {
+                thread::spawn(move || pollster::block_on(previous.close()));
+            }
+        } else {
             let state = self.state.clone();
             thread::spawn(move || {
-                if let Err(e) = pollster::block_on(listen(&state, generation, shortcuts)) {
+                // A newer binding closes this one's session, which may fail it: not worth telling.
+                if let Err(e) = pollster::block_on(listen(&state, generation, shortcuts))
+                    && state.generation.load(Ordering::Acquire) == generation
+                {
                     *state.error.lock().unwrap() = Some(e.to_string());
                 }
             });

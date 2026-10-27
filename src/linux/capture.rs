@@ -254,7 +254,7 @@ fn run(opts: SessionOptions, shared: &Arc<Shared>, stop: &AtomicBool) -> Result<
         // The desktop's `Closed` can come just after the end of the stream. A session that sent
         // no frames is not started again, so a source that cannot work does not loop.
         thread::sleep(Duration::from_millis(500));
-        if cast.was_closed() || shared.frames.load(Ordering::Relaxed) == frames {
+        if stop.load(Ordering::Acquire) || cast.was_closed() || shared.frames.load(Ordering::Relaxed) == frames {
             return result;
         }
     }
