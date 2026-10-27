@@ -103,7 +103,7 @@ pub fn capture(device: &str, shared: &CameraShared, repaint: Option<&eframe::egu
         src.set_property("target-object", device);
     }
     let sink = pipeline.by_name("sink").and_then(|e| e.downcast::<gst_app::AppSink>().ok()).ok_or("no sink")?;
-    pipeline.set_state(gst::State::Playing).map_err(|e| e.to_string())?;
+    super::encoder::play(&pipeline)?;
     let bus = pipeline.bus().ok_or("no bus")?;
     let mut result = Ok(());
     while !shared.stopped() {
