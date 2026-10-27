@@ -125,7 +125,8 @@ impl GraphicsCaptureApiHandler for Handler {
     fn on_frame_arrived(&mut self, frame: &mut Frame, _control: InternalCaptureControl) -> Result<(), Self::Error> {
         let shared = self.flags.shared.clone();
         shared.frames.fetch_add(1, Ordering::Relaxed);
-        keep_last_frame(&shared, frame)?;
+        // The screenshot copy and the preview are extras: failing them must not end a recording.
+        let _ = keep_last_frame(&shared, frame);
 
         if let Some(rec) = &self.flags.record {
             let mut encoder = shared.encoder.lock().unwrap();
@@ -167,7 +168,7 @@ impl GraphicsCaptureApiHandler for Handler {
             && self.last_preview.is_none_or(|t| t.elapsed() >= interval)
         {
             self.last_preview = Some(Instant::now());
-            self.update_preview(frame)?;
+            let _ = self.update_preview(frame);
         }
         Ok(())
     }
