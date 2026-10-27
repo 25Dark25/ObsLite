@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Linux: an H.264 encoder that is installed but fails at its first picture no longer makes the
+  recording fail: each one is tried on one picture of the recording's size, and the next is used
+  if it fails. For example, Ubuntu 24.04's NVENC encoder (GStreamer 1.24) fails with NVIDIA's
+  595 driver; obs-lite then uses the next encoder (software if no other works).
 - Linux: when the desktop's screen-sharing portal crashes, the capture now carries on: obs-lite
   starts sharing again from the remembered choice, without the dialog, and a recording keeps going
   with the picture frozen for under a second. Before, the preview was lost and a recording

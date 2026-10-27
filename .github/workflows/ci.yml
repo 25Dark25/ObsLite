@@ -31,11 +31,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install GStreamer development files
+      # The base plugins (videoconvert, appsrc, videotestsrc…) are what obs-lite needs at run
+      # time; the tests build real pipelines with them.
+      - name: Install GStreamer
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+          sudo apt-get install -y --no-install-recommends libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base
       - name: Install Rust ${{ matrix.toolchain }}
         run: |
           rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component clippy
