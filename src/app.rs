@@ -1357,6 +1357,9 @@ impl App {
     fn settings_dialog(&mut self, ctx: &egui::Context) {
         let Some(dialog) = &mut self.settings else { return };
         let recording = matches!(self.rec, RecState::Active { .. });
+        // Read before the dialog runs: Escape there ends the wait for a hotkey, and must not then
+        // also close the dialog.
+        let capturing = dialog.capturing.is_some();
         let mut decision = None;
         let response = egui::Modal::new(egui::Id::unique("settings"))
             .frame(egui::Frame::new().fill(GREY7).stroke(Stroke::new(1.0, GREY4)).corner_radius(6).inner_margin(12))
@@ -1380,7 +1383,8 @@ impl App {
                                 .fill(if selected { PRIMARY } else { Color32::TRANSPARENT })
                                 .min_size(vec2(130.0, 28.0));
                             if ui.add(button).clicked() {
-                                dialog.page = page;
+                                // A hotkey wait only makes sense on its own page.
+                                (dialog.page, dialog.capturing) = (page, None);
                             }
                         }
                     });
@@ -1408,8 +1412,6 @@ impl App {
                     }
                 });
             });
-        // Escape while waiting for a hotkey cancels that, not the dialog.
-        let capturing = self.settings.as_ref().is_some_and(|d| d.capturing.is_some());
         if response.should_close() && decision.is_none() && !capturing {
             decision = Some(false);
         }
@@ -2207,6 +2209,28 @@ mod tests {
             assert!(app.config.last_recording.is_none());
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// One pass of the settings dialog with `events` as input.
+    fn settings_pass(ctx: &egui::Context, app: &mut App, events: Vec<egui::Event>) {
+        let mut output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| app.settings_dialog(ui.ctx()));
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn escape_while_waiting_for_a_hotkey_keeps_the_dialog_open() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut app = test_app();
+        app.settings = Some(SettingsDialog { draft: Config::default(), page: SettingsPage::Hotkeys, capturing: Some(0) });
+        let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        let ctx = egui::Context::default();
+        settings_pass(&ctx, &mut app, Vec::new());
+        settings_pass(&ctx, &mut app, vec![escape.clone()]);
+        let dialog = app.settings.as_ref().expect("still open");
+        assert!(dialog.capturing.is_none(), "the wait for a hotkey ended");
+        // Another Escape, with no wait, closes it.
+        settings_pass(&ctx, &mut app, vec![escape]);
+        assert!(app.settings.is_none());
     }
 
     #[test]
