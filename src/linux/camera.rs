@@ -92,7 +92,8 @@ pub fn capture(device: &str, shared: &CameraShared, repaint: Option<&eframe::egu
     gst::init().map_err(|e| e.to_string())?;
     let fd = open()?.ok_or_else(|| tr!("cámara no encontrada", "camera not found").to_owned())?;
     let pipeline = gst::parse::launch(&format!(
-        "pipewiresrc name=src fd={fd} ! videoconvert ! video/x-raw,format=BGRA ! appsink name=sink max-buffers=1 drop=true sync=false",
+        // An unplugged camera ends the stream (otherwise the last picture would stay, frozen).
+        "pipewiresrc name=src fd={fd} on-disconnect=error ! videoconvert ! video/x-raw,format=BGRA ! appsink name=sink max-buffers=1 drop=true sync=false",
         fd = fd.as_raw_fd()
     ))
     .map_err(|e| e.to_string())?
