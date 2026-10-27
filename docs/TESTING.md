@@ -407,3 +407,12 @@ the VA-API and NVENC encoders take only NV12, and obs-lite gave them I420.
 Not verified: recording with NVENC through obs-lite (VA-API comes first when both are present; only
 the 120-frame test above used NVENC); AMD. The system's GStreamer 1.24 `nvh264enc` (Ubuntu 24.04)
 fails with this driver ("Selected preset not supported") with either format.
+
+2026-10-27, same laptop, an encoder that is installed but fails at its first picture:
+
+| Step | Result |
+|---|---|
+| The system's GStreamer 1.24 without the VA-API encoders | `nvh264enc` fails ("Selected preset not supported"); `openh264enc` chosen in 0.63 s |
+| Trying one 1080p picture with all encoders (system GStreamer) | `vah264lpenc` chosen in 62 ms the first time, 13–14 ms the next two |
+| Automated tests and clippy | 61 passed (one ignored) on 1.95 and stable; clippy clean on both for Linux; the new test fails when the encoders are not tried |
+| Self-test 10 s 1080p60, Flatpak built from the change | `vah264enc`; 562 frames, 0 lagged, 9.38 s, 0 decode errors |

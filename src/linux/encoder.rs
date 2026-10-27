@@ -81,7 +81,7 @@ impl Encoder {
     pub fn new(s: EncoderSettings, clock: Arc<Clock>, started: Arc<AtomicBool>, outputs: Arc<Mutex<Outputs>>) -> Result<Self, String> {
         gst::init().map_err(|e| e.to_string())?;
         let fps = s.fps.max(1);
-        let (name, format, h264) = h264_encoder(s.bitrate, fps)?;
+        let (name, format, h264) = h264_encoder(h264_candidates(s.bitrate, fps), s.output)?;
         let (iw, ih) = s.input;
         let (ow, oh) = s.output;
         let frame_bytes = iw as u64 * ih as u64 * 4;
@@ -354,13 +354,46 @@ fn h264_candidates(bitrate: u32, fps: u32) -> [(&'static str, &'static str, Stri
     ]
 }
 
-/// The first available H.264 encoder: its factory, raw format and launch fragment.
-fn h264_encoder(bitrate: u32, fps: u32) -> Result<(String, &'static str, String), String> {
-    h264_candidates(bitrate, fps)
-        .into_iter()
-        .find(|(factory, _, _)| gst::ElementFactory::find(factory).is_some())
-        .map(|(factory, format, fragment)| (factory.to_owned(), format, fragment))
-        .ok_or_else(|| tr!("no hay ningún codificador H.264 de GStreamer instalado", "no GStreamer H.264 encoder is installed").to_owned())
+/// The first H.264 encoder that is installed and starts: its factory, raw format and launch
+/// fragment. Some are installed but fail at their first picture (a driver that does not match
+/// the GStreamer version, a size the GPU does not support), so each is tried on one picture of
+/// the recording's size.
+fn h264_encoder(
+    candidates: impl IntoIterator<Item = (&'static str, &'static str, String)>,
+    size: (u32, u32),
+) -> Result<(String, &'static str, String), String> {
+    let mut failed = None;
+    for (factory, format, fragment) in candidates {
+        if gst::ElementFactory::find(factory).is_none() {
+            continue;
+        }
+        match encodes(format, &fragment, size) {
+            Ok(()) => return Ok((factory.to_owned(), format, fragment)),
+            Err(e) => failed = Some(format!("{factory}: {e}")),
+        }
+    }
+    Err(match failed {
+        Some(e) => format!("{}: {e}", tr!("ningún codificador H.264 de GStreamer funciona", "no GStreamer H.264 encoder works")),
+        None => tr!("no hay ningún codificador H.264 de GStreamer instalado", "no GStreamer H.264 encoder is installed").to_owned(),
+    })
+}
+
+/// Encodes one `size` test picture with `fragment`, given `format` pictures.
+fn encodes(format: &str, fragment: &str, (width, height): (u32, u32)) -> Result<(), String> {
+    let pipeline = launch(&format!(
+        "videotestsrc num-buffers=1 ! video/x-raw,width={width},height={height} \
+         ! videoconvert ! video/x-raw,format={format},colorimetry=bt709 ! {fragment} ! fakesink"
+    ))?;
+    pipeline.set_state(gst::State::Playing).map_err(|e| e.to_string())?;
+    let message = pipeline
+        .bus()
+        .and_then(|bus| bus.timed_pop_filtered(gst::ClockTime::from_seconds(5), &[gst::MessageType::Eos, gst::MessageType::Error]));
+    let _ = pipeline.set_state(gst::State::Null);
+    match message.as_ref().map(|m| m.view()) {
+        Some(gst::MessageView::Eos(_)) => Ok(()),
+        Some(gst::MessageView::Error(e)) => Err(e.error().to_string()),
+        _ => Err(tr!("no terminó en 5 s", "did not finish in 5 s").to_owned()),
+    }
 }
 
 /// The first available AAC encoder, as a launch fragment (192 kbit/s).
@@ -557,5 +590,18 @@ mod tests {
             let caps = gst::Caps::builder("video/x-raw").field("format", format).build();
             assert!(found.can_sink_any_caps(&caps), "{factory} does not take {format}");
         }
+    }
+
+    #[test]
+    fn an_encoder_that_fails_at_its_first_picture_is_skipped() {
+        gst::init().unwrap();
+        // Core elements stand in for encoders: one rejects the pictures once they flow, one
+        // takes them.
+        let candidates = [
+            ("capsfilter", "NV12", "capsfilter name=enc caps=video/x-raw,format=RGB".to_owned()),
+            ("identity", "NV12", "identity name=enc".to_owned()),
+        ];
+        let (factory, _, _) = h264_encoder(candidates, (64, 48)).unwrap();
+        assert_eq!(factory, "identity");
     }
 }
