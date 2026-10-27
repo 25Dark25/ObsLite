@@ -3,6 +3,7 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -246,10 +247,37 @@ fn write_replacing(path: &Path, data: &[u8]) -> std::io::Result<()> {
     }
 }
 
+/// Whether no other obs-lite runs with these settings: the first holds a lock on a file next to
+/// them until it exits. Only that one repairs a recording cut short, which another may still be
+/// writing.
+pub fn first_instance() -> bool {
+    static LOCK: OnceLock<Option<File>> = OnceLock::new();
+    let lock = LOCK.get_or_init(|| path().and_then(|p| try_lock(&p.with_file_name("instance.lock"))));
+    lock.is_some()
+}
+
+/// The file at `path`, locked for as long as it is open; `None` if another process holds it.
+fn try_lock(path: &Path) -> Option<File> {
+    fs::create_dir_all(path.parent()?).ok()?;
+    let file = File::options().create(true).truncate(false).write(true).open(path).ok()?;
+    file.try_lock().ok()?;
+    Some(file)
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_one_process_holds_the_instance_lock() {
+        let path = std::env::temp_dir().join(format!("obs-lite-lock-{}", std::process::id()));
+        let held = try_lock(&path).expect("free at first");
+        // A second open file is what a second process would have.
+        assert!(try_lock(&path).is_none());
+        drop(held);
+        assert!(try_lock(&path).is_some(), "released when the holder exits");
+        let _ = fs::remove_file(&path);
+    }
 
     #[test]
     fn settings_are_replaced_whole() {

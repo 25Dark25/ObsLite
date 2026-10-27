@@ -243,7 +243,10 @@ impl App {
         if let Some(e) = hotkey_error {
             app.set_status(tr!("Atajos globales no disponibles: {}", "Global hotkeys unavailable: {}", e), None, true);
         }
-        app.recover_last_recording();
+        // Another obs-lite may still be writing that recording.
+        if crate::config::first_instance() {
+            app.recover_last_recording();
+        }
         app
     }
 
