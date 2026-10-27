@@ -31,10 +31,21 @@ pub fn process_cpu_time() -> Option<u64> {
     Some((micros(usage.ru_utime) + micros(usage.ru_stime)) * 10)
 }
 
-/// The language of the user's locale (the first of LC_ALL, LC_MESSAGES and LANG that is set).
+/// The language of the user's messages, as other applications choose it.
 pub fn system_language() -> Language {
-    let locale = ["LC_ALL", "LC_MESSAGES", "LANG"].iter().find_map(|v| std::env::var(v).ok().filter(|s| !s.is_empty()));
-    Language::from_locale(locale.as_deref().unwrap_or(""))
+    let var = |name| std::env::var(name).ok();
+    Language::from_locale(&messages_locale(var("LC_ALL"), var("LC_MESSAGES"), var("LANG"), var("LANGUAGE")))
+}
+
+/// As gettext does: the first of LC_ALL, LC_MESSAGES and LANG that is set, unless LANGUAGE (a
+/// list of preferences, which desktops set) names one; it is ignored for the plain C locale.
+fn messages_locale(lc_all: Option<String>, lc_messages: Option<String>, lang: Option<String>, language: Option<String>) -> String {
+    let locale = [lc_all, lc_messages, lang].into_iter().flatten().find(|s| !s.is_empty()).unwrap_or_default();
+    let plain = locale.is_empty() || locale == "C" || locale.starts_with("C.") || locale == "POSIX";
+    match language.as_deref().and_then(|l| l.split(':').find(|s| !s.is_empty())) {
+        Some(first) if !plain => first.to_owned(),
+        _ => locale,
+    }
 }
 
 /// Tells the desktop portals who we are. Outside a sandbox they cannot tell, and some (global
@@ -116,6 +127,17 @@ pub fn http_get(_url: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_language_list_comes_before_the_locale() {
+        let s = |v: &str| Some(v.to_owned());
+        assert_eq!(messages_locale(None, None, s("en_US.UTF-8"), s("es_ES:es")), "es_ES");
+        assert_eq!(messages_locale(None, None, s("es_ES.UTF-8"), None), "es_ES.UTF-8");
+        assert_eq!(messages_locale(s("de_DE.UTF-8"), None, s("es_ES.UTF-8"), s("")), "de_DE.UTF-8");
+        // The plain C locale means English messages whatever LANGUAGE says.
+        assert_eq!(messages_locale(None, None, s("C.UTF-8"), s("es")), "C.UTF-8");
+        assert_eq!(messages_locale(None, None, None, s("es")), "");
+    }
 
     #[test]
     fn document_portal_paths_are_recognised() {
