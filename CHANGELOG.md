@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows: capture works again on Windows 10 and on Windows 11 before 24H2. obs-lite asked
   Windows for a minimum time between frames, which only 24H2 and later support, so elsewhere no
   source could be previewed, recorded or captured.
+- Windows: the arrow keys and `=` `[` `]` `` ` `` can be global hotkeys.
+- Windows: the webcam overlay picks a mode of at least 25 fps when the camera has one; many
+  webcams offer 720p uncompressed at only 10 fps before 720p compressed at 30.
+- Windows: a camera that changes its picture size mid-stream no longer makes obs-lite read past
+  the end of a picture, and having no camera at all is handled cleanly.
+- Windows: installing a rebuilt package of the version already installed replaces it instead of
+  adding a second Obs Lite to the list of apps.
 - Windows: a window with an odd width or height is recorded sharp, losing its last column or row,
   instead of being scaled down on every frame with a black line at the edge.
 - Windows: a failed preview picture, or a failed copy kept for screenshots, no longer stops a
