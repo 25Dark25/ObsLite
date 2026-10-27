@@ -1,7 +1,8 @@
 //! Persistent user settings stored as JSON in %APPDATA%\obs-lite\settings.json.
 
-use std::fs;
-use std::path::PathBuf;
+use std::fs::{self, File};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -222,18 +223,48 @@ impl Config {
 
     pub fn save(&self) {
         let Some(p) = path() else { return };
-        if let Some(dir) = p.parent() {
-            let _ = fs::create_dir_all(dir);
-        }
         if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = fs::write(p, json);
+            let _ = write_replacing(&p, json.as_bytes());
         }
     }
 }
 
+/// Writes `path` through a new file next to it, so a crash or a full disk midway leaves the old
+/// contents rather than a cut-short file (which would load as the defaults).
+fn write_replacing(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let new = path.with_extension("new");
+    let written = File::create(&new).and_then(|mut f| f.write_all(data).and_then(|()| f.sync_all()));
+    match written.and_then(|()| fs::rename(&new, path)) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = fs::remove_file(&new);
+            Err(e)
+        }
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_are_replaced_whole() {
+        let dir = std::env::temp_dir().join(format!("obs-lite-settings-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        write_replacing(&path, b"old").unwrap();
+        write_replacing(&path, b"new").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1, "no temporary file left");
+        // The new contents cannot be written (a folder is in the way): the old ones stay.
+        fs::create_dir(path.with_extension("new")).unwrap();
+        assert!(write_replacing(&path, b"lost").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn bitrate_scales_with_pixel_rate() {
