@@ -7,12 +7,14 @@ use std::time::{Duration, Instant};
 
 use windows_capture::capture::{CaptureControl, Context, GraphicsCaptureApiHandler};
 use windows_capture::frame::Frame;
-use windows_capture::graphics_capture_api::InternalCaptureControl;
+use windows_capture::graphics_capture_api::{GraphicsCaptureApi, InternalCaptureControl};
 use windows_capture::monitor::Monitor;
 use windows_capture::settings::{
     ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings, MinimumUpdateIntervalSettings,
     SecondaryWindowSettings, Settings,
 };
+use windows::Win32::Foundation::HWND;
+use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D,
@@ -45,7 +47,7 @@ pub fn list_sources() -> Vec<Source> {
     let own_pid = std::process::id();
     for w in Window::enumerate().unwrap_or_default() {
         let Ok(title) = w.title() else { continue };
-        if title.trim().is_empty() || w.process_id().ok() == Some(own_pid) {
+        if title.trim().is_empty() || w.process_id().ok() == Some(own_pid) || cloaked(&w) {
             continue;
         }
         let process = w.process_name().unwrap_or_default();
@@ -60,13 +62,22 @@ pub fn list_audio_apps() -> Vec<AudioApp> {
     let mut apps: Vec<AudioApp> = Vec::new();
     for w in Window::enumerate().unwrap_or_default() {
         let (Ok(title), Ok(pid), Ok(exe)) = (w.title(), w.process_id(), w.process_name()) else { continue };
-        if title.trim().is_empty() || pid == own_pid || apps.iter().any(|a| a.exe.eq_ignore_ascii_case(&exe)) {
+        if title.trim().is_empty() || pid == own_pid || cloaked(&w) || apps.iter().any(|a| a.exe.eq_ignore_ascii_case(&exe)) {
             continue;
         }
         apps.push(AudioApp { pid, exe, title });
     }
     apps.sort_by_key(|a| a.exe.to_lowercase());
     apps
+}
+
+/// A window the desktop hides while it is still "visible": a suspended Store app, one on another
+/// virtual desktop. Capturing it gives no picture.
+fn cloaked(window: &Window) -> bool {
+    let mut cloaked = 0u32;
+    let hwnd = HWND(window.as_raw_hwnd());
+    let read = unsafe { DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, (&raw mut cloaked).cast(), size_of::<u32>() as u32) };
+    read.is_ok() && cloaked != 0
 }
 
 /// GPU copy of the newest frame. Windows Graphics Capture only delivers frames when
@@ -125,7 +136,8 @@ impl GraphicsCaptureApiHandler for Handler {
     fn on_frame_arrived(&mut self, frame: &mut Frame, _control: InternalCaptureControl) -> Result<(), Self::Error> {
         let shared = self.flags.shared.clone();
         shared.frames.fetch_add(1, Ordering::Relaxed);
-        keep_last_frame(&shared, frame)?;
+        // The screenshot copy and the preview are extras: failing them must not end a recording.
+        let _ = keep_last_frame(&shared, frame);
 
         if let Some(rec) = &self.flags.record {
             let mut encoder = shared.encoder.lock().unwrap();
@@ -167,7 +179,7 @@ impl GraphicsCaptureApiHandler for Handler {
             && self.last_preview.is_none_or(|t| t.elapsed() >= interval)
         {
             self.last_preview = Some(Instant::now());
-            self.update_preview(frame)?;
+            let _ = self.update_preview(frame);
         }
         Ok(())
     }
@@ -330,7 +342,13 @@ fn start_with_border(
         preview_interval: (opts.preview_fps > 0).then(|| Duration::from_secs_f64(1.0 / opts.preview_fps as f64)),
     };
     let cursor = if opts.cursor { CursorCaptureSettings::WithCursor } else { CursorCaptureSettings::WithoutCursor };
-    let interval = MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / opts.fps.max(1) as f64));
+    // Asking for fewer frames saves work, but only Windows 11 24H2 and later can: elsewhere the
+    // capture would not start at all.
+    let interval = if GraphicsCaptureApi::is_minimum_update_interval_supported().unwrap_or(false) {
+        MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / opts.fps.max(1) as f64))
+    } else {
+        MinimumUpdateIntervalSettings::Default
+    };
     let result = match opts.source {
         SourceId::Monitor(h) => Handler::start_free_threaded(Settings::new(
             Monitor::from_raw_hmonitor(h as *mut _),
