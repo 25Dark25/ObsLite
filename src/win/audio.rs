@@ -92,6 +92,7 @@ fn stream(kind: InputKind, device_id: Option<&str>, shared: &InputShared, follow
 
     let mut raw: VecDeque<u8> = VecDeque::new();
     let mut checked = Instant::now();
+    let mut last_sound = Instant::now();
     while !shared.stopped() {
         // Every packet waiting, not one per wake-up: otherwise a delay is never caught up.
         loop {
@@ -108,7 +109,11 @@ fn stream(kind: InputKind, device_id: Option<&str>, shared: &InputShared, follow
         if usable > 0 {
             let bytes: Vec<u8> = raw.drain(..usable).collect();
             shared.deliver(bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect());
-        } else {
+            last_sound = Instant::now();
+        } else if last_sound.elapsed() >= Duration::from_millis(50) {
+            // Polled every 5 ms against 10 ms packets, half the polls find nothing: only a
+            // longer wait is silence. Otherwise the meter dropped between packets and every
+            // packet woke the window, about 100 times a second (as on Linux, after 50 ms).
             shared.silent();
         }
         if follows_default && checked.elapsed() >= Duration::from_secs(1) {
