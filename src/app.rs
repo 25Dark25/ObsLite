@@ -522,9 +522,16 @@ impl App {
         // One capture session at a time: the recording session also feeds the preview.
         self.preview = None;
 
-        // The application may have started after obs-lite.
+        // The application may have started after obs-lite, and a device that failed (unplugged)
+        // may be back.
         if self.app_audio.is_none() {
             self.restart_app_audio();
+        }
+        if input_failed(&self.system) {
+            self.restart_input(InputKind::System);
+        }
+        if input_failed(&self.mic) {
+            self.restart_input(InputKind::Microphone);
         }
         let inputs: Vec<_> =
             [&self.system, &self.mic, &self.app_audio].into_iter().flatten().map(|i| i.shared.clone()).collect();
@@ -842,10 +849,11 @@ impl App {
             self.refresh_sources();
             self.config.source_label = self.selected_source().map(|s| s.label.clone());
         }
-        if system_changed {
+        // OK also tries again a device that failed (unplugged, then plugged back in).
+        if system_changed || input_failed(&self.system) {
             self.restart_input(InputKind::System);
         }
-        if mic_changed {
+        if mic_changed || input_failed(&self.mic) {
             self.restart_input(InputKind::Microphone);
         }
         if let Some(mic) = &self.mic {
@@ -2044,6 +2052,10 @@ fn take_from_others(slots: &mut [&mut Option<String>], row: usize) {
     }
 }
 
+/// An audio input that stopped with an error (its device was unplugged, say).
+fn input_failed(input: &Option<Input>) -> bool {
+    input.as_ref().is_some_and(|i| i.shared.error().is_some())
+}
 
 #[cfg(test)]
 mod tests {
