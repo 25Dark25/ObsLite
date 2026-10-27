@@ -664,6 +664,9 @@ impl App {
 
     /// Saves the newest frame of the current source as a PNG in the recordings folder.
     fn take_screenshot(&mut self, ctx: &egui::Context) {
+        if matches!(self.rec, RecState::Saving(_)) {
+            return self.set_status(tr!("Espera a que se guarde la grabación.", "Wait until the recording is saved."), None, true);
+        }
         let Some(session) = self.active_session().or(self.preview.as_ref()) else {
             return self.set_status(tr!("Añade una fuente con el botón + del panel Fuentes.", "Add a source with the + button in the Sources dock."), None, true);
         };
