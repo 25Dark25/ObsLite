@@ -61,6 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Linux: a recording path that is not valid UTF-8 is refused instead of the file going elsewhere.
 - Windows: a failed preview picture, or a failed copy kept for screenshots, no longer stops a
   recording.
+- An audio input that stalled for a moment (a busy system) no longer stays late against the video
+  for the rest of the recording; a device a little faster than the clock no longer drifts up to
+  100 ms late either.
 - Windows: windows the desktop hides (suspended Store apps, windows on other virtual desktops) are
   no longer offered as sources or for application audio; capturing them gave no picture.
 - Linux: an H.264 encoder that is installed but fails at its first picture no longer makes the

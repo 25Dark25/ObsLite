@@ -26,6 +26,8 @@ const MAX_BUFFERED: usize = SAMPLE_RATE as usize * CHANNELS / 2; // 500 ms
 pub const METER_FLOOR: f32 = 0.001;
 /// Latency above which the mixer drops the oldest input samples.
 const MAX_LATENCY: usize = SAMPLE_RATE as usize * CHANNELS / 10; // 100 ms
+/// What an input keeps buffered beyond the least it needed in the last second, against jitter.
+const CUSHION: usize = SAMPLE_RATE as usize * CHANNELS / 100; // 10 ms
 /// How long the limiter keeps a reduction before giving it back; longer than a cycle of the
 /// lowest sounds, so the gain does not wobble within a sustained sound (which distorts it).
 const HOLD: f32 = 0.05;
@@ -237,6 +239,7 @@ impl Mixer {
                     clear();
                     let mut produced: u64 = 0;
                     let mut mix = Vec::new();
+                    let mut backlogs = vec![Backlog::default(); inputs.len()];
                     let mut limiter = Limiter::new();
                     while !stop.load(Ordering::Relaxed) {
                         thread::sleep(Duration::from_millis(10));
@@ -251,7 +254,7 @@ impl Mixer {
                             continue;
                         }
                         produced += frames as u64;
-                        mix_block(&inputs, frames * CHANNELS, &mut mix);
+                        mix_block(&inputs, frames * CHANNELS, &mut mix, &mut backlogs);
                         if limiter.process(&mut mix) {
                             *limited_at.lock().unwrap() = Some(Instant::now());
                         }
@@ -330,18 +333,41 @@ impl Limiter {
     }
 }
 
-fn mix_block(inputs: &[Arc<InputShared>], samples: usize, out: &mut Vec<f32>) {
+/// The least an input had left buffered after a block, over about a second of audio: what it
+/// holds beyond that is delay it does not need, left by a stall (the gap was filled with silence
+/// and the late sound then played after it) or by a device a little faster than the clock.
+#[derive(Clone)]
+struct Backlog {
+    least: usize,
+    mixed: usize,
+}
+
+impl Default for Backlog {
+    fn default() -> Self {
+        Self { least: usize::MAX, mixed: 0 }
+    }
+}
+
+fn mix_block(inputs: &[Arc<InputShared>], samples: usize, out: &mut Vec<f32>, backlogs: &mut [Backlog]) {
     out.clear();
     out.resize(samples, 0.0);
-    for input in inputs {
+    for (input, backlog) in inputs.iter().zip(backlogs) {
         let gain = input.gain();
         let mut buf = input.buffer.lock().unwrap();
-        // Bound latency if a device delivers faster than the clock.
+        // Bound latency at once if a device delivers far faster than the clock.
         let excess = buf.len().saturating_sub(samples + MAX_LATENCY);
         buf.drain(..excess);
         let take = buf.len().min(samples);
         for (o, s) in out.iter_mut().zip(buf.drain(..take)) {
             *o += s * gain;
+        }
+        // Once a second, give back the delay that was never needed, keeping a cushion.
+        backlog.least = backlog.least.min(buf.len());
+        backlog.mixed += samples;
+        if backlog.mixed >= SAMPLE_RATE as usize * CHANNELS {
+            let extra = backlog.least.saturating_sub(CUSHION);
+            buf.drain(..extra - extra % CHANNELS);
+            *backlog = Backlog::default();
         }
     }
 }
@@ -361,7 +387,7 @@ mod tests {
         let a = input_with(&[0.5, 0.5], 1.0);
         let b = input_with(&[0.2, 0.2, 0.2, 0.2], 0.5);
         let mut out = Vec::new();
-        mix_block(&[a.clone(), b], 4, &mut out);
+        mix_block(&[a.clone(), b], 4, &mut out, &mut [Backlog::default(), Backlog::default()]);
         assert_eq!(out, vec![0.6, 0.6, 0.1, 0.1]);
         assert!(a.buffer.lock().unwrap().is_empty());
     }
@@ -380,7 +406,7 @@ mod tests {
         let samples = sine(0.7, 0.5).len();
         let inputs = [input_with(&sine(0.7, 0.5), 1.0), input_with(&sine(0.7, 0.5), 1.0)];
         let mut mix = Vec::new();
-        mix_block(&inputs, samples, &mut mix);
+        mix_block(&inputs, samples, &mut mix, &mut [Backlog::default(), Backlog::default()]);
         let summed = mix.clone();
         let limited = Limiter::new().process(&mut mix);
         assert!(mix.iter().all(|s| s.abs() <= 1.0), "nothing left over full scale");
@@ -429,11 +455,31 @@ mod tests {
     }
 
     #[test]
+    fn a_stall_does_not_leave_the_input_late_for_good() {
+        let input = input_with(&[], 1.0);
+        let (mut out, mut backlog) = (Vec::new(), [Backlog::default()]);
+        let block = SAMPLE_RATE as usize * CHANNELS / 100; // 10 ms, as the mixer runs
+        let deliver = |blocks: usize| input.buffer.lock().unwrap().extend(vec![0.5f32; block * blocks]);
+        // Steady, then the input's thread stalls for 50 ms and catches up all at once: from then
+        // on it has 50 ms waiting at every block, 50 ms of delay against the video.
+        for tick in 0..300 {
+            match tick {
+                100..105 => {}
+                105 => deliver(6),
+                _ => deliver(1),
+            }
+            mix_block(std::slice::from_ref(&input), block, &mut out, &mut backlog);
+        }
+        let left = input.buffer.lock().unwrap().len();
+        assert!(left <= CUSHION, "{left} samples still waiting: the delay stayed");
+    }
+
+    #[test]
     fn drops_oldest_samples_beyond_latency_bound() {
         let data: Vec<f32> = (0..(MAX_LATENCY + 10)).map(|i| i as f32).collect();
         let a = input_with(&data, 1.0);
         let mut out = Vec::new();
-        mix_block(std::slice::from_ref(&a), 4, &mut out);
+        mix_block(std::slice::from_ref(&a), 4, &mut out, &mut [Backlog::default()]);
         // Six oldest samples dropped, then four consumed.
         assert_eq!(out[0], 6.0);
         assert_eq!(a.buffer.lock().unwrap().len(), MAX_LATENCY);
