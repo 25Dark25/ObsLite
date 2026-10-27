@@ -817,7 +817,8 @@ impl App {
         self.unbind_hotkeys();
     }
 
-    fn apply_settings(&mut self, new: Config) {
+    fn apply_settings(&mut self, mut new: Config) {
+        new.output_dir = typed_output_dir(new.output_dir, &self.config.output_dir);
         let old = std::mem::replace(&mut self.config, new);
         let c = &self.config;
         let system_changed = (old.system_audio, &old.system_device) != (c.system_audio, &c.system_device);
@@ -1710,6 +1711,12 @@ fn unused_name(dir: &Path, stem: &str, ext: &str, named: &mut HashSet<PathBuf>) 
     path
 }
 
+/// A typed recording path that is empty or relative would put recordings wherever obs-lite was
+/// started from: the previous folder is kept instead.
+fn typed_output_dir(typed: PathBuf, previous: &Path) -> PathBuf {
+    if typed.is_absolute() { typed } else { previous.to_owned() }
+}
+
 /// Slider position (0..1) to linear gain; squared for a more natural loudness curve.
 fn channel_gain(volume: f32, muted: bool) -> f32 {
     if muted { 0.0 } else { volume * volume }
@@ -2238,6 +2245,15 @@ mod tests {
         std::fs::write(name("Replay 1 (2).mp4"), b"").unwrap();
         assert_eq!(unused_name(&dir, "Replay 1", "mp4", &mut HashSet::new()), name("Replay 1 (3).mp4"));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_typed_recording_path_must_be_absolute() {
+        let previous = Config::default().output_dir;
+        assert_eq!(typed_output_dir(PathBuf::new(), &previous), previous);
+        assert_eq!(typed_output_dir(PathBuf::from("Videos"), &previous), previous);
+        let typed = std::env::temp_dir().join("recordings");
+        assert_eq!(typed_output_dir(typed.clone(), &previous), typed);
     }
 
     #[test]
