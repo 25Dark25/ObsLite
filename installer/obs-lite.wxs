@@ -13,7 +13,9 @@
   <Package Name="Obs Lite" Manufacturer="25Dark25" Version="$(var.Version)" Language="1033"
            UpgradeCode="19D574EC-41A6-43BC-AFEA-67AA6A48D8FE" Scope="perUser">
     <SummaryInformation Description="Obs Lite $(var.Version) installer" />
-    <MajorUpgrade DowngradeErrorMessage="A newer version of Obs Lite is already installed." />
+    <!-- Same-version upgrades too: a rebuilt package of one version replaces the other instead of
+         being installed next to it. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of Obs Lite is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <Icon Id="ObsLite.ico" SourceFile="$(var.Icon)" />
