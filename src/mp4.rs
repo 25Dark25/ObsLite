@@ -488,6 +488,15 @@ fn convert(file: &mut impl Storage, cut_short: bool) -> io::Result<bool> {
         return Ok(false);
     }
     let init_header = top.iter().find(|h| &h.kind == b"moov").ok_or_else(|| invalid("no moov"))?;
+    // A conversion that was interrupted (obs-lite stopped while marking the padding) already
+    // wrote the full index after the fragments: only the padding is left to do, rather than
+    // adding a second index made from the fragments not yet marked.
+    let first_moof = top.iter().position(|h| &h.kind == b"moof").expect("checked above");
+    let indexed = top[first_moof..].iter().any(|h| &h.kind == b"moov" && h.read_body(file).is_ok_and(|b| parse(&b).is_ok()));
+    if indexed {
+        pad(file, &top, init_header)?;
+        return Ok(true);
+    }
     let init = parse(&init_header.read_body(file)?)?;
 
     let mut tracks = Vec::new();
@@ -881,6 +890,17 @@ pub(crate) mod tests {
         let first_pad = file.log.iter().position(|&op| op == "pad").unwrap();
         assert_eq!(file.log[first_pad - 1], "sync", "log: {:?}", file.log);
         assert_eq!(file.log[0], "index");
+    }
+
+    #[test]
+    fn a_conversion_stopped_halfway_is_finished_with_one_index() {
+        let (original, video, audio) = fragmented();
+        // Stopped after the new index and the first padding mark.
+        let mut file = Logged { file: Cursor::new(original), log: Vec::new(), writes_left: 2 };
+        assert!(convert(&mut file, false).is_err());
+        assert_eq!(file.log.iter().filter(|&&op| op == "pad").count(), 1);
+        // Repaired at the next start.
+        assert_regular(&converted(file.file.into_inner(), true).unwrap(), &video, &audio);
     }
 
     #[test]
