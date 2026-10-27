@@ -15,9 +15,10 @@ machine without a GPU (see [docs/TESTING.md](docs/TESTING.md)), which is not rep
 40 MB of the recording figure is the queue of converted frames that keeps the encoder from dropping
 frames when it briefly stalls.
 
-> **Status: early (0.5.0).** obs-lite has been tested on a single machine
-> (Windows 11, laptop with Intel and NVIDIA GPUs) and, on Linux, only in a virtual machine (Ubuntu
-> 26.04, GNOME); see [docs/TESTING.md](docs/TESTING.md) for what was and was not verified. It has
+> **Status: early (0.5.0).** obs-lite has been tested on Windows on a single machine
+> (Windows 11, laptop with Intel and NVIDIA GPUs) and, on Linux, in a virtual machine (Ubuntu
+> 26.04, GNOME) and on a laptop (Pop!_OS 24.04, COSMIC, Intel and NVIDIA GPUs); see
+> [docs/TESTING.md](docs/TESTING.md) for what was and was not verified. It has
 > not had any security audit or independent code review. Most of the code was written with an AI
 > coding assistant (Claude Code) and then built and tested as described there.
 > It is not affiliated with the OBS Project and contains no OBS code.
@@ -29,7 +30,8 @@ frames when it briefly stalls.
   one, the Windows software encoder takes over (more CPU). Tested: Intel Quick Sync, and the
   software encoder.
 - Linux: Flatpak, PipeWire and a desktop with the screen-sharing portal (GNOME, KDE Plasma and
-  most Wayland desktops). Tested: GNOME 50 on Wayland, with the x264 software encoder.
+  most Wayland desktops). Tested: GNOME 50 on Wayland with the x264 software encoder, and COSMIC
+  (Pop!_OS 24.04) with Intel VA-API.
 
 ## Quick start
 
@@ -44,14 +46,14 @@ frames when it briefly stalls.
      `flatpak install --user obs-lite-X.Y.Z-linux-x86_64.flatpak` (it fetches the runtime from
      Flathub the first time) and start *Obs Lite* from the applications menu. A newer bundle
      installs over it.
-2. Press *Iniciar Grabación* (or `Ctrl+Alt+R`). By default it records the first display Windows
-   reports and desktop audio at 60 fps to your *Videos* folder. On Linux, the desktop first asks
-   which screen or window to share.
+2. Press *Start Recording* (*Iniciar Grabación* in Spanish), or `Ctrl+Alt+R`. By default it
+   records the first display Windows reports and desktop audio at 60 fps to your *Videos* folder.
+   On Linux, the desktop first asks which screen or window to share.
 
 ## Interface
 
 Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spanish or English
-(it follows the Windows display language; change it in Settings › General):
+(it follows the system's language, on Linux its locale; change it in Settings › General):
 
 - **Preview** on top and, below it, the **Sources**, **Audio Mixer** and **Controls** docks.
   Right-click the preview to take a screenshot.
@@ -138,7 +140,7 @@ The same interface and recordings, with what Linux desktops allow:
 
 ## Configuration
 
-Everything is set from the interface (*Ajustes* and the docks) and saved in
+Everything is set from the interface (*Settings* and the docks) and saved in
 `%APPDATA%\obs-lite\settings.json` (on Linux,
 `~/.var/app/io.github._25Dark25.ObsLite/config/obs-lite/settings.json`). Delete that file to go back to the defaults: first display,
 cursor captured, desktop audio on, microphone off, 60 fps, native resolution, medium quality,
@@ -184,9 +186,12 @@ Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and scre
 - Linux: the Flatpak bundle is not updated by `flatpak update`, and with no network access there
   is no update notice; new versions are on the Releases page.
 - Linux: a folder outside *Videos* can only be chosen with *Browse*, which grants access to it.
-- Linux: tested only on GNOME in a virtual machine without a GPU, where the window is drawn in
-  software (about 6 % of a CPU core while idle and silent, more while the meters move). KDE Plasma, X11, VA-API and NVENC have not
-  been tested.
+- Linux: tested on GNOME in a virtual machine without a GPU, where the window is drawn in
+  software (about 6 % of a CPU core while idle and silent, more while the meters move), and on
+  COSMIC with Intel VA-API. KDE Plasma, X11, AMD and recording with NVENC have not been tested.
+- COSMIC (Pop!_OS 24.04): its screen-sharing portal crashes now and then (a COSMIC bug).
+  obs-lite shares the screen again by itself; a recording keeps going, with the picture frozen
+  for under a second.
 
 ## Verifying a release
 
@@ -243,12 +248,13 @@ desktop identifies apps by it; `packaging/flatpak` has one). Ubuntu/Debian packa
 
 ```sh
 sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev   # to build
-sudo apt install gstreamer1.0-pipewire gstreamer1.0-plugins-good \
-  gstreamer1.0-plugins-ugly gstreamer1.0-libav                          # to record: x264, AAC
+sudo apt install gstreamer1.0-pipewire gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+  gstreamer1.0-plugins-ugly gstreamer1.0-libav     # to record: VA-API, NVENC, x264, AAC, MP4
 cargo build --release
 ```
 
-It picks the first H.264 encoder GStreamer has: VA-API (Intel/AMD), NVENC, x264, then OpenH264.
+It uses the first H.264 encoder that is installed and encodes a test picture: VA-API (Intel/AMD),
+NVENC, x264, then OpenH264.
 
 `--selftest` records the primary display plus desktop audio through the same pipeline as the app:
 

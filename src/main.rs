@@ -62,7 +62,7 @@ fn main() -> eframe::Result {
 /// of the recording is paused, so the file should be one third shorter. With `replay`, the last
 /// 3 s are also saved from the replay buffer, next to `out.mp4` as `out-replay.mp4`.
 fn selftest(args: &[String]) -> Result<(), String> {
-    let seconds: f64 = args.first().and_then(|s| s.parse().ok()).unwrap_or(5.0);
+    let seconds = selftest_seconds(args.first().map(String::as_str));
     let out = args.get(1).map_or_else(|| PathBuf::from("selftest.mp4"), PathBuf::from);
     let pause = args.iter().any(|a| a == "pause");
     let replay = args.iter().any(|a| a == "replay");
@@ -134,4 +134,25 @@ fn selftest(args: &[String]) -> Result<(), String> {
         println!("system audio error: {e}");
     }
     Ok(())
+}
+
+/// The self-test's length: 5 s unless a positive number of seconds is given (a negative,
+/// infinite or NaN one would make the sleeps panic, which aborts mid-recording).
+fn selftest_seconds(arg: Option<&str>) -> f64 {
+    arg.and_then(|s| s.parse::<f64>().ok()).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(5.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_self_test_lasts_a_positive_time() {
+        assert_eq!(selftest_seconds(Some("6")), 6.0);
+        assert_eq!(selftest_seconds(Some("2.5")), 2.5);
+        for bad in ["-5", "0", "nan", "inf", "x"] {
+            assert_eq!(selftest_seconds(Some(bad)), 5.0, "{bad}");
+        }
+        assert_eq!(selftest_seconds(None), 5.0);
+    }
 }
