@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use windows_capture::capture::{CaptureControl, Context, GraphicsCaptureApiHandler};
 use windows_capture::frame::Frame;
-use windows_capture::graphics_capture_api::InternalCaptureControl;
+use windows_capture::graphics_capture_api::{GraphicsCaptureApi, InternalCaptureControl};
 use windows_capture::monitor::Monitor;
 use windows_capture::settings::{
     ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings, MinimumUpdateIntervalSettings,
@@ -330,7 +330,13 @@ fn start_with_border(
         preview_interval: (opts.preview_fps > 0).then(|| Duration::from_secs_f64(1.0 / opts.preview_fps as f64)),
     };
     let cursor = if opts.cursor { CursorCaptureSettings::WithCursor } else { CursorCaptureSettings::WithoutCursor };
-    let interval = MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / opts.fps.max(1) as f64));
+    // Asking for fewer frames saves work, but only Windows 11 24H2 and later can: elsewhere the
+    // capture would not start at all.
+    let interval = if GraphicsCaptureApi::is_minimum_update_interval_supported().unwrap_or(false) {
+        MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / opts.fps.max(1) as f64))
+    } else {
+        MinimumUpdateIntervalSettings::Default
+    };
     let result = match opts.source {
         SourceId::Monitor(h) => Handler::start_free_threaded(Settings::new(
             Monitor::from_raw_hmonitor(h as *mut _),
