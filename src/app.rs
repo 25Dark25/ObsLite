@@ -4,7 +4,8 @@
 //! docks below; status bar; Settings dialog) and uses its Yami palette and Spanish
 //! wording, so OBS users find everything where they expect it.
 
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
@@ -148,6 +149,8 @@ pub struct App {
     update_dialog: bool,
     /// Files being written in the background (a stopped recording, a replay).
     jobs: Vec<JoinHandle<Status>>,
+    /// Output files named this run, which may not exist yet.
+    named: HashSet<PathBuf>,
 }
 
 impl App {
@@ -209,6 +212,7 @@ impl App {
             update_check: None,
             update_dialog: false,
             jobs: Vec::new(),
+            named: HashSet::new(),
         };
         // The Flatpak has no network access, for privacy; Linux users follow the Releases page.
         if cfg!(windows) && app.config.check_updates {
@@ -239,7 +243,10 @@ impl App {
         if let Some(e) = hotkey_error {
             app.set_status(tr!("Atajos globales no disponibles: {}", "Global hotkeys unavailable: {}", e), None, true);
         }
-        app.recover_last_recording();
+        // Another obs-lite may still be writing that recording.
+        if crate::config::first_instance() {
+            app.recover_last_recording();
+        }
         app
     }
 
@@ -457,7 +464,7 @@ impl App {
         let shared = &session.shared;
         // The clock starts with the encoder; if the replay buffer started it, count from now.
         let since = if shared.encoder_ready.load(Ordering::Acquire) { shared.clock.elapsed() } else { Duration::ZERO };
-        let path = self.config.output_dir.join(format!("{}.mp4", chrono::Local::now().format("%Y-%m-%d %H-%M-%S")));
+        let path = new_output(&self.config.output_dir, None, "mp4", &mut self.named);
         shared.outputs.lock().unwrap().start_file(path.clone());
         *recording = Some(Recording { since });
         self.status = None;
@@ -485,8 +492,7 @@ impl App {
             Ok(replay) => replay,
             Err(e) => return self.set_status(tr!("No se pudo guardar la repetición: {}", "Could not save the replay: {}", e), None, true),
         };
-        let name = format!("{} {}.mp4", tr!("Repetición", "Replay"), chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
-        let path = self.config.output_dir.join(name);
+        let path = new_output(&self.config.output_dir, Some(tr!("Repetición", "Replay")), "mp4", &mut self.named);
         self.spawn_job(ctx, move || match std::fs::create_dir_all(path.parent().unwrap_or(&path)).map_err(|e| e.to_string()).and_then(|()| replay.save(path)) {
             Ok(path) => saved(tr!("Repetición guardada en '{}'", "Replay saved to '{}'", crate::platform::sys::display_path(&path).display()), path),
             Err(e) => failed(tr!("No se pudo guardar la repetición: {}", "Could not save the replay: {}", e)),
@@ -667,8 +673,7 @@ impl App {
         {
             paste_camera(&mut rgba, width, height, &frame, corner, size);
         }
-        let name = format!("{} {}.png", tr!("Captura", "Screenshot"), chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
-        let path = self.config.output_dir.join(name);
+        let path = new_output(&self.config.output_dir, Some(tr!("Captura", "Screenshot")), "png", &mut self.named);
         let (tx, rx) = mpsc::channel();
         let ctx = ctx.clone();
         // PNG encoding of a large frame takes a moment; keep the UI responsive.
@@ -822,7 +827,8 @@ impl App {
         self.unbind_hotkeys();
     }
 
-    fn apply_settings(&mut self, new: Config) {
+    fn apply_settings(&mut self, mut new: Config) {
+        new.output_dir = typed_output_dir(new.output_dir, &self.config.output_dir);
         let old = std::mem::replace(&mut self.config, new);
         let c = &self.config;
         let system_changed = (old.system_audio, &old.system_device) != (c.system_audio, &c.system_device);
@@ -1696,6 +1702,31 @@ fn repaint_interval(active: bool, meters: &[f32]) -> Duration {
     if active || meters.iter().any(|m| *m > METER_FLOOR) { Duration::from_millis(66) } else { Duration::from_secs(1) }
 }
 
+/// A file in `dir` named after the current time (after `prefix`): never one that exists or was
+/// named before this run, since two saves can come in the same second and files are written
+/// in the background.
+fn new_output(dir: &Path, prefix: Option<&str>, ext: &str, named: &mut HashSet<PathBuf>) -> PathBuf {
+    let time = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
+    let stem = prefix.map_or_else(|| time.to_string(), |p| format!("{p} {time}"));
+    unused_name(dir, &stem, ext, named)
+}
+
+/// `dir/stem.ext`, or `dir/stem (2).ext` and so on if that is taken.
+fn unused_name(dir: &Path, stem: &str, ext: &str, named: &mut HashSet<PathBuf>) -> PathBuf {
+    let path = (1..)
+        .map(|n| dir.join(if n == 1 { format!("{stem}.{ext}") } else { format!("{stem} ({n}).{ext}") }))
+        .find(|p| !named.contains(p) && !p.exists())
+        .expect("an unused name");
+    named.insert(path.clone());
+    path
+}
+
+/// A typed recording path that is empty or relative would put recordings wherever obs-lite was
+/// started from: the previous folder is kept instead.
+fn typed_output_dir(typed: PathBuf, previous: &Path) -> PathBuf {
+    if typed.is_absolute() { typed } else { previous.to_owned() }
+}
+
 /// Slider position (0..1) to linear gain; squared for a more natural loudness curve.
 fn channel_gain(volume: f32, muted: bool) -> f32 {
     if muted { 0.0 } else { volume * volume }
@@ -2058,6 +2089,7 @@ mod tests {
             update_check: None,
             update_dialog: false,
             jobs: Vec::new(),
+            named: HashSet::new(),
         }
     }
 
@@ -2207,6 +2239,31 @@ mod tests {
             assert!(app.config.last_recording.is_none());
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn outputs_named_in_the_same_second_get_different_names() {
+        let dir = std::env::temp_dir().join(format!("obs-lite-names-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let name = |n: &str| dir.join(n);
+        let mut named = HashSet::new();
+        assert_eq!(unused_name(&dir, "Replay 1", "mp4", &mut named), name("Replay 1.mp4"));
+        // The first is still being written in the background: its name is taken anyway.
+        assert_eq!(unused_name(&dir, "Replay 1", "mp4", &mut named), name("Replay 1 (2).mp4"));
+        // Files from another run.
+        std::fs::write(name("Replay 1.mp4"), b"").unwrap();
+        std::fs::write(name("Replay 1 (2).mp4"), b"").unwrap();
+        assert_eq!(unused_name(&dir, "Replay 1", "mp4", &mut HashSet::new()), name("Replay 1 (3).mp4"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_typed_recording_path_must_be_absolute() {
+        let previous = Config::default().output_dir;
+        assert_eq!(typed_output_dir(PathBuf::new(), &previous), previous);
+        assert_eq!(typed_output_dir(PathBuf::from("Videos"), &previous), previous);
+        let typed = std::env::temp_dir().join("recordings");
+        assert_eq!(typed_output_dir(typed.clone(), &previous), typed);
     }
 
     #[test]

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Recordings, replays and screenshots made in the same second no longer write over each other: a
+  name already in use gets " (2)", " (3)" and so on.
+- A second obs-lite started while the first is recording no longer "repairs" the recording the
+  first is still writing, which corrupted it.
+- A recording path typed empty or relative in Settings is not taken; recordings went to whatever
+  folder obs-lite was started from.
+- The settings file is replaced whole, so a crash or a full disk while saving no longer resets
+  every setting.
 - Windows: when the hardware encoder fails mid-recording (a GPU reset, a driver error), the
   recording stops with the error instead of hanging on "Saving…", or hanging obs-lite on exit.
 - Windows: while the encoder was falling behind, a frame could be drawn over before the encoder
