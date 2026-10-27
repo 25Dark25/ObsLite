@@ -429,3 +429,15 @@ fails with this driver ("Selected preset not supported") with either format.
 
 Not verified: stopping sharing from the desktop (COSMIC has no control for it; GNOME has one),
 GNOME and other desktops with this change.
+
+2026-10-27, same laptop, a recording that cannot be written:
+
+| Step | Result |
+|---|---|
+| Automated tests | 66 passed (one ignored) on 1.95 and stable. New: a file that cannot be created is tried once and fails the recording at once; a recording or replay whose writes fail is still finished; an MP4 written to `/dev/full` (every write fails, as on a full disk) reports it on a later write and finishes in under 5 s. Each fails on the old code |
+| Self-test 8 s to `/dev/full`, Flatpak built from the change | "No space left on the resource" after 8.2 s; the first build of the change took 68 s, waiting for an end of stream that never came, which is fixed |
+| Self-test 8 s 1080p60 to a normal file | `vah264enc`; 436 frames, 0 lagged, 7.27 s, 0 decode errors |
+
+Not verified: the interface stopping the recording at once (no way to check the window from here);
+an encoder failing mid-recording on Linux (seen only with the system's GStreamer 1.24
+`vah264lpenc` on random noise, outside obs-lite); any of it on Windows.
