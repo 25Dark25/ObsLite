@@ -5,8 +5,9 @@ use std::thread;
 use windows::Win32::Media::MediaFoundation::{
     IMF2DBuffer, IMFActivate, IMFMediaSource, MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK,
-    MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
-    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READERF_ENDOFSTREAM, MF_VERSION, MFCreateAttributes,
+    IMFSourceReader, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
+    MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED,
+    MF_SOURCE_READERF_ENDOFSTREAM, MF_VERSION, MFCreateAttributes,
     MFCreateMediaType, MFCreateSourceReaderFromMediaSource, MFEnumDeviceSources, MFMediaType_Video, MFSTARTUP_FULL,
     MFShutdown, MFStartup, MFVideoFormat_RGB32,
 };
@@ -74,6 +75,19 @@ fn link(activate: &IMFActivate) -> Option<String> {
     string(activate, &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK)
 }
 
+/// The size of the reader's pictures and the distance between their rows (negative when the
+/// picture is stored bottom-up).
+unsafe fn picture_format(reader: &IMFSourceReader, stream: u32) -> windows::core::Result<(u32, u32, i32)> {
+    unsafe {
+        let current = reader.GetCurrentMediaType(stream)?;
+        let size = current.GetUINT64(&MF_MT_FRAME_SIZE)?;
+        let (width, height) = ((size >> 32) as u32, size as u32);
+        // Uncompressed RGB is bottom-up (negative stride) unless the type says otherwise.
+        let stride = current.GetUINT32(&MF_MT_DEFAULT_STRIDE).map_or(-(width as i32 * 4), |s| s as i32);
+        Ok((width, height, stride))
+    }
+}
+
 /// Captures from `device` until asked to stop, handing every picture to `shared`.
 pub fn capture(device: &str, shared: &CameraShared, repaint: Option<&eframe::egui::Context>) -> Result<(), String> {
     with_media_foundation(|| capture_loop(device, shared, repaint)).map_err(|e| e.to_string())
@@ -108,11 +122,7 @@ fn capture_loop(device: &str, shared: &CameraShared, repaint: Option<&eframe::eg
         rgb.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
         rgb.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)?;
         reader.SetCurrentMediaType(stream, None, &rgb)?;
-        let current = reader.GetCurrentMediaType(stream)?;
-        let size = current.GetUINT64(&MF_MT_FRAME_SIZE)?;
-        let (width, height) = ((size >> 32) as u32, size as u32);
-        // Uncompressed RGB is bottom-up (negative stride) unless the type says otherwise.
-        let stride = current.GetUINT32(&MF_MT_DEFAULT_STRIDE).map_or(-(width as i32 * 4), |s| s as i32);
+        let (mut width, mut height, mut stride) = picture_format(&reader, stream)?;
 
         while !shared.stopped() {
             let mut flags = 0u32;
@@ -121,7 +131,13 @@ fn capture_loop(device: &str, shared: &CameraShared, repaint: Option<&eframe::eg
             if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
                 break;
             }
+            // The camera may change its picture size mid-stream.
+            if flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32 != 0 {
+                (width, height, stride) = picture_format(&reader, stream)?;
+            }
             let Some(sample) = sample else { continue };
+            // Never read past the picture: a sample that is not the size expected is skipped.
+            let needed = width as usize * 4 * height as usize;
             let buffer = sample.ConvertToContiguousBuffer()?;
             let mut bgra = Vec::with_capacity(width as usize * height as usize * 4);
             // Rows are `pitch` bytes apart starting from the top row; negative for bottom-up images.
@@ -134,14 +150,27 @@ fn capture_loop(device: &str, shared: &CameraShared, repaint: Option<&eframe::eg
             if let Ok(buffer) = buffer.cast::<IMF2DBuffer>() {
                 let (mut scan0, mut pitch) = (std::ptr::null_mut(), 0i32);
                 buffer.Lock2D(&mut scan0, &mut pitch)?;
-                copy(scan0, pitch as isize);
+                let fits = buffer.GetContiguousLength().is_ok_and(|len| (pitch.unsigned_abs() as usize) * height as usize <= len as usize)
+                    && pitch.unsigned_abs() as usize >= width as usize * 4;
+                if fits {
+                    copy(scan0, pitch as isize);
+                }
                 buffer.Unlock2D()?;
+                if !fits {
+                    continue;
+                }
             } else {
-                let mut data = std::ptr::null_mut();
-                buffer.Lock(&mut data, None, None)?;
-                let top = if stride < 0 { data.offset(-stride as isize * (height as isize - 1)) } else { data };
-                copy(top, stride as isize);
+                let (mut data, mut length) = (std::ptr::null_mut(), 0u32);
+                buffer.Lock(&mut data, None, Some(&mut length))?;
+                let fits = (length as usize) >= needed.max(stride.unsigned_abs() as usize * height as usize);
+                if fits {
+                    let top = if stride < 0 { data.offset(-stride as isize * (height as isize - 1)) } else { data };
+                    copy(top, stride as isize);
+                }
                 buffer.Unlock()?;
+                if !fits {
+                    continue;
+                }
             }
             shared.deliver(CameraFrame { width, height, bgra }, repaint);
         }
