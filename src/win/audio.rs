@@ -96,9 +96,12 @@ fn stream(kind: InputKind, device_id: Option<&str>, shared: &InputShared, follow
         // Every packet waiting, not one per wake-up: otherwise a delay is never caught up.
         loop {
             let before = raw.len();
-            capture.read_from_device_to_deque(&mut raw)?;
+            let info = capture.read_from_device_to_deque(&mut raw)?;
             if raw.len() == before {
                 break;
+            }
+            if info.flags.silent {
+                raw.range_mut(before..).for_each(|b| *b = 0);
             }
         }
         let usable = raw.len() / 4 * 4;
