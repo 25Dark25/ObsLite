@@ -441,3 +441,20 @@ GNOME and other desktops with this change.
 Not verified: the interface stopping the recording at once (no way to check the window from here);
 an encoder failing mid-recording on Linux (seen only with the system's GStreamer 1.24
 `vah264lpenc` on random noise, outside obs-lite); any of it on Windows.
+
+2026-10-27, fixes from a full-code audit (#53–#60), on the same laptop; Flatpak built from `main`
+with all of them:
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 80 passed (one ignored) on 1.95 and stable on Linux; clippy clean on both for Linux and, cross-checked from Linux, for Windows. New tests each fail on the old code where there was one: output names, typed paths, the instance lock, settings written whole, the MP4 sync order and an interrupted conversion, the Linux language, the Flatpak folder check, the Escape and tray rules in Settings, duplicate hotkeys, the camera mode, the self-test length, and a stall in the mixer (50 ms of delay stayed before; within 10 ms after) |
+| Instance lock | With obs-lite open, `flock -n` on `instance.lock` from outside fails; after closing it succeeds |
+| Mixer, 440 Hz tone on the desktop, self-test 15 s | 14.67 s, no gaps (`silencedetect` −40 dB, 5 ms), energy above 2 kHz at −83 dB against −31.5 dB for the tone |
+| Camera overlay | Shows in the preview (with `on-disconnect=error`) |
+| A typed folder outside the Flatpak (`~/Documentos/prueba`) | Recording refused with the message to choose the folder with *Browse* |
+| Escape while waiting for a hotkey | Ends the wait; Settings stays open |
+| A hotkey already set for another action | Taken from it: the other shows "(none)" |
+
+Not verified: anything on Windows (no machine available), notably the audio capture rewrite
+(#57), the encoder error handling (#52) and the webcam mode and format changes (#58); unplugging
+a camera or an audio device; clearing hotkeys on a desktop; a real power cut during a conversion.
