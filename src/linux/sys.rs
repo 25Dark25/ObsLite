@@ -48,6 +48,25 @@ fn messages_locale(lc_all: Option<String>, lc_messages: Option<String>, lang: Op
     }
 }
 
+/// Whether files written under `path` would be lost: inside the Flatpak sandbox, a folder that
+/// was not shared with it lives in the sandbox's own memory, gone when obs-lite closes.
+pub fn volatile(path: &Path) -> bool {
+    Path::new("/.flatpak-info").exists() && on_tmpfs(path)
+}
+
+/// Whether `path`, or the nearest folder above it that exists, is in memory (tmpfs).
+fn on_tmpfs(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Some(existing) = path.ancestors().find(|p| p.exists()) else { return false };
+    let Ok(c_path) = std::ffi::CString::new(existing.as_os_str().as_bytes()) else { return false };
+    let mut info = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    if unsafe { libc::statfs(c_path.as_ptr(), info.as_mut_ptr()) } != 0 {
+        return false;
+    }
+    let info = unsafe { info.assume_init() };
+    info.f_type == libc::TMPFS_MAGIC
+}
+
 /// Tells the desktop portals who we are. Outside a sandbox they cannot tell, and some (global
 /// shortcuts, for one) need to know. Inside Flatpak this fails harmlessly.
 pub fn register_app() {
@@ -140,6 +159,12 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_in_memory_is_told_apart() {
+        assert!(on_tmpfs(Path::new("/dev/shm/obs-lite/not/made/yet")), "/dev/shm is tmpfs");
+        assert!(!on_tmpfs(Path::new(env!("CARGO_MANIFEST_DIR"))));
+    }
+
+    #[test]
     fn document_portal_paths_are_recognised() {
         let parts = document_parts(Path::new("/run/user/1000/doc/c674746b/Descargas/clip.mp4"));
         assert_eq!(parts, Some(("c674746b".to_owned(), PathBuf::from("clip.mp4"))));
@@ -158,3 +183,4 @@ mod tests {
         assert_eq!(shown("clip.mp4"), "/home/dark/Descargas/clip.mp4");
     }
 }
+

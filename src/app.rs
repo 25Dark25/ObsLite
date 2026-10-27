@@ -447,6 +447,9 @@ impl App {
     }
 
     fn start_recording(&mut self, ctx: &egui::Context) {
+        if let Some(problem) = self.output_dir_problem() {
+            return self.set_status(problem, None, true);
+        }
         if let Err(e) = std::fs::create_dir_all(&self.config.output_dir) {
             return self.set_status(tr!("No se puede usar la ruta de grabación: {}", "Cannot use the recording path: {}", e), None, true);
         }
@@ -475,11 +478,25 @@ impl App {
         *replay = true;
     }
 
+    /// Why files cannot go to the recordings folder, if they cannot.
+    fn output_dir_problem(&self) -> Option<String> {
+        crate::platform::sys::volatile(&self.config.output_dir).then(|| {
+            tr!(
+                "La ruta de grabación no está compartida con obs-lite: lo que se guardara ahí se perdería al cerrarlo. Elige la carpeta con Examinar.",
+                "The recording path is not shared with obs-lite: anything saved there would be lost when it closes. Choose the folder with Browse."
+            )
+            .to_owned()
+        })
+    }
+
     /// Saves the replay buffer as a new file, in the background.
     fn save_replay(&mut self, ctx: &egui::Context) {
         let Some(session) = self.active_session().filter(|_| self.is_replaying()) else {
             return self.set_status(tr!("Inicia el búfer de repetición para poder guardar repeticiones.", "Start the replay buffer to save replays."), None, true);
         };
+        if let Some(problem) = self.output_dir_problem() {
+            return self.set_status(problem, None, true);
+        }
         let replay = session.shared.outputs.lock().unwrap().replay();
         let replay = match replay {
             Ok(replay) => replay,
@@ -654,6 +671,9 @@ impl App {
         let Some(session) = self.active_session().or(self.preview.as_ref()) else {
             return self.set_status(tr!("Añade una fuente con el botón + del panel Fuentes.", "Add a source with the + button in the Sources dock."), None, true);
         };
+        if let Some(problem) = self.output_dir_problem() {
+            return self.set_status(problem, None, true);
+        }
         let (mut width, mut height, mut rgba) = match session.snapshot() {
             Ok(image) => image,
             Err(e) => return self.set_status(tr!("No se pudo hacer la captura: {}", "Could not take the screenshot: {}", e), None, true),

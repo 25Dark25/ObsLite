@@ -80,6 +80,11 @@ pub fn display_path(path: &Path) -> PathBuf {
     path.to_owned()
 }
 
+/// Files are never kept only in memory here (that is the Linux sandbox's case).
+pub fn volatile(_path: &Path) -> bool {
+    false
+}
+
 /// GET `url` and return the body as text.
 pub fn http_get(url: &str) -> Result<String, String> {
     use windows::Foundation::Uri;
