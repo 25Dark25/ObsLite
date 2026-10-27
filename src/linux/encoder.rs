@@ -60,6 +60,8 @@ struct Inner {
     fps: u64,
     input: (u32, u32),
     video_src: gst_app::AppSrc,
+    /// The video pipeline, to notice when it fails.
+    video: gst::Pipeline,
     /// The H.264 encoder element, to ask it for keyframes.
     h264: gst::Element,
     output: Arc<Mutex<Outputs>>,
@@ -123,6 +125,7 @@ impl Encoder {
             fps: fps as u64,
             input: s.input,
             video_src,
+            video: video.clone(),
             h264: h264_element,
             output: outputs,
         });
@@ -157,8 +160,12 @@ impl Encoder {
             );
         }
 
-        for pipeline in std::iter::once(&video).chain(audio.as_ref().map(|(p, _)| p)) {
-            pipeline.set_state(gst::State::Playing).map_err(|e| e.to_string())?;
+        let pipelines = || std::iter::once(&video).chain(audio.as_ref().map(|(p, _)| p));
+        if let Err(e) = pipelines().try_for_each(play) {
+            for pipeline in pipelines() {
+                let _ = pipeline.set_state(gst::State::Null);
+            }
+            return Err(e);
         }
         // Time starts now, so encoder start-up is not counted as lag.
         inner.clock.restart();
@@ -197,7 +204,10 @@ impl Encoder {
 
     /// Interleaved 16-bit stereo PCM from the mixer.
     pub fn push_audio(&self, pcm: Vec<u8>) {
-        let Some((_, src)) = &self.audio else { return };
+        let Some((pipeline, src)) = &self.audio else { return };
+        if let Some(e) = posted_error(pipeline) {
+            self.inner.output.lock().unwrap().record_error(e);
+        }
         let frames = (pcm.len() / (CHANNELS * 2)) as u64;
         let mut done = self.audio_frames.lock().unwrap();
         let mut buffer = gst::Buffer::from_mut_slice(pcm);
@@ -231,7 +241,9 @@ impl Encoder {
             let _ = src.end_of_stream();
         }
         for pipeline in std::iter::once(&self.video).chain(self.audio.as_ref().map(|(p, _)| p)) {
-            wait_for_eos(pipeline);
+            if let Some(e) = wait_for_eos(pipeline) {
+                self.inner.output.lock().unwrap().record_error(e);
+            }
             let _ = pipeline.set_state(gst::State::Null);
         }
     }
@@ -285,6 +297,10 @@ fn produce_frames(inner: &Inner) {
         }
         if let Err(e) = inner.video_src.push_buffer(buffer) {
             inner.output.lock().unwrap().record_error(e.to_string());
+            break;
+        }
+        if let Some(e) = posted_error(&inner.video) {
+            inner.output.lock().unwrap().record_error(e);
             break;
         }
         inner.encoded.fetch_add(1, Ordering::Relaxed);
@@ -384,7 +400,7 @@ fn encodes(format: &str, fragment: &str, (width, height): (u32, u32)) -> Result<
         "videotestsrc num-buffers=1 ! video/x-raw,width={width},height={height} \
          ! videoconvert ! video/x-raw,format={format},colorimetry=bt709 ! {fragment} ! fakesink"
     ))?;
-    pipeline.set_state(gst::State::Playing).map_err(|e| e.to_string())?;
+    play(&pipeline)?;
     let message = pipeline
         .bus()
         .and_then(|bus| bus.timed_pop_filtered(gst::ClockTime::from_seconds(5), &[gst::MessageType::Eos, gst::MessageType::Error]));
@@ -428,10 +444,33 @@ fn by_name<T: IsA<gst::Element>>(pipeline: &gst::Pipeline, name: &str) -> Result
     pipeline.by_name(name).and_then(|e| e.downcast::<T>().ok()).ok_or_else(|| format!("no element {name}"))
 }
 
-/// Waits (at most 10 s) for a pipeline to drain after end-of-stream.
-fn wait_for_eos(pipeline: &gst::Pipeline) {
-    if let Some(bus) = pipeline.bus() {
-        let _ = bus.timed_pop_filtered(gst::ClockTime::from_seconds(10), &[gst::MessageType::Eos, gst::MessageType::Error]);
+/// Starts `pipeline`. If it cannot start, it goes back to NULL (a pipeline must not be dropped
+/// in another state), and the error is the element's own message, such as a file that cannot
+/// be opened, rather than "failed to change its state".
+pub(super) fn play(pipeline: &gst::Pipeline) -> Result<(), String> {
+    let Err(e) = pipeline.set_state(gst::State::Playing) else { return Ok(()) };
+    let message = posted_error(pipeline);
+    let _ = pipeline.set_state(gst::State::Null);
+    Err(message.unwrap_or_else(|| e.to_string()))
+}
+
+/// The error a running pipeline has posted, if any, without waiting: a pipeline that fails
+/// keeps taking buffers without complaint, so this is how the failure is noticed.
+fn posted_error(pipeline: &gst::Pipeline) -> Option<String> {
+    let message = pipeline.bus()?.pop_filtered(&[gst::MessageType::Error])?;
+    match message.view() {
+        gst::MessageView::Error(e) => Some(e.error().to_string()),
+        _ => None,
+    }
+}
+
+/// Waits (at most 10 s) for a pipeline to drain after end-of-stream; the error if it failed.
+fn wait_for_eos(pipeline: &gst::Pipeline) -> Option<String> {
+    let bus = pipeline.bus()?;
+    let message = bus.timed_pop_filtered(gst::ClockTime::from_seconds(10), &[gst::MessageType::Eos, gst::MessageType::Error])?;
+    match message.view() {
+        gst::MessageView::Error(e) => Some(e.error().to_string()),
+        _ => None,
     }
 }
 
@@ -442,6 +481,8 @@ pub struct Mp4 {
     video: gst_app::AppSrc,
     audio: Option<gst_app::AppSrc>,
     start: i64,
+    /// Why the pipeline failed, once it has: it will not reach end-of-stream.
+    failed: Mutex<Option<String>>,
 }
 
 impl Muxer for Mp4 {
@@ -474,11 +515,17 @@ impl Muxer for Mp4 {
             src.set_max_bytes(0);
         }
         by_name::<gst::Element>(&pipeline, "file")?.set_property("location", path.to_string_lossy().as_ref());
-        pipeline.set_state(gst::State::Playing).map_err(|e| e.to_string())?;
-        Ok(Self { pipeline, path: path.to_owned(), video: video_src, audio: audio_src, start })
+        play(&pipeline)?;
+        Ok(Self { pipeline, path: path.to_owned(), video: video_src, audio: audio_src, start, failed: Mutex::new(None) })
     }
 
     fn write(&self, video: bool, packet: &Packet) -> Result<(), String> {
+        // A failed write (a full disk) stops the muxer, while the packets would keep queueing.
+        let mut failed = self.failed.lock().unwrap();
+        if let Some(e) = failed.as_ref().cloned().or_else(|| posted_error(&self.pipeline)) {
+            return Err(failed.insert(e).clone());
+        }
+        drop(failed);
         let time = packet.time - self.start;
         let src = if video { &self.video } else { self.audio.as_ref().ok_or("no audio stream")? };
         if time < 0 {
@@ -499,6 +546,10 @@ impl Muxer for Mp4 {
     }
 
     fn finish(self) -> Result<(), String> {
+        if let Some(e) = self.failed.into_inner().unwrap() {
+            let _ = self.pipeline.set_state(gst::State::Null);
+            return Err(e);
+        }
         let _ = self.video.end_of_stream();
         if let Some(audio) = &self.audio {
             let _ = audio.end_of_stream();
@@ -603,5 +654,39 @@ mod tests {
         ];
         let (factory, _, _) = h264_encoder(candidates, (64, 48)).unwrap();
         assert_eq!(factory, "identity");
+    }
+
+    #[test]
+    fn a_muxer_that_cannot_write_says_so_while_recording() {
+        gst::init().unwrap();
+        // Real H.264 from an installed encoder; where there is none (CI), there is nothing to test.
+        let Ok((_, format, fragment)) = h264_encoder(h264_candidates(8_000_000, 30), (640, 360)) else { return };
+        if ["mp4mux", "h264parse"].iter().any(|f| gst::ElementFactory::find(f).is_none()) {
+            return;
+        }
+        let source = launch(&format!(
+            "videotestsrc num-buffers=60 ! video/x-raw,width=640,height=360,framerate=30/1 ! videoconvert \
+             ! video/x-raw,format={format},colorimetry=bt709 ! {fragment} ! h264parse \
+             ! video/x-h264,stream-format=avc,alignment=au ! appsink name=sink sync=false"
+        ))
+        .unwrap();
+        let sink = by_name::<gst_app::AppSink>(&source, "sink").unwrap();
+        play(&source).unwrap();
+        let (mut packets, mut caps) = (Vec::new(), None);
+        while let Ok(sample) = sink.pull_sample() {
+            caps = sample.caps().map(|c| c.to_owned());
+            packets.extend(to_packet(&sample));
+        }
+        let _ = source.set_state(gst::State::Null);
+        // Every write to /dev/full fails as a full disk does (once filesink's 64 KB buffer fills).
+        let mp4 = Mp4::create(Path::new("/dev/full"), &caps.unwrap(), None, packets[0].time).unwrap();
+        for packet in &packets {
+            let _ = mp4.write(true, packet);
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(mp4.write(true, &packets[0]).is_err(), "the failed write must reach the recording");
+        let finishing = std::time::Instant::now();
+        assert!(mp4.finish().is_err());
+        assert!(finishing.elapsed() < Duration::from_secs(5), "a failed muxer does not wait for its end of stream");
     }
 }
