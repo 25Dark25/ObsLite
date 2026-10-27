@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Linux: an H.264 encoder that is installed but fails at its first picture no longer makes the
+  recording fail: each one is tried on one picture of the recording's size, and the next is used
+  if it fails. For example, Ubuntu 24.04's NVENC encoder (GStreamer 1.24) fails with NVIDIA's
+  595 driver; obs-lite then uses the next encoder (software if no other works).
 - Linux: recording failed at once wherever a hardware H.264 encoder was found: the hardware H.264
   encoders (VA-API and NVENC) only take NV12 pictures, and obs-lite gave them I420. Software
   encoding (x264), used where there is no GPU, was not affected.
