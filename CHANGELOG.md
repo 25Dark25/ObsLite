@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Windows: when the hardware encoder fails mid-recording (a GPU reset, a driver error), the
+  recording stops with the error instead of hanging on "Saving…", or hanging obs-lite on exit.
+- Windows: while the encoder was falling behind, a frame could be drawn over before the encoder
+  had read it, showing frames out of order or half drawn.
 - A recording that cannot be written (a folder that cannot be written to, a full disk, an encoder
   that fails) now stops at once and says why. Before, the timer kept running and the problem only
   showed at Stop, audio for the file piled up in memory, and the file was left unfinished even
