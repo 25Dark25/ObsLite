@@ -5,7 +5,7 @@ use std::thread;
 use windows::Win32::Media::MediaFoundation::{
     IMF2DBuffer, IMFActivate, IMFMediaSource, MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK,
-    MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
+    MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
     MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READERF_ENDOFSTREAM, MF_VERSION, MFCreateAttributes,
     MFCreateMediaType, MFCreateSourceReaderFromMediaSource, MFEnumDeviceSources, MFMediaType_Video, MFSTARTUP_FULL,
     MFShutdown, MFStartup, MFVideoFormat_RGB32,
@@ -92,19 +92,17 @@ fn capture_loop(device: &str, shared: &CameraShared, repaint: Option<&eframe::eg
         let reader = MFCreateSourceReaderFromMediaSource(&source, &attributes)?;
         let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
 
-        // The largest native mode up to 1280 wide is plenty for an overlay.
-        let mut best: Option<(u64, _)> = None;
+        let mut natives = Vec::new();
         for i in 0.. {
             let Ok(native) = reader.GetNativeMediaType(stream, i) else { break };
             let Ok(size) = native.GetUINT64(&MF_MT_FRAME_SIZE) else { continue };
-            let (w, h) = ((size >> 32) as u32, size as u32);
-            let area = w as u64 * h as u64;
-            if w <= 1280 && best.as_ref().is_none_or(|(a, _)| area > *a) {
-                best = Some((area, native));
-            }
+            // Numerator and denominator; a mode that does not say counts as slow.
+            let rate = native.GetUINT64(&MF_MT_FRAME_RATE).unwrap_or(0);
+            let fps = (rate >> 32) as f64 / (rate as u32).max(1) as f64;
+            natives.push((native, ((size >> 32) as u32, size as u32, fps)));
         }
-        if let Some((_, native)) = &best {
-            reader.SetCurrentMediaType(stream, None, native)?;
+        if let Some(i) = crate::camera::best_mode(natives.iter().map(|(_, mode)| *mode)) {
+            reader.SetCurrentMediaType(stream, None, &natives[i].0)?;
         }
         let rgb = MFCreateMediaType()?;
         rgb.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
