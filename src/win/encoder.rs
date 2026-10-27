@@ -28,6 +28,7 @@ use windows::core::BOOL;
 use windows_capture::frame::Frame;
 
 use crate::camera::{self, CameraSize, Corner, PixelRect};
+use crate::capture::{Placement, placement};
 use crate::i18n::tr;
 use crate::media::{self, Clock, Muxer, Packet, TICKS_PER_SECOND};
 use super::mf::{Aac, Converter, H264, Media, Mp4, Scaler, VideoEvent};
@@ -246,13 +247,14 @@ impl Encoder {
         let (w, h) = (frame.width(), frame.height());
         let _gpu = canvas.lock.lock().unwrap();
         unsafe {
-            if region.unwrap_or((0, 0)) == (0, 0) && (w, h) == self.input {
+            let placement = placement((w, h), self.input, region);
+            if placement == Placement::Copy {
                 ctx.CopyResource(dst, source);
-            } else if region.is_none() && self.draw_scaled(source, (w, h)) {
+            } else if placement == Placement::Scale && self.draw_scaled(source, (w, h)) {
             } else {
-                // A region, or a resized window the GPU cannot scale: crop, padding with black
-                // what is missing.
-                let (left, top) = region.unwrap_or((0, 0));
+                // A region, an odd-sized frame, or a resized window the GPU cannot scale: crop,
+                // padding with black what is missing.
+                let (left, top) = if let Placement::Crop(origin) = placement { origin } else { (0, 0) };
                 let (right, bottom) = ((left + self.input.0).min(w), (top + self.input.1).min(h));
                 if (right.saturating_sub(left), bottom.saturating_sub(top)) != self.input {
                     ctx.ClearRenderTargetView(&canvas.target.0, &[0.0, 0.0, 0.0, 1.0]);

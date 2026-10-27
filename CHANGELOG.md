@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Windows: capture works again on Windows 10 and on Windows 11 before 24H2. obs-lite asked
+  Windows for a minimum time between frames, which only 24H2 and later support, so elsewhere no
+  source could be previewed, recorded or captured.
+- Windows: a window with an odd width or height is recorded sharp, losing its last column or row,
+  instead of being scaled down on every frame with a black line at the edge.
+- Windows: a failed preview picture, or a failed copy kept for screenshots, no longer stops a
+  recording.
+- Windows: windows the desktop hides (suspended Store apps, windows on other virtual desktops) are
+  no longer offered as sources or for application audio; capturing them gave no picture.
 - Linux: an H.264 encoder that is installed but fails at its first picture no longer makes the
   recording fail: each one is tried on one picture of the recording's size, and the next is used
   if it fails. For example, Ubuntu 24.04's NVENC encoder (GStreamer 1.24) fails with NVIDIA's
