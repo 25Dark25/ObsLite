@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A recording that cannot be written (a folder that cannot be written to, a full disk, an encoder
+  that fails) now stops at once and says why. Before, the timer kept running and the problem only
+  showed at Stop, audio for the file piled up in memory, and the file was left unfinished even
+  when most of it had been written. Now it is finished, keeping what was recorded until then, and
+  the message says where. A replay that fails to save is finished too.
+- Linux: a failing encoder or a full disk is noticed while recording; before, every later packet
+  queued in memory and the recording was reported as saved, cut short. If the encoder cannot be
+  started, the error is shown instead of sharing the screen again and again.
 - Windows: capture works again on Windows 10 and on Windows 11 before 24H2. obs-lite asked
   Windows for a minimum time between frames, which only 24H2 and later support, so elsewhere no
   source could be previewed, recorded or captured.
