@@ -416,3 +416,16 @@ fails with this driver ("Selected preset not supported") with either format.
 | Trying one 1080p picture with all encoders (system GStreamer) | `vah264lpenc` chosen in 62 ms the first time, 13–14 ms the next two |
 | Automated tests and clippy | 61 passed (one ignored) on 1.95 and stable; clippy clean on both for Linux; the new test fails when the encoders are not tried |
 | Self-test 10 s 1080p60, Flatpak built from the change | `vah264enc`; 562 frames, 0 lagged, 9.38 s, 0 decode errors |
+
+2026-10-27, same laptop, COSMIC's screen-sharing portal crashing (xdg-desktop-portal-cosmic 1.11.0:
+"create_frame sent before the previous frame was destroyed", then the process exits):
+
+| Step | Result |
+|---|---|
+| What the app sees (`dbus-monitor`) | The stream ends and the portal's backend leaves the bus; no `Closed` signal reaches the session |
+| Self-test 60 s 1080p60, Flatpak built from the change, mouse moving | The portal crashed at 46.05 s; capture back at 46.65 s from the remembered choice, without the dialog. 59.45 s file, 3567 frames, 0 lagged, 0 decode errors |
+| A shared window closed, from the interface | "The source is no longer available…" and nothing else: capture not started again |
+| Automated tests and clippy | 60 passed (one ignored) on 1.95 and stable; clippy clean on both for Linux |
+
+Not verified: stopping sharing from the desktop (COSMIC has no control for it; GNOME has one),
+GNOME and other desktops with this change.

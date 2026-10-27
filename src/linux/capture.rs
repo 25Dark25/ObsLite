@@ -225,12 +225,39 @@ impl Drop for Session {
     }
 }
 
-/// Portal, then pipeline, until asked to stop or the stream ends.
+/// Portal, then pipeline, until asked to stop or the stream ends. A portal that crashes ends the
+/// stream without closing the session (COSMIC's did, every few seconds to minutes): then a new
+/// session is started, from the remembered choice so without the dialog, and capture goes on.
 fn run(opts: SessionOptions, shared: &Arc<Shared>, stop: &AtomicBool) -> Result<(), String> {
-    let cast = portal::start(opts.cursor)?;
-    if stop.load(Ordering::Acquire) {
-        return Ok(());
+    let handler = Arc::new(Mutex::new(Handler {
+        shared: shared.clone(),
+        record: opts.record,
+        fps: opts.fps,
+        preview_interval: (opts.preview_fps > 0).then(|| Duration::from_secs_f64(1.0 / opts.preview_fps as f64)),
+        last_preview: None,
+        origin: (0, 0),
+    }));
+    loop {
+        let mut cast = portal::start(opts.cursor)?;
+        if stop.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let frames = shared.frames.load(Ordering::Relaxed);
+        let result = stream(&cast, &handler, stop);
+        if stop.load(Ordering::Acquire) {
+            return result;
+        }
+        // The desktop's `Closed` can come just after the end of the stream. A session that sent
+        // no frames is not started again, so a source that cannot work does not loop.
+        thread::sleep(Duration::from_millis(500));
+        if cast.was_closed() || shared.frames.load(Ordering::Relaxed) == frames {
+            return result;
+        }
     }
+}
+
+/// Runs the pipeline for one portal session until asked to stop or the stream ends.
+fn stream(cast: &portal::Cast, handler: &Arc<Mutex<Handler>>, stop: &AtomicBool) -> Result<(), String> {
     let pipeline = gst::parse::launch(&format!(
         "pipewiresrc fd={fd} path={node} do-timestamp=true keepalive-time=1000 \
          ! videoconvert ! video/x-raw,format=BGRx ! appsink name=sink max-buffers=2 drop=true sync=false",
@@ -241,21 +268,14 @@ fn run(opts: SessionOptions, shared: &Arc<Shared>, stop: &AtomicBool) -> Result<
     .downcast::<gst::Pipeline>()
     .map_err(|_| "not a pipeline".to_owned())?;
     let sink = pipeline.by_name("sink").and_then(|e| e.downcast::<gst_app::AppSink>().ok()).ok_or("no sink")?;
-    let mut handler = Handler {
-        shared: shared.clone(),
-        record: opts.record,
-        fps: opts.fps,
-        preview_interval: (opts.preview_fps > 0).then(|| Duration::from_secs_f64(1.0 / opts.preview_fps as f64)),
-        last_preview: None,
-        origin: (0, 0),
-    };
     let failed = Arc::new(Mutex::new(None::<String>));
     let handler_failed = failed.clone();
+    let handler = handler.clone();
     sink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
             .new_sample(move |sink| {
                 let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                if let Err(e) = handler.on_frame(&sample) {
+                if let Err(e) = handler.lock().unwrap().on_frame(&sample) {
                     *handler_failed.lock().unwrap() = Some(e);
                     return Err(gst::FlowError::Error);
                 }
@@ -273,10 +293,10 @@ fn run(opts: SessionOptions, shared: &Arc<Shared>, stop: &AtomicBool) -> Result<
         if let gst::MessageView::Error(e) = message.view() {
             result = Err(failed.lock().unwrap().take().unwrap_or_else(|| e.error().to_string()));
         }
-        // End of stream: the window was closed or sharing was stopped from the desktop.
+        // End of stream: the window was closed, sharing was stopped from the desktop, or the
+        // portal went away.
         break;
     }
     let _ = pipeline.set_state(gst::State::Null);
-    drop(cast);
     result
 }
