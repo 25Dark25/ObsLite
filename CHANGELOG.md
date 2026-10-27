@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   showed at Stop, audio for the file piled up in memory, and the file was left unfinished even
   when most of it had been written. Now it is finished, keeping what was recorded until then, and
   the message says where. A replay that fails to save is finished too.
+- Turning a recording into a regular MP4 now puts its new index on the disk before the old ones
+  become padding: a power cut right after stopping could leave a file with no index at all.
+- A recording whose conversion was interrupted is finished at the next start with one index, not
+  two (the second one missing samples).
 - Linux: a failing encoder or a full disk is noticed while recording; before, every later packet
   queued in memory and the recording was reported as saved, cut short. If the encoder cannot be
   started, the error is shown instead of sharing the screen again and again.
