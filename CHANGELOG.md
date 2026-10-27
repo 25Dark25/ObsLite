@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Linux: obs-lite no longer processes every frame a desktop sends when it sends more than needed;
+  on COSMIC, which sent about 80 a second for a still screen, the idle preview went from about
+  20 % to 4 % of a CPU core.
 - Recordings, replays and screenshots made in the same second no longer write over each other: a
   name already in use gets " (2)", " (3)" and so on.
 - A second obs-lite started while the first is recording no longer "repairs" the recording the
