@@ -1392,7 +1392,7 @@ impl App {
                     ui.painter().vline(line.center().x, line.y_range(), Stroke::new(1.0, GREY4));
                     ui.allocate_ui_with_layout(vec2(ui.available_width(), body), Layout::top_down(Align::Min), |ui| {
                         ui.set_min_height(body);
-                        if recording && dialog.page != SettingsPage::Hotkeys {
+                        if recording {
                             ui.label(RichText::new(tr!("Detén la grabación y el búfer de repetición para cambiar estos ajustes.", "Stop recording and the replay buffer to change these settings.")).color(YELLOW));
                             ui.add_space(6.0);
                         }
