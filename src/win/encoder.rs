@@ -519,8 +519,10 @@ fn encode_video(inner: &Inner, h264: Com<H264>) {
                         h264.force_keyframe();
                     }
                     let texture = inner.canvas.converter.0.texture(slot);
+                    // The encoder would not ask again: stop, keeping what was encoded.
                     if let Err(e) = h264.push(texture, n as i64 * TICKS_PER_SECOND / fps, TICKS_PER_SECOND / fps) {
                         inner.output.lock().unwrap().record_error(e.to_string());
+                        break;
                     }
                     inner.encoded.fetch_add(1, Ordering::Relaxed);
                 }
@@ -534,8 +536,10 @@ fn encode_video(inner: &Inner, h264: Com<H264>) {
             VideoEvent::HaveOutput => match h264.pull() {
                 Ok(Some(packet)) => inner.output.lock().unwrap().video(packet, || h264.output_type().map(Com).map_err(|e| e.to_string())),
                 Ok(None) => {}
+                // Asking again would fail the same way, forever on the software encoder.
                 Err(e) => {
                     inner.output.lock().unwrap().record_error(e.to_string());
+                    break;
                 }
             },
             VideoEvent::Drained => break,
