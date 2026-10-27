@@ -761,6 +761,13 @@ impl App {
             }
         }
 
+        // A recording that cannot be written (its folder, a full disk, a failed encoder) is stopped
+        // now, not when the user stops it, so the error shows right away.
+        if let RecState::Active { session, recording: Some(_), .. } = &self.rec
+            && session.shared.outputs.lock().unwrap().failed()
+        {
+            return self.stop_recording(ctx);
+        }
         if self.active_session().is_some_and(Session::is_finished) {
             let reason = if self.is_recording() {
                 tr!("La fuente dejó de estar disponible; guardando…", "The source is no longer available; saving…")
