@@ -521,6 +521,8 @@ impl App {
         };
         // One capture session at a time: the recording session also feeds the preview.
         self.preview = None;
+        // A menu left open (the session started from a hotkey) would still change the sources.
+        egui::Popup::close_all(ctx);
 
         // The application may have started after obs-lite, and a device that failed (unplugged)
         // may be back.
