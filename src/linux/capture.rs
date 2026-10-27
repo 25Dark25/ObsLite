@@ -262,8 +262,11 @@ fn run(opts: SessionOptions, shared: &Arc<Shared>, stop: &AtomicBool) -> Result<
 
 /// Runs the pipeline for one portal session until asked to stop or the stream ends.
 fn stream(cast: &portal::Cast, handler: &Arc<Mutex<Handler>>, stop: &AtomicBool) -> Result<(), String> {
+    // A desktop may send frames at the display's refresh rate (144 Hz here, on COSMIC) even for
+    // a still picture: no more than the session uses are converted.
+    let fps = handler.lock().unwrap().fps.max(1);
     let pipeline = gst::parse::launch(&format!(
-        "pipewiresrc fd={fd} path={node} do-timestamp=true keepalive-time=1000 \
+        "pipewiresrc fd={fd} path={node} do-timestamp=true keepalive-time=1000 ! videorate max-rate={fps} \
          ! videoconvert ! video/x-raw,format=BGRx ! appsink name=sink max-buffers=2 drop=true sync=false",
         fd = cast.fd.as_raw_fd(),
         node = cast.node,
