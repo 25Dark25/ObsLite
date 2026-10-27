@@ -261,6 +261,10 @@ impl App {
         matches!(self.rec, RecState::Active { replay: true, .. })
     }
 
+    fn is_session_active(&self) -> bool {
+        matches!(self.rec, RecState::Active { .. })
+    }
+
     /// The capture session of a recording or the replay buffer.
     fn active_session(&self) -> Option<&Session> {
         match &self.rec {
@@ -701,6 +705,11 @@ impl App {
         let commands: Vec<TrayCommand> = self.tray_commands.lock().unwrap().drain(..).collect();
         for command in commands {
             match command {
+                // Settings applies a copy of the config taken when it opened, which a session started
+                // now would not be in; stopping is fine.
+                TrayCommand::ToggleRecording | TrayCommand::ToggleReplay if self.settings.is_some() && !self.is_session_active() => {
+                    self.set_status(tr!("Cierra los ajustes para empezar.", "Close Settings to start."), None, true);
+                }
                 TrayCommand::ToggleRecording => self.handle(ctx, Action::ToggleRecording),
                 TrayCommand::TogglePause => self.handle(ctx, Action::TogglePause),
                 TrayCommand::ToggleReplay => self.handle(ctx, Action::ToggleReplay),
@@ -2263,6 +2272,18 @@ mod tests {
         let (mut a, mut b, mut c) = (Some("F9".to_owned()), Some("F9".to_owned()), None);
         take_from_others(&mut [&mut a, &mut b, &mut c], 0);
         assert_eq!((a.as_deref(), b, c), (Some("F9"), None, None));
+    }
+
+    #[test]
+    fn the_tray_does_not_start_a_session_while_settings_is_open() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut app = test_app();
+        app.settings = Some(SettingsDialog { draft: Config::default(), page: SettingsPage::General, capturing: None });
+        app.tray_commands.lock().unwrap().push(TrayCommand::ToggleRecording);
+        app.poll(&egui::Context::default());
+        let status = app.status.as_ref().expect("a status");
+        assert!(status.text.contains("ajustes"), "status: {}", status.text);
+        assert!(matches!(app.rec, RecState::Idle));
     }
 
     #[test]
