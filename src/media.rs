@@ -114,6 +114,12 @@ impl<M: Muxer> Outputs<M> {
         (self.path, self.file, self.error, self.keyframe_wanted) = (Some(path), None, None, true);
     }
 
+    /// The recording asked for has failed (its file could not be created or written, or the
+    /// encoder failed): it should be stopped, and finishing it reports why.
+    pub fn failed(&self) -> bool {
+        self.path.is_some() && self.error.is_some()
+    }
+
     /// Stops recording; the returned file must still be finished (it can take a moment).
     pub fn take_file(&mut self) -> Option<PendingFile<M>> {
         let path = self.path.take()?;
@@ -158,7 +164,8 @@ impl<M: Muxer> Outputs<M> {
                 }
             }
         }
-        if let (Some(path), None, true, Some(video)) = (&self.path, &self.file, packet.key, &self.video_format) {
+        // A file that could not be created is not tried again at every keyframe.
+        if let (Some(path), None, None, true, Some(video)) = (&self.path, &self.file, &self.error, packet.key, &self.video_format) {
             match M::create(path, video, self.audio_format.as_ref(), packet.time) {
                 Ok(file) => {
                     for audio in self.pending_audio.drain(..) {
@@ -192,7 +199,7 @@ impl<M: Muxer> Outputs<M> {
                 None => {
                     self.pending_audio.push_back(packet.clone());
                     // Without a recording waiting for its keyframe, a second is plenty.
-                    if self.path.is_none() {
+                    if self.path.is_none() || self.error.is_some() {
                         while self.pending_audio.front().is_some_and(|p| p.time < packet.time - TICKS_PER_SECOND) {
                             self.pending_audio.pop_front();
                         }
@@ -218,13 +225,21 @@ pub struct PendingFile<M: Muxer> {
 }
 
 impl<M: Muxer> PendingFile<M> {
+    /// Finishes the file. After an error the file is finished too, so it keeps what was
+    /// recorded until then, and the error says where it is.
     pub fn finish(self) -> Result<PathBuf, String> {
-        if let Some(e) = self.error {
-            return Err(e);
+        let finished = self.file.map(M::finish);
+        match (self.error, finished) {
+            (None, Some(result)) => result.map(|()| self.path),
+            (None, None) => Err(tr!("no se codificó ningún fotograma", "no frame was encoded").to_owned()),
+            (Some(e), Some(Ok(()))) => Err(tr!(
+                "{} (lo grabado hasta entonces está en '{}')",
+                "{} (what was recorded until then is in '{}')",
+                e,
+                crate::platform::sys::display_path(&self.path).display()
+            )),
+            (Some(e), _) => Err(e),
         }
-        let file = self.file.ok_or_else(|| tr!("no se codificó ningún fotograma", "no frame was encoded").to_owned())?;
-        file.finish()?;
-        Ok(self.path)
     }
 }
 
@@ -296,7 +311,11 @@ impl<M: Muxer> Replay<M> {
                 (None, None) => break,
             };
             let packet = if is_video { video.next() } else { audio.next() };
-            file.write(is_video, packet.expect("peeked"))?;
+            if let Err(e) = file.write(is_video, packet.expect("peeked")) {
+                // Still finished, so the file is not left half written.
+                let _ = file.finish();
+                return Err(e);
+            }
         }
         file.finish()?;
         Ok(path)
@@ -383,6 +402,80 @@ mod tests {
         fn finish(self) -> Result<(), String> {
             Ok(())
         }
+    }
+
+    /// What a `Broken` muxer was asked to do, and what fails.
+    #[derive(Default)]
+    struct Calls {
+        creates: usize,
+        finished: bool,
+        fail_create: bool,
+        fail_write: bool,
+    }
+
+    /// A muxer whose file cannot be created or written, as set in its `Calls`.
+    struct Broken(Arc<Mutex<Calls>>);
+
+    impl Muxer for Broken {
+        type Format = Arc<Mutex<Calls>>;
+
+        fn create(_: &Path, calls: &Self::Format, _: Option<&Self::Format>, _: i64) -> Result<Self, String> {
+            let mut c = calls.lock().unwrap();
+            c.creates += 1;
+            if c.fail_create { Err("cannot create".into()) } else { Ok(Self(calls.clone())) }
+        }
+
+        fn write(&self, _: bool, _: &Packet) -> Result<(), String> {
+            if self.0.lock().unwrap().fail_write { Err("disk full".into()) } else { Ok(()) }
+        }
+
+        fn finish(self) -> Result<(), String> {
+            self.0.lock().unwrap().finished = true;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_created_fails_the_recording_once() {
+        let calls = Arc::new(Mutex::new(Calls { fail_create: true, ..Calls::default() }));
+        let mut outputs = Outputs::<Broken>::default();
+        outputs.start_file(PathBuf::from("rec.mp4"));
+        outputs.video(packet(0, true), || Ok(calls.clone()));
+        assert!(outputs.failed(), "the app must hear of it while recording");
+        // 10 s: a packet of each every 0.1 s, a keyframe every second.
+        for n in 1..100 {
+            outputs.audio(vec![packet(n * TICKS_PER_SECOND / 10, true)]);
+            outputs.video(packet(n * TICKS_PER_SECOND / 10, n % 10 == 0), || unreachable!());
+        }
+        assert_eq!(calls.lock().unwrap().creates, 1, "not tried again at every keyframe");
+        assert!(outputs.pending_audio.len() < 20, "audio is not kept for a file that will not come");
+        assert!(outputs.take_file().unwrap().finish().is_err());
+    }
+
+    #[test]
+    fn a_recording_that_fails_is_still_finished() {
+        let calls = Arc::new(Mutex::new(Calls::default()));
+        let mut outputs = Outputs::<Broken>::default();
+        outputs.start_file(PathBuf::from("rec.mp4"));
+        outputs.video(packet(0, true), || Ok(calls.clone()));
+        assert!(!outputs.failed());
+        calls.lock().unwrap().fail_write = true;
+        outputs.video(packet(10, false), || unreachable!());
+        assert!(outputs.failed());
+        let error = outputs.take_file().unwrap().finish().unwrap_err();
+        assert!(calls.lock().unwrap().finished, "the file keeps what was recorded until then");
+        assert!(error.contains("disk full") && error.contains("rec.mp4"), "{error}");
+    }
+
+    #[test]
+    fn a_replay_that_fails_to_write_is_still_finished() {
+        let calls = Arc::new(Mutex::new(Calls::default()));
+        let mut outputs = Outputs::<Broken>::default();
+        outputs.set_replay(Some(20));
+        outputs.video(packet(0, true), || Ok(calls.clone()));
+        calls.lock().unwrap().fail_write = true;
+        assert!(outputs.replay().unwrap().save(PathBuf::from("replay.mp4")).is_err());
+        assert!(calls.lock().unwrap().finished);
     }
 
     #[test]
