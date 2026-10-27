@@ -93,7 +93,14 @@ fn stream(kind: InputKind, device_id: Option<&str>, shared: &InputShared, follow
     let mut raw: VecDeque<u8> = VecDeque::new();
     let mut checked = Instant::now();
     while !shared.stopped() {
-        capture.read_from_device_to_deque(&mut raw)?;
+        // Every packet waiting, not one per wake-up: otherwise a delay is never caught up.
+        loop {
+            let before = raw.len();
+            capture.read_from_device_to_deque(&mut raw)?;
+            if raw.len() == before {
+                break;
+            }
+        }
         let usable = raw.len() / 4 * 4;
         if usable > 0 {
             let bytes: Vec<u8> = raw.drain(..usable).collect();
