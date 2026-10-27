@@ -4,21 +4,40 @@
 //! a full index (`moov`) is written at the end, and the empty `moov` at the start and the
 //! fragments' own indexes (`moof`) become padding (`free`).
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 /// Converts the finished fragmented MP4 at `path`; a file that is not fragmented is left as it is.
 pub fn defragment(path: &Path) -> io::Result<()> {
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
-    convert(&mut file, false, |f, len| f.set_len(len)).map(|_| ())
+    convert(&mut file, false).map(|_| ())
 }
 
 /// Converts a recording whose writing stopped partway (a crash, a power cut), keeping every whole
 /// fragment. Returns whether it was fragmented: a finished recording is already regular.
 pub fn repair(path: &Path) -> io::Result<bool> {
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
-    convert(&mut file, true, |f, len| f.set_len(len))
+    convert(&mut file, true)
+}
+
+/// What converting needs of a file besides reading and writing.
+trait Storage: Read + Write + Seek {
+    fn truncate(&mut self, len: u64) -> io::Result<()>;
+    /// Puts what was written so far on the disk. The system may otherwise write the small
+    /// in-place changes before the new index at the end, and a power cut between them would
+    /// leave a file with no index at all.
+    fn sync(&mut self) -> io::Result<()>;
+}
+
+impl Storage for File {
+    fn truncate(&mut self, len: u64) -> io::Result<()> {
+        self.set_len(len)
+    }
+
+    fn sync(&mut self) -> io::Result<()> {
+        self.sync_data()
+    }
 }
 
 fn invalid(what: &str) -> io::Error {
@@ -442,7 +461,16 @@ fn rebuild_trak(trak: Vec<Node>, track: &Track, duration: u64, in_movie: u64) ->
 /// Converts in place, returning whether the file was fragmented. With `cut_short`, a file whose
 /// writing stopped partway is accepted: its unfinished last box, and any fragment whose data it
 /// held, are dropped. `truncate` cuts the file when the new index ends before the old end.
-fn convert<F: Read + Write + Seek>(file: &mut F, cut_short: bool, truncate: impl FnOnce(&mut F, u64) -> io::Result<()>) -> io::Result<bool> {
+/// Marks the old indexes as padding, the initial `moov` last.
+fn pad(file: &mut impl Storage, boxes: &[Header], init: &Header) -> io::Result<()> {
+    for header in boxes.iter().filter(|h| &h.kind == b"moof").chain([init]) {
+        file.seek(SeekFrom::Start(header.start + 4))?;
+        file.write_all(b"free")?;
+    }
+    file.flush()
+}
+
+fn convert(file: &mut impl Storage, cut_short: bool) -> io::Result<bool> {
     let len = file.seek(SeekFrom::End(0))?;
     let mut top = Vec::new();
     let mut end = 0;
@@ -512,13 +540,10 @@ fn convert<F: Read + Write + Seek>(file: &mut F, cut_short: bool, truncate: impl
     file.write_all(&index)?;
     let new_end = at + index.len() as u64;
     if new_end < len {
-        truncate(file, new_end)?;
+        file.truncate(new_end)?;
     }
-    for header in top.iter().filter(|h| &h.kind == b"moof").chain([init_header]) {
-        file.seek(SeekFrom::Start(header.start + 4))?;
-        file.write_all(b"free")?;
-    }
-    file.flush()?;
+    file.sync()?;
+    pad(file, &top, init_header)?;
     Ok(true)
 }
 
@@ -721,13 +746,68 @@ pub(crate) mod tests {
         (0..count).map(|i| (file[positions[i]..positions[i] + sizes[i] as usize].to_vec(), durations[i], sync[i], offsets[i])).collect()
     }
 
+    impl Storage for Cursor<Vec<u8>> {
+        fn truncate(&mut self, len: u64) -> io::Result<()> {
+            self.get_mut().truncate(len as usize);
+            Ok(())
+        }
+
+        fn sync(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A file in memory that logs what is done to it, and can stop working after some writes,
+    /// as when obs-lite is stopped in the middle.
+    struct Logged {
+        file: Cursor<Vec<u8>>,
+        log: Vec<&'static str>,
+        writes_left: usize,
+    }
+
+    impl Read for Logged {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.file.read(buf)
+        }
+    }
+
+    impl Seek for Logged {
+        fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
+            self.file.seek(to)
+        }
+    }
+
+    impl Write for Logged {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.writes_left == 0 {
+                return Err(io::Error::other("stopped"));
+            }
+            self.writes_left -= 1;
+            self.log.push(if buf == b"free" { "pad" } else { "index" });
+            self.file.write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Storage for Logged {
+        fn truncate(&mut self, len: u64) -> io::Result<()> {
+            self.log.push("truncate");
+            self.file.truncate(len)
+        }
+
+        fn sync(&mut self) -> io::Result<()> {
+            self.log.push("sync");
+            Ok(())
+        }
+    }
+
     /// `file` converted in memory.
     fn converted(file: Vec<u8>, cut_short: bool) -> io::Result<Vec<u8>> {
         let mut cursor = Cursor::new(file);
-        convert(&mut cursor, cut_short, |c, len| {
-            c.get_mut().truncate(len as usize);
-            Ok(())
-        })?;
+        convert(&mut cursor, cut_short)?;
         Ok(cursor.into_inner())
     }
 
@@ -787,9 +867,20 @@ pub(crate) mod tests {
     #[test]
     fn a_regular_file_is_left_alone() {
         let regular = [bx(b"ftyp", b"mp42\0\0\0\0mp41isom"), bx(b"mdat", &[1; 50]), bx(b"moov", &[])].concat();
-        let mut cursor = Cursor::new(regular.clone());
-        assert!(!convert(&mut cursor, true, |_, _| panic!("nothing to cut")).unwrap());
-        assert_eq!(cursor.into_inner(), regular);
+        let mut file = Logged { file: Cursor::new(regular.clone()), log: Vec::new(), writes_left: usize::MAX };
+        assert!(!convert(&mut file, true).unwrap());
+        assert!(file.log.is_empty(), "untouched: {:?}", file.log);
+        assert_eq!(file.file.into_inner(), regular);
+    }
+
+    #[test]
+    fn the_new_index_is_on_disk_before_the_old_ones_become_padding() {
+        let (original, _, _) = fragmented();
+        let mut file = Logged { file: Cursor::new(original), log: Vec::new(), writes_left: usize::MAX };
+        convert(&mut file, false).unwrap();
+        let first_pad = file.log.iter().position(|&op| op == "pad").unwrap();
+        assert_eq!(file.log[first_pad - 1], "sync", "log: {:?}", file.log);
+        assert_eq!(file.log[0], "index");
     }
 
     #[test]
