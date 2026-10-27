@@ -132,8 +132,7 @@ struct Inner {
     lagged: AtomicU64,
     stop: AtomicBool,
     fps: u64,
-    /// Frames waiting for the encoder: (frame number, NV12 slot).
-    queue: Mutex<VecDeque<(u64, usize)>>,
+    queue: Mutex<FrameQueue>,
     queued: Condvar,
     output: Arc<Mutex<Outputs>>,
 }
@@ -197,7 +196,7 @@ impl Encoder {
             lagged: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             fps: fps as u64,
-            queue: Mutex::new(VecDeque::new()),
+            queue: Mutex::new(FrameQueue::default()),
             queued: Condvar::new(),
             output: outputs,
         });
@@ -434,28 +433,61 @@ fn produce_frames(inner: &Inner) {
             inner.lagged.fetch_add(current - n, Ordering::Relaxed);
             n = current;
         }
-        {
-            // The slot is about to be overwritten: it must not still be queued or in flight.
-            let mut queue = inner.queue.lock().unwrap();
-            while queue.len() > FRAME_TEXTURES - IN_FLIGHT {
-                queue.pop_front();
-                inner.lagged.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-        let slot = n as usize % FRAME_TEXTURES;
+        let (slot, dropped) = inner.queue.lock().unwrap().free_slot();
+        inner.lagged.fetch_add(dropped, Ordering::Relaxed);
         inner.canvas.snapshot(slot);
-        inner.queue.lock().unwrap().push_back((n, slot));
+        inner.queue.lock().unwrap().frames.push_back((n, slot));
         inner.queued.notify_one();
         n += 1;
     }
     inner.queued.notify_all();
 }
 
+/// Frames waiting for the encoder, and which NV12 slot each one is in.
+#[derive(Default)]
+struct FrameQueue {
+    /// (frame number, NV12 slot), oldest first.
+    frames: VecDeque<(u64, usize)>,
+    /// Slots of the last `IN_FLIGHT` frames the encoder took: it may still be reading them.
+    taken: VecDeque<usize>,
+    next: usize,
+}
+
+impl FrameQueue {
+    /// A slot no queued or in-flight frame uses, dropping the oldest queued frames if the encoder
+    /// is that far behind; also how many were dropped. At most `FRAME_TEXTURES - IN_FLIGHT - 1`
+    /// frames stay queued, so with the in-flight ones a slot is always free.
+    fn free_slot(&mut self) -> (usize, u64) {
+        let mut dropped = 0;
+        while self.frames.len() >= FRAME_TEXTURES - IN_FLIGHT {
+            self.frames.pop_front();
+            dropped += 1;
+        }
+        loop {
+            let slot = self.next;
+            self.next = (slot + 1) % FRAME_TEXTURES;
+            if !self.taken.contains(&slot) && !self.frames.iter().any(|&(_, s)| s == slot) {
+                return (slot, dropped);
+            }
+        }
+    }
+
+    /// The oldest queued frame, for the encoder.
+    fn take(&mut self) -> Option<(u64, usize)> {
+        let frame = self.frames.pop_front()?;
+        self.taken.push_back(frame.1);
+        if self.taken.len() > IN_FLIGHT {
+            self.taken.pop_front();
+        }
+        Some(frame)
+    }
+}
+
 /// The next queued frame; once stopped and empty, `None`.
 fn next_frame(inner: &Inner) -> Option<(u64, usize)> {
     let mut queue = inner.queue.lock().unwrap();
     loop {
-        if let Some(frame) = queue.pop_front() {
+        if let Some(frame) = queue.take() {
             return Some(frame);
         }
         if inner.stop.load(Ordering::Acquire) {
@@ -489,8 +521,10 @@ fn encode_video(inner: &Inner, h264: Com<H264>) {
                         h264.force_keyframe();
                     }
                     let texture = inner.canvas.converter.0.texture(slot);
+                    // The encoder would not ask again: stop, keeping what was encoded.
                     if let Err(e) = h264.push(texture, n as i64 * TICKS_PER_SECOND / fps, TICKS_PER_SECOND / fps) {
                         inner.output.lock().unwrap().record_error(e.to_string());
+                        break;
                     }
                     inner.encoded.fetch_add(1, Ordering::Relaxed);
                 }
@@ -504,8 +538,10 @@ fn encode_video(inner: &Inner, h264: Com<H264>) {
             VideoEvent::HaveOutput => match h264.pull() {
                 Ok(Some(packet)) => inner.output.lock().unwrap().video(packet, || h264.output_type().map(Com).map_err(|e| e.to_string())),
                 Ok(None) => {}
+                // Asking again would fail the same way, forever on the software encoder.
                 Err(e) => {
                     inner.output.lock().unwrap().record_error(e.to_string());
+                    break;
                 }
             },
             VideoEvent::Drained => break,
@@ -537,6 +573,25 @@ mod tests {
 
     fn rect(r: RECT) -> (i32, i32, i32, i32) {
         (r.left, r.top, r.right, r.bottom)
+    }
+
+    #[test]
+    fn a_slot_is_never_reused_while_queued_or_in_flight() {
+        // The encoder falls behind for 20 frames (the queue fills and drops), then catches up.
+        let mut queue = FrameQueue::default();
+        let mut taken: Vec<usize> = Vec::new();
+        for n in 0..2000u64 {
+            let (slot, _) = queue.free_slot();
+            assert!(!queue.frames.iter().any(|&(_, s)| s == slot), "frame {n}: slot {slot} is queued");
+            let in_flight = &taken[taken.len().saturating_sub(IN_FLIGHT)..];
+            assert!(!in_flight.contains(&slot), "frame {n}: slot {slot} is still being read");
+            queue.frames.push_back((n, slot));
+            for _ in 0..if n / 20 % 2 == 0 { 0 } else { 1 + n % 2 } {
+                if let Some((_, s)) = queue.take() {
+                    taken.push(s);
+                }
+            }
+        }
     }
 
     #[test]

@@ -70,6 +70,8 @@ struct Handler {
     last_preview: Option<Instant>,
     /// Top-left corner of the recorded region, fixed when the encoder is created.
     origin: (u32, u32),
+    /// Why handling a frame failed (the encoder could not be made, say), which ends the stream.
+    failed: Option<String>,
 }
 
 impl Handler {
@@ -236,6 +238,7 @@ fn run(opts: SessionOptions, shared: &Arc<Shared>, stop: &AtomicBool) -> Result<
         preview_interval: (opts.preview_fps > 0).then(|| Duration::from_secs_f64(1.0 / opts.preview_fps as f64)),
         last_preview: None,
         origin: (0, 0),
+        failed: None,
     }));
     loop {
         let mut cast = portal::start(opts.cursor)?;
@@ -244,7 +247,8 @@ fn run(opts: SessionOptions, shared: &Arc<Shared>, stop: &AtomicBool) -> Result<
         }
         let frames = shared.frames.load(Ordering::Relaxed);
         let result = stream(&cast, &handler, stop);
-        if stop.load(Ordering::Acquire) {
+        // Our own failure would only happen again with a new session.
+        if stop.load(Ordering::Acquire) || handler.lock().unwrap().failed.is_some() {
             return result;
         }
         // The desktop's `Closed` can come just after the end of the stream. A session that sent
@@ -268,22 +272,21 @@ fn stream(cast: &portal::Cast, handler: &Arc<Mutex<Handler>>, stop: &AtomicBool)
     .downcast::<gst::Pipeline>()
     .map_err(|_| "not a pipeline".to_owned())?;
     let sink = pipeline.by_name("sink").and_then(|e| e.downcast::<gst_app::AppSink>().ok()).ok_or("no sink")?;
-    let failed = Arc::new(Mutex::new(None::<String>));
-    let handler_failed = failed.clone();
-    let handler = handler.clone();
+    let frames = handler.clone();
     sink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
             .new_sample(move |sink| {
                 let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                if let Err(e) = handler.lock().unwrap().on_frame(&sample) {
-                    *handler_failed.lock().unwrap() = Some(e);
+                let mut handler = frames.lock().unwrap();
+                if let Err(e) = handler.on_frame(&sample) {
+                    handler.failed = Some(e);
                     return Err(gst::FlowError::Error);
                 }
                 Ok(gst::FlowSuccess::Ok)
             })
             .build(),
     );
-    pipeline.set_state(gst::State::Playing).map_err(|e| e.to_string())?;
+    super::encoder::play(&pipeline)?;
     let bus = pipeline.bus().ok_or("no bus")?;
     let mut result = Ok(());
     while !stop.load(Ordering::Acquire) {
@@ -291,7 +294,7 @@ fn stream(cast: &portal::Cast, handler: &Arc<Mutex<Handler>>, stop: &AtomicBool)
             continue;
         };
         if let gst::MessageView::Error(e) = message.view() {
-            result = Err(failed.lock().unwrap().take().unwrap_or_else(|| e.error().to_string()));
+            result = Err(handler.lock().unwrap().failed.clone().unwrap_or_else(|| e.error().to_string()));
         }
         // End of stream: the window was closed, sharing was stopped from the desktop, or the
         // portal went away.
