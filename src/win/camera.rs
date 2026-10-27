@@ -45,6 +45,10 @@ fn devices() -> windows::core::Result<Vec<IMFActivate>> {
         let mut array = std::ptr::null_mut();
         let mut count = 0;
         MFEnumDeviceSources(&attributes, &mut array, &mut count)?;
+        // With no camera the array may be null, which a slice must never be.
+        if array.is_null() {
+            return Ok(Vec::new());
+        }
         let activates = std::slice::from_raw_parts_mut(array, count as usize).iter_mut().filter_map(Option::take).collect();
         CoTaskMemFree(Some(array as *const _));
         Ok(activates)
