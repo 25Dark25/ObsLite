@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::mem::ManuallyDrop;
 use std::path::Path;
 
-use windows::Win32::Foundation::RECT;
+use windows::Win32::Foundation::{E_FAIL, RECT};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_VIDEO_ENCODER, D3D11_BOX, D3D11_VIDEO_COLOR,
     D3D11_VIDEO_COLOR_0, D3D11_VIDEO_COLOR_RGBA, ID3D11DeviceContext, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC,
@@ -400,12 +400,18 @@ impl H264 {
         }
     }
 
-    /// Blocks until the encoder asks for something.
+    /// Blocks until the encoder asks for something. An encoder that fails (a GPU reset, a driver
+    /// error) says so with `MEError` or a failed status, and may send nothing after it: that is
+    /// an error, not an event to wait past.
     pub fn next_event(&self) -> Result<VideoEvent> {
-        use windows::Win32::Media::MediaFoundation::{METransformDrainComplete, METransformHaveOutput, METransformNeedInput};
+        use windows::Win32::Media::MediaFoundation::{
+            MEError, METransformDrainComplete, METransformHaveOutput, METransformNeedInput,
+        };
         let Some(events) = &self.events else { return Ok(self.next.get()) };
         let event = unsafe { events.GetEvent(MF_EVENT_FLAG_NONE)? };
+        unsafe { event.GetStatus()? }.ok()?;
         Ok(match unsafe { event.GetType()? } {
+            t if t == MEError.0 as u32 => return Err(E_FAIL.into()),
             t if t == METransformNeedInput.0 as u32 => VideoEvent::NeedInput,
             t if t == METransformHaveOutput.0 as u32 => VideoEvent::HaveOutput,
             t if t == METransformDrainComplete.0 as u32 => VideoEvent::Drained,
