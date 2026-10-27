@@ -60,7 +60,7 @@ pub fn capture(kind: InputKind, device_id: Option<&str>, shared: &InputShared) -
         src.set_property("device", device);
     }
     let sink = pipeline.by_name("sink").and_then(|e| e.downcast::<gst_app::AppSink>().ok()).ok_or("no sink")?;
-    pipeline.set_state(gst::State::Playing)?;
+    super::encoder::play(&pipeline)?;
     let bus = pipeline.bus().ok_or("no bus")?;
     let mut result = Ok(());
     while !shared.stopped() {
@@ -72,8 +72,7 @@ pub fn capture(kind: InputKind, device_id: Option<&str>, shared: &InputShared) -
         }
         match sink.try_pull_sample(gst::ClockTime::from_mseconds(50)) {
             Some(sample) => {
-                let Some(buffer) = sample.buffer() else { continue };
-                let map = buffer.map_readable()?;
+                let Some(map) = sample.buffer().and_then(|b| b.map_readable().ok()) else { continue };
                 shared.deliver(map.as_slice().as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect());
             }
             None if sink.is_eos() => break,

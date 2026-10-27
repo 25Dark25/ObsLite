@@ -514,7 +514,9 @@ impl Muxer for Mp4 {
             // Never block the encoder: the muxer waits for both streams to interleave them.
             src.set_max_bytes(0);
         }
-        by_name::<gst::Element>(&pipeline, "file")?.set_property("location", path.to_string_lossy().as_ref());
+        // filesink takes text: a path that is not valid UTF-8 would be written somewhere else.
+        let location = path.to_str().ok_or_else(|| tr!("la ruta de grabación no es UTF-8 válido", "the recording path is not valid UTF-8").to_owned())?;
+        by_name::<gst::Element>(&pipeline, "file")?.set_property("location", location);
         play(&pipeline)?;
         Ok(Self { pipeline, path: path.to_owned(), video: video_src, audio: audio_src, start, failed: Mutex::new(None) })
     }

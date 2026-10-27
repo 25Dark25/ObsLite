@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source could be previewed, recorded or captured.
 - Windows: a window with an odd width or height is recorded sharp, losing its last column or row,
   instead of being scaled down on every frame with a black line at the edge.
+- Flatpak: a recording folder typed by hand that is not shared with obs-lite is refused, with a
+  message to choose it with Browse; recordings, replays and screenshots saved there were in the
+  sandbox's memory and lost when obs-lite closed.
+- Linux: obs-lite's language follows LANGUAGE, as other applications do.
+- Linux: clearing every hotkey releases its combinations; the desktop kept taking them from other
+  applications until obs-lite closed.
+- Linux: an unplugged camera ends with a message instead of leaving its last picture frozen.
+- Linux: a recording path that is not valid UTF-8 is refused instead of the file going elsewhere.
 - Windows: a failed preview picture, or a failed copy kept for screenshots, no longer stops a
   recording.
 - Windows: windows the desktop hides (suspended Store apps, windows on other virtual desktops) are
