@@ -49,6 +49,9 @@ cargo test --locked
 | `linux::encoder::the_webcam_is_pasted_in_place` | Linux only: the webcam picture lands in its rectangle. |
 | `linux::encoder::packet_times_discount_the_encoders_offset` | Linux only: packet times ignore the 1000-hour offset GStreamer video encoders add, so audio is not dropped from files. |
 | `linux::encoder::aac_codec_data_describes_lc_48k_stereo` | Linux only: the AAC stream description given to the muxer before any audio is AAC-LC, 48 kHz, stereo. |
+| `linux::encoder::frames_on_the_gpu_are_recorded` | Linux only, skipped without VA-API (CI): frames on the GPU (BGRA, 320×240 and an odd 321×241, cropped to 320×240) are converted and encoded there into a file that finishes. |
+| `linux::capture::only_a_plain_recording_takes_frames_on_the_gpu` | Linux only: frames are asked for on the GPU only when recording without a region or the webcam, and not again after the GPU failed to encode them. |
+| `linux::gpu::the_desktops_formats_are_offered_in_va_apis_layout_and_linear` | Linux only: the desktop is asked for its four formats in the layout VA-API reads, each also linear (COSMIC's portal fails when offered one layout), and nothing when VA-API reads none of them. |
 | `hotkeys::a_pressed_combination_becomes_text` | A combination pressed in the settings becomes "Ctrl+Alt+R". |
 | `hotkeys::keys_that_would_break_typing_are_rejected` | A hotkey needs Ctrl or Alt unless it is an F-key. |
 | `hotkeys::a_modifier_alone_is_not_a_hotkey` | Pressing Ctrl or Alt alone does not end hotkey capture. |
@@ -458,3 +461,22 @@ with all of them:
 Not verified: anything on Windows (no machine available), notably the audio capture rewrite
 (#57), the encoder error handling (#52) and the webcam mode and format changes (#58); unplugging
 a camera or an audio device; clearing hotkeys on a desktop; a real power cut during a conversion.
+
+2026-10-28, recording on the GPU with VA-API, same laptop (Intel iHD 26.3.5 in the Flatpak runtime,
+GStreamer 1.28; the system has GStreamer 1.24 and iHD 24.1). The build was run inside the Flatpak
+runtime (`flatpak run --command=`) and natively:
+
+| Step | Result |
+|---|---|
+| Self-test 8 s 1080p60, runtime | `vah264enc`, frames on the GPU; 444 frames, 60 fps, BT.709 (limited range) signalled, 0 decode errors; colours right |
+| Self-test with `preview shot 720`, runtime | 26 preview pictures of 640×360; a 1280×720 screenshot with the right colours |
+| Self-test with `pause replay`, runtime | 5.50 s for 9 s with 3 s paused, 330 frames; replay 3.42 s; 0 decode errors in both |
+| Self-test with `preview shot`, natively | `vah264lpenc`, frames on the GPU; 359 frames, 0 decode errors; preview and a 1920×1080 screenshot |
+| CPU and memory, self-test 40 s 1080p60 measured for 20 s, 3 runs each, runtime | 11.6 / 11.2 % of a core (third run dropped: the portal crashed during it; the recording went on, 2370 frames, 0 lagged) and 140 MB, against 42.6 / 41.6 / 43.6 % and 165 MB for `main` |
+| The preview made from the desktop's frame instead of the recording's | Intel's driver crashed (VEBOX) or the heap was corrupted within seconds, with one VA-API display or two: fixed by scaling the recording's surface |
+| Automated tests and clippy | 84 passed (one ignored) on 1.95 and stable natively, and the three new ones also inside the runtime; clippy clean on both for Linux and Windows. The new GPU test fails on the code before the preroll fix (a pipeline whose two sinks waited on each other) |
+
+Not verified: AMD; GNOME, KDE and other desktops (they may send other formats or layouts, which
+fall back to frames in memory); a window capture changing size while recording (scaled to fit
+with borders on the GPU, where frames in memory are cropped or padded); the interface (only the
+self-test was run).

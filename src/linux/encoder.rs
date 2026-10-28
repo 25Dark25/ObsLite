@@ -4,9 +4,11 @@
 //! PipeWire may deliver frames only when the picture changes, so each captured frame is drawn
 //! once into a picture in memory; like on Windows, a producer thread hands the newest picture
 //! (with the webcam on top) to the encoder every 1/fps of recording time. The best available H.264 encoder is used:
-//! VA-API (Intel/AMD), NVENC, then x264 or OpenH264 in software.
+//! VA-API (Intel/AMD), NVENC, then x264 or OpenH264 in software. Frames on the GPU (DMA-BUFs) are
+//! instead converted there once each, by VA-API, and the newest surface is what is handed over.
 
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -51,6 +53,15 @@ pub struct EncoderSettings {
     pub overlay: Option<(Corner, CameraSize)>,
     /// The pictures hold red first (RGBx, as some desktops send them) instead of blue (BGRx).
     pub red_first: bool,
+    /// The first frame, if frames come on the GPU (DMA-BUFs, see `push_gpu_frame`).
+    pub gpu: Option<gst::Sample>,
+}
+
+/// The newest picture: drawn in memory, or a VA-API surface converted from a frame on the GPU.
+#[derive(Clone)]
+enum Picture {
+    Memory(Arc<Vec<u8>>),
+    Surface(gst::Buffer),
 }
 
 /// A captured picture: rows of 4-byte pixels (BGRx, or RGBx) `stride` bytes apart.
@@ -65,7 +76,7 @@ struct Inner {
     /// Pictures drawn from captured frames (`input` sized), drawn on again once nothing reads
     /// them; the newest is what the producer hands over, without copying it.
     pictures: Mutex<Vec<Arc<Vec<u8>>>>,
-    latest: Mutex<Option<Arc<Vec<u8>>>>,
+    latest: Mutex<Option<Picture>>,
     /// The webcam picture, already scaled, and where it goes.
     overlay: Mutex<Option<(Vec<u8>, PixelRect)>>,
     red_first: bool,
@@ -76,6 +87,7 @@ struct Inner {
     stop: AtomicBool,
     fps: u64,
     input: (u32, u32),
+    output_size: (u32, u32),
     video_src: gst_app::AppSrc,
     /// The video pipeline, to notice when it fails.
     video: gst::Pipeline,
@@ -88,6 +100,8 @@ pub struct Encoder {
     inner: Arc<Inner>,
     producer: Option<JoinHandle<()>>,
     video: gst::Pipeline,
+    /// Where frames on the GPU go to be converted, if they come so.
+    frames: Option<gst_app::AppSrc>,
     audio: Option<(gst::Pipeline, gst_app::AppSrc)>,
     audio_frames: Mutex<u64>,
     overlay: Option<(Corner, CameraSize)>,
@@ -100,30 +114,53 @@ impl Encoder {
     pub fn new(s: EncoderSettings, clock: Arc<Clock>, started: Arc<AtomicBool>, outputs: Arc<Mutex<Outputs>>) -> Result<Self, String> {
         gst::init().map_err(|e| e.to_string())?;
         let fps = s.fps.max(1);
-        let (name, format, h264) = h264_encoder(h264_candidates(s.bitrate, fps), s.output)?;
         let (iw, ih) = s.input;
-        let frame_bytes = iw as u64 * ih as u64 * 4;
-        // Two threads: one leaves 4K60 too little time per frame, and every thread there is costs
-        // much more CPU (80 % more at 4K) for the work of sharing it.
-        let caps = raw_caps(format, s.output);
-        // The canvas is in the order the desktop sent (BGRx or RGBx), so only the encoder's own
-        // conversion is left. An encoder that takes BGRA or RGBA gets it as such, its fourth byte
-        // unused, so nothing is converted.
-        let canvas = match (format == "BGRA", s.red_first) {
-            (true, false) => "BGRA",
-            (true, true) => "RGBA",
-            (false, false) => "BGRx",
-            (false, true) => "RGBx",
+        let (name, video) = match &s.gpu {
+            Some(frame) => {
+                // VA-API converts the frames, so only its encoders can take them as they are.
+                let va = h264_candidates(s.bitrate, fps).into_iter().filter(|(factory, ..)| factory.starts_with("va"));
+                let (name, _, h264) = h264_encoder(va, |_, fragment| encodes_on_gpu(frame, fragment, s.output))?;
+                // Each frame is converted once, as it comes (`frames` to `surfaces`); the newest surface
+                // is what the producer hands the encoder (`src`).
+                let surfaces = surface_caps(s.output);
+                let video = launch(&format!(
+                    "appsrc name=frames is-live=true format=time block=false max-bytes=0 max-buffers=2 leaky-type=downstream \
+                     ! vapostproc add-borders=true ! {surfaces} ! appsink name=surfaces max-buffers=1 drop=true sync=false async=false \
+                     appsrc name=src is-live=true format=time block=false \
+                       caps=\"{surfaces},framerate={fps}/1\" \
+                     ! {h264} ! h264parse ! video/x-h264,stream-format=avc,alignment=au \
+                     ! appsink name=sink sync=false async=false"
+                ))?;
+                super::gpu::share_display(&video);
+                (format!("{name}, frames on the GPU"), video)
+            }
+            None => {
+                let (name, format, h264) = h264_encoder(h264_candidates(s.bitrate, fps), |format, fragment| encodes(format, fragment, s.output))?;
+                // Two threads: one leaves 4K60 too little time per frame, and every thread there is costs
+                // much more CPU (80 % more at 4K) for the work of sharing it.
+                let caps = raw_caps(format, s.output);
+                // The canvas is in the order the desktop sent (BGRx or RGBx), so only the encoder's own
+                // conversion is left. An encoder that takes BGRA or RGBA gets it as such, its fourth byte
+                // unused, so nothing is converted.
+                let canvas = match (format == "BGRA", s.red_first) {
+                    (true, false) => "BGRA",
+                    (true, true) => "RGBA",
+                    (false, false) => "BGRx",
+                    (false, true) => "RGBx",
+                };
+                let video = launch(&format!(
+                    "appsrc name=src is-live=true format=time block=false max-bytes={max} \
+                       caps=video/x-raw,format={canvas},width={iw},height={ih},framerate={fps}/1 \
+                     ! videoconvert n-threads=2 ! videoscale ! {caps} \
+                     ! {h264} ! h264parse ! video/x-h264,stream-format=avc,alignment=au \
+                     ! appsink name=sink sync=false",
+                    max = iw as u64 * ih as u64 * 4 * (QUEUED_FRAMES + 2),
+                ))?;
+                (name, video)
+            }
         };
-        let video = launch(&format!(
-            "appsrc name=src is-live=true format=time block=false max-bytes={max} \
-               caps=video/x-raw,format={canvas},width={iw},height={ih},framerate={fps}/1 \
-             ! videoconvert n-threads=2 ! videoscale ! {caps} \
-             ! {h264} ! h264parse ! video/x-h264,stream-format=avc,alignment=au \
-             ! appsink name=sink sync=false",
-            max = frame_bytes * (QUEUED_FRAMES + 2),
-        ))?;
         let video_src = by_name::<gst_app::AppSrc>(&video, "src")?;
+        let frames = s.gpu.as_ref().map(|_| by_name::<gst_app::AppSrc>(&video, "frames")).transpose()?;
         let h264_element = by_name::<gst::Element>(&video, "enc")?;
 
         let audio = if s.audio {
@@ -153,6 +190,7 @@ impl Encoder {
             stop: AtomicBool::new(false),
             fps: fps as u64,
             input: s.input,
+            output_size: s.output,
             video_src,
             video: video.clone(),
             h264: h264_element,
@@ -173,6 +211,21 @@ impl Encoder {
                 })
                 .build(),
         );
+        if frames.is_some() {
+            // The callback must not keep the encoder alive: it lives as long as the pipeline.
+            let weak = Arc::downgrade(&inner);
+            by_name::<gst_app::AppSink>(&video, "surfaces")?.set_callbacks(
+                gst_app::AppSinkCallbacks::builder()
+                    .new_sample(move |sink| {
+                        let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                        let (Some(inner), Some(surface)) = (weak.upgrade(), sample.buffer_owned()) else { return Ok(gst::FlowSuccess::Ok) };
+                        *inner.latest.lock().unwrap() = Some(Picture::Surface(surface));
+                        inner.ready.store(true, Ordering::Release);
+                        Ok(gst::FlowSuccess::Ok)
+                    })
+                    .build(),
+            );
+        }
         if let Some((pipeline, _)) = &audio {
             let sink = by_name::<gst_app::AppSink>(pipeline, "sink")?;
             let out = inner.output.clone();
@@ -207,11 +260,23 @@ impl Encoder {
                 move || produce_frames(&inner)
             })
             .map_err(|e| e.to_string())?;
-        Ok(Self { inner, producer: Some(producer), video, audio, audio_frames: Mutex::new(0), overlay: s.overlay, name })
+        Ok(Self { inner, producer: Some(producer), video, frames, audio, audio_frames: Mutex::new(0), overlay: s.overlay, name })
     }
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Whether frames come on the GPU (`push_gpu_frame`) rather than in memory (`push_frame`).
+    pub fn on_gpu(&self) -> bool {
+        self.frames.is_some()
+    }
+
+    /// The newest picture, if it is a VA-API surface (frames on the GPU).
+    pub fn newest_surface(&self) -> Option<gst::Sample> {
+        let Some(Picture::Surface(surface)) = self.inner.latest.lock().unwrap().clone() else { return None };
+        let caps = gst::Caps::from_str(&surface_caps(self.inner.output_size)).ok()?;
+        Some(gst::Sample::builder().buffer(&surface).caps(&caps).build())
     }
 
     /// Draws the part of a captured frame starting at `origin` onto a picture nothing reads,
@@ -222,8 +287,23 @@ impl Encoder {
         let Some(free) = free_picture(&mut pictures, size.0) else { return };
         let picture = Arc::get_mut(&mut pictures[free]).expect("nothing else holds a free picture");
         copy_region(frame, origin, picture, size.1);
-        *self.inner.latest.lock().unwrap() = Some(pictures[free].clone());
+        *self.inner.latest.lock().unwrap() = Some(Picture::Memory(pictures[free].clone()));
         self.inner.ready.store(true, Ordering::Release);
+    }
+
+    /// Converts a `size` frame on the GPU (a DMA-BUF) into the newest picture, there. The PipeWire
+    /// buffer is let go once converted, so the desktop can draw into it again.
+    pub fn push_gpu_frame(&self, frame: &gst::Sample, size: (u32, u32)) {
+        let Some(frames) = &self.frames else { return };
+        let (w, h) = (size.0 & !1, size.1 & !1);
+        if (w, h) == size {
+            let _ = frames.push_sample(frame);
+            return;
+        }
+        // An odd width or height is cropped to the even one recorded, as in memory, not scaled to it.
+        let (Some(mut buffer), Some(caps)) = (frame.buffer_owned(), frame.caps_owned()) else { return };
+        gst_video::VideoCropMeta::add(buffer.make_mut(), (0, 0, w, h));
+        let _ = frames.push_sample(&gst::Sample::builder().buffer(&buffer).caps(&caps).build());
     }
 
     /// Where a `camera`-sized webcam picture goes on the recording, if there is an overlay.
@@ -276,6 +356,9 @@ impl Encoder {
         self.inner.stop.store(true, Ordering::Release);
         let _ = producer.join();
         let _ = self.inner.video_src.end_of_stream();
+        if let Some(frames) = &self.frames {
+            let _ = frames.end_of_stream();
+        }
         if let Some((_, src)) = &self.audio {
             let _ = src.end_of_stream();
         }
@@ -301,7 +384,6 @@ fn produce_frames(inner: &Inner) {
     let fps = inner.fps;
     let mut n = 0u64;
     let frame_ns = 1_000_000_000 / fps;
-    let limit = inner.input.0 as u64 * inner.input.1 as u64 * 4 * QUEUED_FRAMES;
     while !inner.stop.load(Ordering::Acquire) {
         let now = inner.clock.elapsed();
         let due = Duration::from_nanos(n * 1_000_000_000 / fps);
@@ -316,7 +398,7 @@ fn produce_frames(inner: &Inner) {
             n = current;
         }
         // The encoder is falling behind: drop this slot rather than queue without bound.
-        if inner.video_src.current_level_bytes() > limit {
+        if inner.video_src.property::<u64>("current-level-buffers") > QUEUED_FRAMES {
             inner.lagged.fetch_add(1, Ordering::Relaxed);
             n += 1;
             continue;
@@ -324,13 +406,14 @@ fn produce_frames(inner: &Inner) {
         let Some(picture) = inner.latest.lock().unwrap().clone() else { continue };
         // The same picture goes out as long as nothing new is captured, shared, not copied; only
         // a webcam on top needs a picture of its own.
-        let mut buffer = match inner.overlay.lock().unwrap().as_ref() {
-            Some((pixels, rect)) => {
+        let mut buffer = match (picture, inner.overlay.lock().unwrap().as_ref()) {
+            (Picture::Surface(surface), _) => surface.copy(),
+            (Picture::Memory(picture), Some((pixels, rect))) => {
                 let mut composed = picture.as_ref().clone();
                 paste(&mut composed, inner.input.0, *rect, pixels);
                 gst::Buffer::from_mut_slice(composed)
             }
-            None => gst::Buffer::from_slice(Shared(picture)),
+            (Picture::Memory(picture), None) => gst::Buffer::from_slice(Shared(picture)),
         };
         if inner.output.lock().unwrap().take_keyframe_request() {
             inner.h264.send_event(gst_video::UpstreamForceKeyUnitEvent::builder().all_headers(true).build());
@@ -441,14 +524,14 @@ fn h264_candidates(bitrate: u32, fps: u32) -> [(&'static str, &'static str, Stri
 /// the recording's size.
 fn h264_encoder(
     candidates: impl IntoIterator<Item = (&'static str, &'static str, String)>,
-    size: (u32, u32),
+    works: impl Fn(&str, &str) -> Result<(), String>,
 ) -> Result<(String, &'static str, String), String> {
     let mut failed = None;
     for (factory, format, fragment) in candidates {
         if gst::ElementFactory::find(factory).is_none() {
             continue;
         }
-        match encodes(format, &fragment, size) {
+        match works(format, &fragment) {
             Ok(()) => return Ok((factory.to_owned(), format, fragment)),
             Err(e) => failed = Some(format!("{factory}: {e}")),
         }
@@ -466,6 +549,11 @@ fn raw_caps(format: &str, (width, height): (u32, u32)) -> String {
     format!("video/x-raw,format={format},width={width},height={height}{colorimetry}")
 }
 
+/// VA-API surfaces of `size`, as the GPU path converts frames to.
+fn surface_caps((width, height): (u32, u32)) -> String {
+    format!("video/x-raw(memory:VAMemory),format=NV12,width={width},height={height},colorimetry=bt709")
+}
+
 /// Encodes one `size` test picture with `fragment`, given `format` pictures.
 fn encodes(format: &str, fragment: &str, (width, height): (u32, u32)) -> Result<(), String> {
     let pipeline = launch(&format!(
@@ -474,6 +562,23 @@ fn encodes(format: &str, fragment: &str, (width, height): (u32, u32)) -> Result<
         caps = raw_caps(format, (width, height)),
     ))?;
     play(&pipeline)?;
+    finishes(&pipeline)
+}
+
+/// Encodes `frame`, on the GPU, with `fragment` at `size`, converting it as recording does: the
+/// GPU may be unable to read the desktop's frames or to encode them.
+fn encodes_on_gpu(frame: &gst::Sample, fragment: &str, size: (u32, u32)) -> Result<(), String> {
+    let pipeline = launch(&format!("appsrc name=src format=time ! vapostproc ! {} ! {fragment} ! fakesink", surface_caps(size)))?;
+    super::gpu::share_display(&pipeline);
+    let src = by_name::<gst_app::AppSrc>(&pipeline, "src")?;
+    play(&pipeline)?;
+    let _ = src.push_sample(frame);
+    let _ = src.end_of_stream();
+    finishes(&pipeline)
+}
+
+/// Waits (at most 5 s) for a pipeline given one picture to end; the error if it did not.
+fn finishes(pipeline: &gst::Pipeline) -> Result<(), String> {
     let message = pipeline
         .bus()
         .and_then(|bus| bus.timed_pop_filtered(gst::ClockTime::from_seconds(5), &[gst::MessageType::Eos, gst::MessageType::Error]));
@@ -529,7 +634,7 @@ pub(super) fn play(pipeline: &gst::Pipeline) -> Result<(), String> {
 
 /// The error a running pipeline has posted, if any, without waiting: a pipeline that fails
 /// keeps taking buffers without complaint, so this is how the failure is noticed.
-fn posted_error(pipeline: &gst::Pipeline) -> Option<String> {
+pub(super) fn posted_error(pipeline: &gst::Pipeline) -> Option<String> {
     let message = pipeline.bus()?.pop_filtered(&[gst::MessageType::Error])?;
     match message.view() {
         gst::MessageView::Error(e) => Some(e.error().to_string()),
@@ -743,15 +848,74 @@ mod tests {
             ("capsfilter", "NV12", "capsfilter name=enc caps=video/x-raw,format=RGB".to_owned()),
             ("identity", "NV12", "identity name=enc".to_owned()),
         ];
-        let (factory, _, _) = h264_encoder(candidates, (64, 48)).unwrap();
+        let (factory, _, _) = h264_encoder(candidates, |format, fragment| encodes(format, fragment, (64, 48))).unwrap();
         assert_eq!(factory, "identity");
+    }
+
+    /// `count` BGRA frames of `size` on the GPU, made by VA-API, and the pipeline that made them,
+    /// to stop once they are used (GStreamer 1.24 drops its surfaces when it stops); `None` where
+    /// VA-API cannot record them (CI). They are VA-API's own memory rather than DMA-BUFs, which it
+    /// gives only to elements taking their video meta (appsink does not), but are converted the same way.
+    fn gpu_frames(size: (u32, u32), count: usize) -> Option<(gst::Pipeline, Vec<gst::Sample>)> {
+        super::super::gpu::formats()?;
+        let pipeline = launch(&format!(
+            "videotestsrc num-buffers={count} ! video/x-raw,format=BGRA,width={},height={},framerate=30/1 ! vapostproc \
+             ! video/x-raw(memory:VAMemory),format=BGRA ! appsink name=sink sync=false",
+            size.0, size.1,
+        ))
+        .unwrap();
+        // On the display the recording uses, as the desktop's frames are imported into it.
+        super::super::gpu::share_display(&pipeline);
+        let sink = by_name::<gst_app::AppSink>(&pipeline, "sink").unwrap();
+        play(&pipeline).unwrap();
+        let frames = std::iter::from_fn(|| sink.pull_sample().ok()).collect();
+        assert_eq!(posted_error(&pipeline), None);
+        Some((pipeline, frames))
+    }
+
+    #[test]
+    fn frames_on_the_gpu_are_recorded() {
+        gst::init().unwrap();
+        // An odd size is cropped to the even one recorded.
+        for (size, input) in [((320, 240), (320, 240)), ((321, 241), (320, 240))] {
+            let Some((maker, frames)) = gpu_frames(size, 30) else { return };
+            assert_eq!(frames.len(), 30);
+            let first = &frames[0];
+            let outputs = Arc::new(Mutex::new(Outputs::default()));
+            let path = std::env::temp_dir().join(format!("obs-lite-gpu-{}-{}.mp4", std::process::id(), size.0));
+            outputs.lock().unwrap().start_file(path.clone());
+            let settings = EncoderSettings {
+                input,
+                output: input,
+                fps: 30,
+                bitrate: 2_000_000,
+                audio: false,
+                overlay: None,
+                red_first: false,
+                gpu: Some(first.clone()),
+            };
+            let encoder = Encoder::new(settings, Arc::new(Clock::new()), Arc::default(), outputs).unwrap();
+            assert!(encoder.on_gpu());
+            for frame in &frames {
+                encoder.push_gpu_frame(frame, size);
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let finished = encoder.finish().expect("a recording").finish();
+            drop(frames);
+            let _ = maker.set_state(gst::State::Null);
+            let _ = std::fs::remove_file(&path);
+            finished.unwrap_or_else(|e| panic!("{size:?}: {e}"));
+        }
     }
 
     #[test]
     fn a_muxer_that_cannot_write_says_so_while_recording() {
         gst::init().unwrap();
         // Real H.264 from an installed encoder; where there is none (CI), there is nothing to test.
-        let Ok((_, format, fragment)) = h264_encoder(h264_candidates(8_000_000, 30), (640, 360)) else { return };
+        let Ok((_, format, fragment)) = h264_encoder(h264_candidates(8_000_000, 30), |format, fragment| encodes(format, fragment, (640, 360)))
+        else {
+            return;
+        };
         if ["mp4mux", "h264parse"].iter().any(|f| gst::ElementFactory::find(f).is_none()) {
             return;
         }
