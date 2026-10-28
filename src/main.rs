@@ -58,14 +58,18 @@ fn main() -> eframe::Result {
 
 /// Records the first monitor plus system audio without UI, using the same pipeline as the app.
 ///
-/// Usage: `--selftest [seconds] [out.mp4] [pause] [720] [replay]`. With `pause`, the middle third
-/// of the recording is paused, so the file should be one third shorter. With `replay`, the last
-/// 3 s are also saved from the replay buffer, next to `out.mp4` as `out-replay.mp4`.
+/// Usage: `--selftest [seconds] [out.mp4] [pause] [720] [replay] [preview] [shot]`. With `pause`,
+/// the middle third of the recording is paused, so the file should be one third shorter. With
+/// `replay`, the last 3 s are also saved from the replay buffer, next to `out.mp4` as
+/// `out-replay.mp4`. With `preview`, preview pictures are made as in the app. With `shot`, a
+/// screenshot is taken halfway, next to `out.mp4` as `out-shot.png`.
 fn selftest(args: &[String]) -> Result<(), String> {
     let seconds = selftest_seconds(args.first().map(String::as_str));
     let out = args.get(1).map_or_else(|| PathBuf::from("selftest.mp4"), PathBuf::from);
     let pause = args.iter().any(|a| a == "pause");
     let replay = args.iter().any(|a| a == "replay");
+    let preview = args.iter().any(|a| a == "preview");
+    let shot = args.iter().any(|a| a == "shot");
     let resolution = if args.iter().any(|a| a == "720") { config::Resolution::P720 } else { config::Resolution::Native };
 
     let source = capture::list_sources().into_iter().next().ok_or("no capture sources")?;
@@ -75,7 +79,7 @@ fn selftest(args: &[String]) -> Result<(), String> {
             source: source.id,
             fps: 60,
             cursor: true,
-            preview_fps: 0,
+            preview_fps: if preview { 5 } else { 0 },
             record: Some(capture::RecordConfig {
                 quality: config::Quality::Medium,
                 resolution,
@@ -107,6 +111,12 @@ fn selftest(args: &[String]) -> Result<(), String> {
     if pause {
         session.shared.clock.set_paused(true);
     }
+    if shot {
+        let (width, height, rgba) = session.snapshot()?;
+        let path = out.with_file_name(format!("{}-shot.png", out.file_stem().unwrap_or_default().display()));
+        capture::write_png(&path, width, height, &rgba)?;
+        println!("screenshot: {} ({width}x{height})", path.display());
+    }
     std::thread::sleep(third);
     session.shared.clock.set_paused(false);
     std::thread::sleep(third);
@@ -114,6 +124,7 @@ fn selftest(args: &[String]) -> Result<(), String> {
     drop(mixer);
 
     let captured = session.shared.frames.load(std::sync::atomic::Ordering::Relaxed);
+    let last_preview = session.shared.preview.lock().unwrap().take();
     let sizes = *session.shared.sizes.lock().unwrap();
     let (encoder, err) = session.stop();
     let encoder = encoder.ok_or_else(|| err.unwrap_or_else(|| "no frames captured".into()))?;
@@ -129,6 +140,9 @@ fn selftest(args: &[String]) -> Result<(), String> {
     println!("encoder: {encoder_name}");
     println!("captured frames: {captured}");
     println!("encoded: {encoded}  lagged: {lagged}");
+    if let Some(p) = last_preview {
+        println!("preview: {} pictures, the last {}x{}", p.seq + 1, p.size[0], p.size[1]);
+    }
     println!("file: {}", out.display());
     if let Some(e) = system.shared.error() {
         println!("system audio error: {e}");
