@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Linux: recording with VA-API (Intel, AMD) without a region or the webcam keeps the desktop's
+  frames on the GPU, as on Windows: they are converted and encoded there, and only the preview
+  (small) and screenshots are brought into memory. Recording 1080p60 on Intel went from about 40 %
+  to 11 % of a CPU core, and from 165 to 140 MB of memory. Where the desktop cannot send its frames
+  so, or the GPU cannot encode them, they are taken in memory as before.
+
 - Linux: recording takes less CPU again: the desktop's picture is no longer converted twice (it
   is taken in the format the desktop sends when obs-lite can use it), and the whole picture is no
   longer copied for every frame. Recording 1080p60 with VA-API on Intel went from about 50 % to

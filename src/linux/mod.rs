@@ -5,6 +5,7 @@ pub mod audio;
 pub mod camera;
 pub mod capture;
 pub mod encoder;
+mod gpu;
 pub mod hotkeys;
 mod portal;
 pub mod sys;
