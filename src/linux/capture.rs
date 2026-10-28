@@ -11,7 +11,7 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 
-use super::encoder::{Encoder, EncoderSettings, FrameRef, Outputs};
+use super::encoder::{Encoder, EncoderSettings, FrameRef, Outputs, swap_red_blue};
 use super::portal;
 use crate::capture::{
     AudioApp, PREVIEW_DEFAULT_WIDTH, PreviewFrame, RecordConfig, SessionOptions, Source, SourceId, bgra_to_rgba, downscale,
@@ -101,6 +101,7 @@ impl Handler {
                     bitrate: rec.quality.bitrate(output.0, output.1, self.fps),
                     audio: rec.audio,
                     overlay: rec.overlay,
+                    red_first: red_first(sample),
                 };
                 *encoder = Some(Encoder::new(settings, shared.clock.clone(), shared.encoder_ready.clone(), shared.outputs.clone())?);
                 *shared.sizes.lock().unwrap() = Some((input, output));
@@ -118,7 +119,11 @@ impl Handler {
             let (w, h) = (size.0 as usize, size.1 as usize);
             let pw = shared.preview_width.load(Ordering::Relaxed).clamp(64.min(w), w);
             let ph = (h * pw / w).max(1);
-            let rgba = downscale(frame.data, (w, h), frame.stride, (pw, ph));
+            let mut rgba = downscale(frame.data, (w, h), frame.stride, (pw, ph));
+            // `downscale` takes blue first; swapping the small result is cheaper than the frame.
+            if red_first(sample) {
+                swap_red_blue(&mut rgba);
+            }
             let mut preview = shared.preview.lock().unwrap();
             let seq = preview.as_ref().map_or(0, |p| p.seq + 1);
             *preview = Some(PreviewFrame { size: [pw, ph], rgba, seq });
@@ -129,6 +134,12 @@ impl Handler {
         }
         Ok(())
     }
+}
+
+/// Whether the desktop sent red first (RGBx or RGBA) rather than blue (BGRx or BGRA).
+fn red_first(sample: &gst::Sample) -> bool {
+    let format = sample.caps().and_then(|c| c.structure(0)).and_then(|s| s.get::<&str>("format").ok());
+    format.is_some_and(|f| f.starts_with("RGB"))
 }
 
 fn frame_size(sample: &gst::Sample) -> Option<Size> {
@@ -202,7 +213,11 @@ impl Session {
         let sample = last.as_ref().ok_or_else(none)?;
         let (w, h) = frame_size(sample).ok_or_else(none)?;
         let map = sample.buffer().ok_or_else(none)?.map_readable().map_err(|e| e.to_string())?;
-        Ok((w, h, bgra_to_rgba(map.as_slice(), w as usize, h as usize, map.size() / h.max(1) as usize)))
+        let mut rgba = bgra_to_rgba(map.as_slice(), w as usize, h as usize, map.size() / h.max(1) as usize);
+        if red_first(sample) {
+            swap_red_blue(&mut rgba);
+        }
+        Ok((w, h, rgba))
     }
 
     /// Stops capturing and hands back the encoder (if recording) so it can be finalized.
@@ -262,12 +277,34 @@ fn run(opts: SessionOptions, shared: &Arc<Shared>, stop: &AtomicBool) -> Result<
 
 /// Runs the pipeline for one portal session until asked to stop or the stream ends.
 fn stream(cast: &portal::Cast, handler: &Arc<Mutex<Handler>>, stop: &AtomicBool) -> Result<(), String> {
+    // BGRx, BGRA, RGBx and RGBA are used as they are (the canvas keeps the desktop's order), so the
+    // only conversion is the encoder's. A desktop that can send none of them gets the picture
+    // converted.
+    let frames = handler.lock().unwrap().shared.frames.load(Ordering::Relaxed);
+    match stream_as(cast, handler, stop, true) {
+        Err(_) if !stop.load(Ordering::Acquire)
+            && handler.lock().unwrap().failed.is_none()
+            && handler.lock().unwrap().shared.frames.load(Ordering::Relaxed) == frames =>
+        {
+            stream_as(cast, handler, stop, false)
+        }
+        result => result,
+    }
+}
+
+/// `stream`, taking only formats used as they are (`as_is`), or any format, converted.
+fn stream_as(cast: &portal::Cast, handler: &Arc<Mutex<Handler>>, stop: &AtomicBool, as_is: bool) -> Result<(), String> {
     // A desktop may send frames at the display's refresh rate (144 Hz here, on COSMIC) even for
-    // a still picture: no more than the session uses are converted.
+    // a still picture: no more than the session uses are converted or copied.
     let fps = handler.lock().unwrap().fps.max(1);
+    let (before, after) = if as_is {
+        ("! video/x-raw,format=(string){BGRx,BGRA,RGBx,RGBA} ", "")
+    } else {
+        ("", "! videoconvert ! video/x-raw,format=BGRx ")
+    };
     let pipeline = gst::parse::launch(&format!(
-        "pipewiresrc fd={fd} path={node} do-timestamp=true keepalive-time=1000 ! videorate max-rate={fps} \
-         ! videoconvert ! video/x-raw,format=BGRx ! appsink name=sink max-buffers=2 drop=true sync=false",
+        "pipewiresrc fd={fd} path={node} do-timestamp=true keepalive-time=1000 {before}! videorate max-rate={fps} \
+         {after}! appsink name=sink max-buffers=2 drop=true sync=false",
         fd = cast.fd.as_raw_fd(),
         node = cast.node,
     ))
