@@ -1,9 +1,9 @@
 //! H.264 + AAC encoding with GStreamer, producing constant-frame-rate packets for the shared
 //! outputs (`media`).
 //!
-//! PipeWire only delivers frames when the picture changes, so captured frames (and the webcam)
-//! are drawn into a canvas in memory; like on Windows, a producer thread hands the canvas to
-//! the encoder every 1/fps of recording time. The best available H.264 encoder is used:
+//! PipeWire may deliver frames only when the picture changes, so each captured frame is drawn
+//! once into a picture in memory; like on Windows, a producer thread hands the newest picture
+//! (with the webcam on top) to the encoder every 1/fps of recording time. The best available H.264 encoder is used:
 //! VA-API (Intel/AMD), NVENC, then x264 or OpenH264 in software.
 
 use std::path::Path;
@@ -27,6 +27,17 @@ pub type PendingFile = media::PendingFile<Mp4>;
 
 /// Queued frames the encoder may fall behind by before frames are dropped (and counted).
 const QUEUED_FRAMES: u64 = 8;
+/// Pictures drawn from captured frames: the queued ones, those being encoded and the newest.
+const MAX_PICTURES: usize = QUEUED_FRAMES as usize + 4;
+
+/// A picture shared with GStreamer, which reads it in place.
+struct Shared(Arc<Vec<u8>>);
+
+impl AsRef<[u8]> for Shared {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
 /// Packet times are in 100 ns units.
 const NS_PER_TICK: u64 = 100;
 
@@ -51,7 +62,10 @@ pub struct FrameRef<'a> {
 
 struct Inner {
     /// The picture being recorded, BGRx at the input size.
-    canvas: Mutex<Vec<u8>>,
+    /// Pictures drawn from captured frames (`input` sized), drawn on again once nothing reads
+    /// them; the newest is what the producer hands over, without copying it.
+    pictures: Mutex<Vec<Arc<Vec<u8>>>>,
+    latest: Mutex<Option<Arc<Vec<u8>>>>,
     /// The webcam picture, already scaled, and where it goes.
     overlay: Mutex<Option<(Vec<u8>, PixelRect)>>,
     red_first: bool,
@@ -128,7 +142,8 @@ impl Encoder {
         };
 
         let inner = Arc::new(Inner {
-            canvas: Mutex::new(vec![0; frame_bytes as usize]),
+            pictures: Mutex::new(Vec::new()),
+            latest: Mutex::new(None),
             overlay: Mutex::new(None),
             red_first: s.red_first,
             ready: AtomicBool::new(false),
@@ -199,10 +214,15 @@ impl Encoder {
         &self.name
     }
 
-    /// Draws the part of a captured frame starting at `origin` onto the canvas.
+    /// Draws the part of a captured frame starting at `origin` onto a picture nothing reads,
+    /// which becomes the newest. With none free (the encoder far behind) the frame is skipped.
     pub fn push_frame(&self, frame: &FrameRef, origin: (u32, u32)) {
-        let mut canvas = self.inner.canvas.lock().unwrap();
-        copy_region(frame, origin, &mut canvas, self.inner.input);
+        let size = (self.inner.input.0 as usize * self.inner.input.1 as usize * 4, self.inner.input);
+        let mut pictures = self.inner.pictures.lock().unwrap();
+        let Some(free) = free_picture(&mut pictures, size.0) else { return };
+        let picture = Arc::get_mut(&mut pictures[free]).expect("nothing else holds a free picture");
+        copy_region(frame, origin, picture, size.1);
+        *self.inner.latest.lock().unwrap() = Some(pictures[free].clone());
         self.inner.ready.store(true, Ordering::Release);
     }
 
@@ -281,7 +301,7 @@ fn produce_frames(inner: &Inner) {
     let fps = inner.fps;
     let mut n = 0u64;
     let frame_ns = 1_000_000_000 / fps;
-    let limit = inner.canvas.lock().unwrap().len() as u64 * QUEUED_FRAMES;
+    let limit = inner.input.0 as u64 * inner.input.1 as u64 * 4 * QUEUED_FRAMES;
     while !inner.stop.load(Ordering::Acquire) {
         let now = inner.clock.elapsed();
         let due = Duration::from_nanos(n * 1_000_000_000 / fps);
@@ -301,14 +321,20 @@ fn produce_frames(inner: &Inner) {
             n += 1;
             continue;
         }
-        let mut picture = inner.canvas.lock().unwrap().clone();
-        if let Some((pixels, rect)) = inner.overlay.lock().unwrap().as_ref() {
-            paste(&mut picture, inner.input.0, *rect, pixels);
-        }
+        let Some(picture) = inner.latest.lock().unwrap().clone() else { continue };
+        // The same picture goes out as long as nothing new is captured, shared, not copied; only
+        // a webcam on top needs a picture of its own.
+        let mut buffer = match inner.overlay.lock().unwrap().as_ref() {
+            Some((pixels, rect)) => {
+                let mut composed = picture.as_ref().clone();
+                paste(&mut composed, inner.input.0, *rect, pixels);
+                gst::Buffer::from_mut_slice(composed)
+            }
+            None => gst::Buffer::from_slice(Shared(picture)),
+        };
         if inner.output.lock().unwrap().take_keyframe_request() {
             inner.h264.send_event(gst_video::UpstreamForceKeyUnitEvent::builder().all_headers(true).build());
         }
-        let mut buffer = gst::Buffer::from_mut_slice(picture);
         {
             let buffer = buffer.get_mut().expect("new buffer");
             buffer.set_pts(gst::ClockTime::from_nseconds(n * 1_000_000_000 / fps));
@@ -345,6 +371,18 @@ fn copy_region(frame: &FrameRef, origin: (u32, u32), canvas: &mut [u8], size: (u
             row.fill(0);
         }
     }
+}
+
+/// A picture of `bytes` nothing else holds (not the newest, not one the encoder still has),
+/// made if there are fewer than `MAX_PICTURES`.
+fn free_picture(pictures: &mut Vec<Arc<Vec<u8>>>, bytes: usize) -> Option<usize> {
+    if let Some(i) = pictures.iter().position(|p| Arc::strong_count(p) == 1) {
+        return Some(i);
+    }
+    (pictures.len() < MAX_PICTURES).then(|| {
+        pictures.push(Arc::new(vec![0; bytes]));
+        pictures.len() - 1
+    })
 }
 
 /// Turns BGRA pixels into RGBA, or the other way.
@@ -628,6 +666,22 @@ mod tests {
         assert_eq!([pixel(0, 0), pixel(1, 0), pixel(2, 0)], [7, 8, 0]);
         assert_eq!([pixel(0, 1), pixel(1, 1), pixel(2, 1)], [0, 0, 0]);
         assert_eq!([pixel(0, 2), pixel(1, 2), pixel(2, 2)], [0, 0, 0]);
+    }
+
+    #[test]
+    fn a_picture_is_drawn_on_again_only_once_nothing_reads_it() {
+        let mut pictures = Vec::new();
+        // Each one drawn on is held (as the newest, then by the encoder) before the next.
+        let mut held = Vec::new();
+        for _ in 0..MAX_PICTURES {
+            let i = free_picture(&mut pictures, 4).unwrap();
+            held.push(pictures[i].clone());
+        }
+        assert_eq!(pictures.len(), MAX_PICTURES);
+        assert_eq!(free_picture(&mut pictures, 4), None, "all in use: the frame is skipped");
+        drop(held);
+        assert_eq!(free_picture(&mut pictures, 4), Some(0), "drawn on again, not made anew");
+        assert_eq!(pictures.len(), MAX_PICTURES);
     }
 
     #[test]
