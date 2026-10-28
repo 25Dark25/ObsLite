@@ -38,9 +38,11 @@ pub struct EncoderSettings {
     pub audio: bool,
     /// Where the webcam goes, if there is one.
     pub overlay: Option<(Corner, CameraSize)>,
+    /// The pictures hold red first (RGBx, as some desktops send them) instead of blue (BGRx).
+    pub red_first: bool,
 }
 
-/// A captured picture: BGRx rows `stride` bytes apart.
+/// A captured picture: rows of 4-byte pixels (BGRx, or RGBx) `stride` bytes apart.
 pub struct FrameRef<'a> {
     pub data: &'a [u8],
     pub size: (u32, u32),
@@ -52,6 +54,7 @@ struct Inner {
     canvas: Mutex<Vec<u8>>,
     /// The webcam picture, already scaled, and where it goes.
     overlay: Mutex<Option<(Vec<u8>, PixelRect)>>,
+    red_first: bool,
     ready: AtomicBool,
     clock: Arc<Clock>,
     encoded: AtomicU64,
@@ -89,9 +92,15 @@ impl Encoder {
         // Two threads: one leaves 4K60 too little time per frame, and every thread there is costs
         // much more CPU (80 % more at 4K) for the work of sharing it.
         let caps = raw_caps(format, s.output);
-        // The canvas is BGRx. An encoder that takes BGRA gets it as such, its fourth byte unused,
-        // so nothing is converted.
-        let canvas = if format == "BGRA" { "BGRA" } else { "BGRx" };
+        // The canvas is in the order the desktop sent (BGRx or RGBx), so only the encoder's own
+        // conversion is left. An encoder that takes BGRA or RGBA gets it as such, its fourth byte
+        // unused, so nothing is converted.
+        let canvas = match (format == "BGRA", s.red_first) {
+            (true, false) => "BGRA",
+            (true, true) => "RGBA",
+            (false, false) => "BGRx",
+            (false, true) => "RGBx",
+        };
         let video = launch(&format!(
             "appsrc name=src is-live=true format=time block=false max-bytes={max} \
                caps=video/x-raw,format={canvas},width={iw},height={ih},framerate={fps}/1 \
@@ -121,6 +130,7 @@ impl Encoder {
         let inner = Arc::new(Inner {
             canvas: Mutex::new(vec![0; frame_bytes as usize]),
             overlay: Mutex::new(None),
+            red_first: s.red_first,
             ready: AtomicBool::new(false),
             clock,
             encoded: AtomicU64::new(0),
@@ -203,7 +213,12 @@ impl Encoder {
 
     /// Takes a webcam picture already scaled to `rect` (see `overlay_rect`).
     pub fn push_overlay(&self, rect: PixelRect, pixels: &[u8]) {
-        *self.inner.overlay.lock().unwrap() = Some((pixels.to_vec(), rect));
+        // Webcam pictures are BGRA; the canvas may hold red first.
+        let mut pixels = pixels.to_vec();
+        if self.inner.red_first {
+            swap_red_blue(&mut pixels);
+        }
+        *self.inner.overlay.lock().unwrap() = Some((pixels, rect));
     }
 
     /// Interleaved 16-bit stereo PCM from the mixer.
@@ -329,6 +344,13 @@ fn copy_region(frame: &FrameRef, origin: (u32, u32), canvas: &mut [u8], size: (u
         } else {
             row.fill(0);
         }
+    }
+}
+
+/// Turns BGRA pixels into RGBA, or the other way.
+pub(super) fn swap_red_blue(pixels: &mut [u8]) {
+    for px in pixels.as_chunks_mut::<4>().0 {
+        px.swap(0, 2);
     }
 }
 
