@@ -4,16 +4,44 @@ Lightweight screen recorder for Windows and Linux: on Windows a single ~7 MB `.e
 ~4 MB Flatpak, with no bundled browser. The interface follows OBS Studio, so OBS users find
 everything where they expect it.
 
-| | Idle (preview + audio) | Recording 1080p60 + audio |
+![obs-lite recording: the preview, the Sources, Audio Mixer and Controls docks, and the timer](docs/images/main-window.png)
+
+![Start Recording, a few seconds of recording, Stop Recording and the saved file](docs/images/record.gif)
+
+| Windows | Idle (preview + audio) | Recording 1080p60 + audio |
 |---|---|---|
 | Private memory | ~100 MB | ~270 MB |
 | CPU (16 threads) | ~0.3 % | ~1.5 % |
 
 Measured on Windows 11 on a laptop with an RTX 4060 GPU, encoding on its Intel integrated GPU
-(Quick Sync), without a webcam; your numbers will vary. Linux has only been measured in a virtual
-machine without a GPU (see [docs/TESTING.md](docs/TESTING.md)), which is not representative. About
-40 MB of the recording figure is the queue of converted frames that keeps the encoder from dropping
-frames when it briefly stalls.
+(Quick Sync), without a webcam; your numbers will vary. About 40 MB of the recording figure is the
+queue of converted frames that keeps the encoder from dropping frames when it briefly stalls.
+
+On Linux, recording costs more CPU than on Windows for now: each frame is copied and converted on
+the CPU, where on Windows it stays on the GPU. Figures for Linux will be published when that
+improves.
+
+## obs-lite and OBS Studio
+
+obs-lite does one thing, record, and leaves out what it would need a much larger program for.
+
+| | obs-lite | OBS Studio |
+|---|---|---|
+| Linux Flatpak: download / installed | 3.7 MB / 11.7 MB | 225 MB / 593 MB |
+| Record the screen or a window, with desktop audio and microphone | ✓ | ✓ |
+| Replay buffer | ✓ | ✓ |
+| Recording kept after a crash | ✓ (fragmented MP4, repaired at the next start) | ✓ (MKV, or hybrid MP4) |
+| Microphone noise suppression | ✓ (RNNoise) | ✓ (RNNoise, Speex, NVIDIA) |
+| Webcam | one, in a corner | any number, anywhere |
+| Region of the source | ✓ | ✓ (crop filter) |
+| Scenes, several sources, filters, transitions | — | ✓ |
+| Streaming | — | ✓ |
+| Plugins, browser source | — | ✓ |
+| Formats | H.264 + AAC in MP4 | H.264, HEVC, AV1… in MP4, MKV, MOV… |
+| Interface languages | English, Spanish | many |
+
+The sizes are OBS Studio 33.0 from Flathub and obs-lite 0.5.0, both on the same runtime
+(`org.freedesktop.Platform` 26.08), measured with `flatpak info` on 2026-10-27.
 
 > **Status: early (0.5.0).** obs-lite has been tested on Windows on a single machine
 > (Windows 11, laptop with Intel and NVIDIA GPUs) and, on Linux, in a virtual machine (Ubuntu
@@ -191,7 +219,8 @@ Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and scre
   COSMIC with Intel VA-API. KDE Plasma, X11, AMD and recording with NVENC have not been tested.
 - COSMIC (Pop!_OS 24.04): its screen-sharing portal crashes now and then (a COSMIC bug).
   obs-lite shares the screen again by itself; a recording keeps going, with the picture frozen
-  for under a second.
+  for under a second. COSMIC has no global-shortcuts portal yet, so hotkeys do not work there (the
+  status bar says so at start-up).
 
 ## Verifying a release
 
