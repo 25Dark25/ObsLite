@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Linux: recording takes less CPU: the conversion for the encoder no longer runs on every thread
+  (which cost more than it saved), and NVENC converts the picture on the GPU itself. Recording
+  1080p60 with VA-API on Intel went from about 61 % to 49 % of a CPU core.
 - Linux: obs-lite no longer processes every frame a desktop sends when it sends more than needed;
   on COSMIC, which sent about 80 a second for a still screen, the idle preview went from about
   20 % to 4 % of a CPU core.
