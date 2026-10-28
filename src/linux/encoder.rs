@@ -85,13 +85,17 @@ impl Encoder {
         let fps = s.fps.max(1);
         let (name, format, h264) = h264_encoder(h264_candidates(s.bitrate, fps), s.output)?;
         let (iw, ih) = s.input;
-        let (ow, oh) = s.output;
         let frame_bytes = iw as u64 * ih as u64 * 4;
+        // Two threads: one leaves 4K60 too little time per frame, and every thread there is costs
+        // much more CPU (80 % more at 4K) for the work of sharing it.
+        let caps = raw_caps(format, s.output);
+        // The canvas is BGRx. An encoder that takes BGRA gets it as such, its fourth byte unused,
+        // so nothing is converted.
+        let canvas = if format == "BGRA" { "BGRA" } else { "BGRx" };
         let video = launch(&format!(
             "appsrc name=src is-live=true format=time block=false max-bytes={max} \
-               caps=video/x-raw,format=BGRx,width={iw},height={ih},framerate={fps}/1 \
-             ! videoconvert n-threads=0 ! videoscale \
-             ! video/x-raw,format={format},width={ow},height={oh},colorimetry=bt709 \
+               caps=video/x-raw,format={canvas},width={iw},height={ih},framerate={fps}/1 \
+             ! videoconvert n-threads=2 ! videoscale ! {caps} \
              ! {h264} ! h264parse ! video/x-h264,stream-format=avc,alignment=au \
              ! appsink name=sink sync=false",
             max = frame_bytes * (QUEUED_FRAMES + 2),
@@ -355,8 +359,8 @@ fn to_packet(sample: &gst::Sample) -> Option<Packet> {
     })
 }
 
-/// H.264 encoders, hardware first: the factory, the raw format it takes (VA-API and NVENC only
-/// take NV12, OpenH264 only I420) and a launch fragment named `enc`.
+/// H.264 encoders, hardware first: the factory, the raw format it is given (VA-API only takes
+/// NV12, OpenH264 only I420) and a launch fragment named `enc`.
 fn h264_candidates(bitrate: u32, fps: u32) -> [(&'static str, &'static str, String); 5] {
     let kbps = (bitrate / 1000).max(1);
     // A keyframe every 2 s: where a replay or a new recording can start.
@@ -364,7 +368,8 @@ fn h264_candidates(bitrate: u32, fps: u32) -> [(&'static str, &'static str, Stri
     [
         ("vah264enc", "NV12", format!("vah264enc name=enc bitrate={kbps} key-int-max={gop} b-frames=0")),
         ("vah264lpenc", "NV12", format!("vah264lpenc name=enc bitrate={kbps} key-int-max={gop} b-frames=0")),
-        ("nvh264enc", "NV12", format!("nvh264enc name=enc bitrate={kbps} gop-size={gop} bframes=0")),
+        // NVENC converts RGB itself, on the GPU: no conversion on the CPU at all.
+        ("nvh264enc", "BGRA", format!("nvh264enc name=enc bitrate={kbps} gop-size={gop} bframes=0")),
         ("x264enc", "I420", format!("x264enc name=enc bitrate={kbps} key-int-max={gop} tune=zerolatency speed-preset=veryfast")),
         ("openh264enc", "I420", format!("openh264enc name=enc bitrate={bitrate} gop-size={gop} complexity=low")),
     ]
@@ -394,11 +399,19 @@ fn h264_encoder(
     })
 }
 
+/// Raw `format` pictures of `size`. YUV is BT.709, as players expect of HD video; RGB has no
+/// matrix to state.
+fn raw_caps(format: &str, (width, height): (u32, u32)) -> String {
+    let colorimetry = if format.starts_with("BGR") || format.starts_with("RGB") { "" } else { ",colorimetry=bt709" };
+    format!("video/x-raw,format={format},width={width},height={height}{colorimetry}")
+}
+
 /// Encodes one `size` test picture with `fragment`, given `format` pictures.
 fn encodes(format: &str, fragment: &str, (width, height): (u32, u32)) -> Result<(), String> {
     let pipeline = launch(&format!(
         "videotestsrc num-buffers=1 ! video/x-raw,width={width},height={height} \
-         ! videoconvert ! video/x-raw,format={format},colorimetry=bt709 ! {fragment} ! fakesink"
+         ! videoconvert ! {caps} ! {fragment} ! fakesink",
+        caps = raw_caps(format, (width, height)),
     ))?;
     play(&pipeline)?;
     let message = pipeline
@@ -668,8 +681,9 @@ mod tests {
         }
         let source = launch(&format!(
             "videotestsrc num-buffers=60 ! video/x-raw,width=640,height=360,framerate=30/1 ! videoconvert \
-             ! video/x-raw,format={format},colorimetry=bt709 ! {fragment} ! h264parse \
-             ! video/x-h264,stream-format=avc,alignment=au ! appsink name=sink sync=false"
+             ! {caps} ! {fragment} ! h264parse \
+             ! video/x-h264,stream-format=avc,alignment=au ! appsink name=sink sync=false",
+            caps = raw_caps(format, (640, 360)),
         ))
         .unwrap();
         let sink = by_name::<gst_app::AppSink>(&source, "sink").unwrap();
