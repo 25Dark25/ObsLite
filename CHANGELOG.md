@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Linux: recording takes less CPU again: the desktop's picture is no longer converted twice (it
+  is taken in the format the desktop sends when obs-lite can use it), and the whole picture is no
+  longer copied for every frame. Recording 1080p60 with VA-API on Intel went from about 50 % to
+  39 % of a CPU core.
 - Linux: recording takes less CPU: the conversion for the encoder no longer runs on every thread
   (which cost more than it saved), and NVENC converts the picture on the GPU itself. Recording
   1080p60 with VA-API on Intel went from about 61 % to 49 % of a CPU core.
