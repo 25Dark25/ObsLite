@@ -62,7 +62,9 @@ fn main() -> eframe::Result {
 /// the middle third of the recording is paused, so the file should be one third shorter. With
 /// `replay`, the last 3 s are also saved from the replay buffer, next to `out.mp4` as
 /// `out-replay.mp4`. With `preview`, preview pictures are made as in the app. With `shot`, a
-/// screenshot is taken halfway, next to `out.mp4` as `out-shot.png`.
+/// screenshot is taken halfway, next to `out.mp4` as `out-shot.png`. With `region`, a 960×540
+/// region from (480, 270) is recorded; with `webcam`, a magenta 320×240 picture stands for a
+/// webcam in the bottom-right corner.
 fn selftest(args: &[String]) -> Result<(), String> {
     let seconds = selftest_seconds(args.first().map(String::as_str));
     let out = args.get(1).map_or_else(|| PathBuf::from("selftest.mp4"), PathBuf::from);
@@ -70,6 +72,8 @@ fn selftest(args: &[String]) -> Result<(), String> {
     let replay = args.iter().any(|a| a == "replay");
     let preview = args.iter().any(|a| a == "preview");
     let shot = args.iter().any(|a| a == "shot");
+    let region = args.iter().any(|a| a == "region").then_some(config::Region { x: 480, y: 270, width: 960, height: 540 });
+    let webcam = args.iter().any(|a| a == "webcam");
     let resolution = if args.iter().any(|a| a == "720") { config::Resolution::P720 } else { config::Resolution::Native };
 
     let source = capture::list_sources().into_iter().next().ok_or("no capture sources")?;
@@ -84,8 +88,8 @@ fn selftest(args: &[String]) -> Result<(), String> {
                 quality: config::Quality::Medium,
                 resolution,
                 audio: true,
-                region: None,
-                overlay: None,
+                region,
+                overlay: webcam.then_some((camera::Corner::BottomRight, camera::CameraSize::Medium)),
             }),
         },
         None,
@@ -107,6 +111,16 @@ fn selftest(args: &[String]) -> Result<(), String> {
         },
     );
     let third = Duration::from_secs_f64(seconds / 3.0);
+    if webcam {
+        // Once, as the encoder keeps a webcam's last picture.
+        std::thread::sleep(Duration::from_millis(500));
+        if let Some(enc) = session.shared.encoder.lock().unwrap().as_ref()
+            && let Some(rect) = enc.overlay_rect((320, 240))
+        {
+            let magenta = [255u8, 0, 255, 255].repeat(rect.2 as usize * rect.3 as usize);
+            enc.push_overlay(rect, &magenta);
+        }
+    }
     std::thread::sleep(third);
     if pause {
         session.shared.clock.set_paused(true);
