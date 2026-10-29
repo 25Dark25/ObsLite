@@ -17,10 +17,9 @@ Measured on Windows 11 on a laptop with an RTX 4060 GPU, encoding on its Intel i
 (Quick Sync), without a webcam; your numbers will vary. About 40 MB of the recording figure is the
 queue of converted frames that keeps the encoder from dropping frames when it briefly stalls.
 
-On Linux, a recording encoded with VA-API (Intel, AMD) keeps each frame on the GPU, as on Windows,
-unless it has a region or the webcam. Those, and the other encoders (NVENC, software), still copy
-and convert each frame on the CPU, which costs more. Figures for Linux will be published once that
-work is done.
+On Linux, a recording encoded with VA-API (Intel, AMD) keeps each frame on the GPU, as on Windows.
+The other encoders (NVENC, software) still copy and convert each frame on the CPU, which costs
+more. Figures for Linux will be published once that work is done.
 
 ## obs-lite and OBS Studio
 
@@ -158,8 +157,8 @@ The same interface and recordings, with what Linux desktops allow:
   and GNOME asks to confirm them; they can be changed in the system's keyboard settings.
 - **Webcam**: the desktop asks for permission the first time a camera is chosen.
 - **Encoding** with GStreamer: VA-API (Intel/AMD) or NVENC if the GPU has them, otherwise x264.
-  With VA-API the desktop's frames go to the encoder without leaving the GPU (not yet with a
-  region or the webcam).
+  With VA-API the desktop's frames go to the encoder without leaving the GPU, the region and the
+  webcam included.
 - **Not on Linux**: application audio, hiding obs-lite from capture (Wayland cannot keep a window
   out of a capture) and the update notice. So a capture of the whole screen shows obs-lite, with
   its preview inside itself; capture a window instead, or minimize obs-lite while recording.

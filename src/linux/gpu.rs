@@ -163,7 +163,7 @@ fn rgba_caps((width, height): (u32, u32)) -> gst::Caps {
 }
 
 /// The RGBA picture in `sample`, packed and opaque: (width, height, pixels).
-fn rgba(sample: &gst::Sample) -> Option<(u32, u32, Vec<u8>)> {
+pub(super) fn rgba(sample: &gst::Sample) -> Option<(u32, u32, Vec<u8>)> {
     let info = gst_video::VideoInfo::from_caps(sample.caps()?).ok()?;
     let frame = gst_video::VideoFrameRef::from_buffer_ref_readable(sample.buffer()?, &info).ok()?;
     let (w, h) = (info.width(), info.height());

@@ -49,8 +49,11 @@ cargo test --locked
 | `linux::encoder::the_webcam_is_pasted_in_place` | Linux only: the webcam picture lands in its rectangle. |
 | `linux::encoder::packet_times_discount_the_encoders_offset` | Linux only: packet times ignore the 1000-hour offset GStreamer video encoders add, so audio is not dropped from files. |
 | `linux::encoder::aac_codec_data_describes_lc_48k_stereo` | Linux only: the AAC stream description given to the muxer before any audio is AAC-LC, 48 kHz, stereo. |
-| `linux::encoder::frames_on_the_gpu_are_recorded` | Linux only, skipped without VA-API (CI): frames on the GPU (BGRA, 320×240 and an odd 321×241, cropped to 320×240) are converted and encoded there into a file that finishes. |
-| `linux::capture::only_a_plain_recording_takes_frames_on_the_gpu` | Linux only: frames are asked for on the GPU only when recording without a region or the webcam, and not again after the GPU failed to encode them. |
+| `linux::encoder::frames_on_the_gpu_are_recorded_and_cropped` | Linux only, skipped without VA-API (CI): colour-bar frames on the GPU are converted and encoded there into a file that finishes: 320×240; an odd 321×241, cropped to 320×240; and a 32×64 region, which decodes to the cyan bar it lies on. |
+| `linux::encoder::the_webcam_is_put_on_frames_on_the_gpu` | Linux only, skipped without VA-API: a red webcam picture given once, before the frames, is in its place on the last decoded picture, and the bars show beside it; stopping takes under 5 s (10 s before the fix: the webcam's input never ended). |
+| `linux::encoder::the_recorded_part_is_cropped_from_what_the_frame_has` | Linux only: the crop for frames on the GPU: none for a whole frame, the even size for an odd one, the region, and what is left of it when a window shrank below it. |
+| `linux::encoder::the_webcam_is_placed_at_the_recordings_size` | Linux only: the webcam's place, worked out at the captured size, is scaled to the recording's. |
+| `linux::capture::a_recording_takes_frames_on_the_gpu` | Linux only: frames are asked for on the GPU when recording, with or without a region and the webcam, and not for the preview alone or again after the GPU failed to encode them. |
 | `linux::gpu::the_desktops_formats_are_offered_in_va_apis_layout_and_linear` | Linux only: the desktop is asked for its four formats in the layout VA-API reads, each also linear (COSMIC's portal fails when offered one layout), and nothing when VA-API reads none of them. |
 | `hotkeys::a_pressed_combination_becomes_text` | A combination pressed in the settings becomes "Ctrl+Alt+R". |
 | `hotkeys::keys_that_would_break_typing_are_rejected` | A hotkey needs Ctrl or Alt unless it is an F-key. |
@@ -480,3 +483,20 @@ Not verified: AMD; GNOME, KDE and other desktops (they may send other formats or
 fall back to frames in memory); a window capture changing size while recording (scaled to fit
 with borders on the GPU, where frames in memory are cropped or padded); the interface (only the
 self-test was run).
+
+2026-10-29, the region and the webcam on the GPU, same laptop, the build run inside the Flatpak
+runtime. COSMIC's portal crashed every 10–20 s that day (also with `main`), and Steam was open, so
+CPU was measured in 5 s windows, dropping those with a crash, and compared only within the session:
+
+| Step | Result |
+|---|---|
+| Self-test 6 s with `preview shot` and `region`, `webcam`, and both at 720p | 960×540, 1920×1080 and 960×540 files, 348–385 frames, 0 lagged, 0 decode errors; the region is the middle of the screen, the magenta stand-in webcam is in the bottom-right corner, with and without the region; the screenshots are the whole 1920×1080 screen, as the app crops and pastes on them |
+| Preview pictures | 26 in 6 s (5 a second) once whole frames were kept 10 times a second; 19–21 with 5 |
+| CPU, `preview region webcam` | 20.7 / 22.5 / 27.1 % of a core and 185 MB on the GPU, against 40.7 / 44.5 % and 152 MB with the same build taking frames in memory. Recording alone on the GPU 12.4–14.3 %; the same in memory, and `main`, 81–104 % that day |
+| Per thread, recording on the GPU | The encoder's thread about 9 % of a core, converting 3 %, PipeWire 1.5 %; the preview adds about 2 % |
+| Automated tests and clippy | 87 passed (one ignored) on 1.95 and stable natively, and the GPU ones also inside the runtime; clippy clean on both for Linux and Windows |
+
+Not verified: a real webcam (only the stand-in picture of the self-test; the app gives the encoder
+the same scaled pictures as before); the interface; AMD; other desktops. With a region, memory is
+higher on the GPU (185 against 152 MB): whole frames are kept there for the preview, where in
+memory only the region is.
