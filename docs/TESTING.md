@@ -14,7 +14,8 @@ cargo test --locked
 
 | Test | Checks |
 |---|---|
-| `media::clock_excludes_paused_time` | The recording clock stops while paused. |
+| `media::a_pause_is_left_out_of_the_file_but_not_out_of_the_replay_buffer` | A pause in the middle of a recording, resumed between keyframes: the file goes on at the keyframe asked for, its video and audio times following on with no gap or overlap, its length (the timer) stopped during the pause; the replay buffer keeps all of it. |
+| `media::audio_made_before_a_pause_and_coming_after_it_is_recorded` | Audio comes a little after the video of its time: what was made before the pause is recorded even when it comes after it, what was made during the pause is not, even when it comes after the resume. |
 | `media::replay_keeps_the_last_seconds_from_a_keyframe` | The replay buffer keeps at least its length, from a keyframe, at most one keyframe interval more, and audio from the first frame on. |
 | `media::replay_shorter_than_its_length_keeps_everything` | A replay buffer that has run less than its length keeps every packet. |
 | `media::replay_starts_at_the_first_keyframe` | Packets before the first keyframe are not kept (they would not play). |
@@ -531,3 +532,15 @@ windows, dropping those with a crash of COSMIC's portal:
 
 The recording obs-lite made from the interface: 2 min 41 s, 1920×1080, 60 fps, 9663 frames, 0
 decode errors.
+
+2026-10-29, pausing a recording without pausing the replay buffer (audit finding 12), same laptop,
+the build run inside the Flatpak runtime:
+
+| Step | Result |
+|---|---|
+| Self-test 9 s with `pause` (the middle 3 s), twice | 5.45 / 5.65 s files, 0 decode errors; every video frame 1/60 s after the one before, no gap at the pause; audio: one step of 384 or 1408 samples instead of 1024 where the file goes on (the audio and video cut points fall up to one audio packet apart). The first build left 50 ms of audio out before the pause (made before it but coming after it), now kept |
+| Self-test 9 s with `pause replay` | File 5.45 s; replay 4.35 s; 0 decode errors |
+| Automated tests and clippy | 90 passed (one ignored) on 1.95 and stable; clippy clean on both for Linux and Windows |
+
+Not verified: Windows (the change is in the shared outputs, and the Windows encoder now keeps
+encoding while paused, as on Linux); pausing from the interface (the self-test pauses the same way).

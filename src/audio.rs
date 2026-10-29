@@ -215,7 +215,7 @@ pub struct Mixer {
 
 impl Mixer {
     /// Starts mixing once `ready` becomes true (the encoder has restarted `clock`),
-    /// delivering PCM blocks to `sink`. Nothing is produced while the clock is paused.
+    /// delivering PCM blocks to `sink`.
     pub fn start(
         inputs: Vec<Arc<InputShared>>,
         ready: Arc<AtomicBool>,
@@ -243,11 +243,6 @@ impl Mixer {
                     let mut limiter = Limiter::new();
                     while !stop.load(Ordering::Relaxed) {
                         thread::sleep(Duration::from_millis(10));
-                        if clock.is_paused() {
-                            // Sound made during a pause must not leak into the file on resume.
-                            clear();
-                            continue;
-                        }
                         let due = (clock.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as u64;
                         let frames = due.saturating_sub(produced) as usize;
                         if frames == 0 {

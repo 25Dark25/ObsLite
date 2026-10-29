@@ -65,11 +65,8 @@ enum RecState {
     Saving(Receiver<Result<PathBuf, String>>),
 }
 
-/// A recording in progress: where it starts on the session clock, which may have been running
-/// for the replay buffer.
-struct Recording {
-    since: Duration,
-}
+/// A recording in progress (the session may also be running for the replay buffer).
+struct Recording;
 
 struct Status {
     text: String,
@@ -281,7 +278,7 @@ impl App {
     }
 
     fn is_paused(&self) -> bool {
-        self.is_recording() && self.active_session().is_some_and(|s| s.shared.clock.is_paused())
+        self.is_recording() && self.active_session().is_some_and(|s| s.shared.outputs.lock().unwrap().file_paused())
     }
 
     /// Recording and the encoder clock is running (pausing before that would be lost).
@@ -443,8 +440,9 @@ impl App {
                 if self.is_live()
                     && let Some(session) = self.active_session()
                 {
-                    let clock = &session.shared.clock;
-                    clock.set_paused(!clock.is_paused());
+                    let mut outputs = session.shared.outputs.lock().unwrap();
+                    let paused = outputs.file_paused();
+                    outputs.set_file_paused(!paused);
                 }
             }
             Action::Screenshot => self.take_screenshot(ctx),
@@ -468,12 +466,9 @@ impl App {
             return;
         }
         let RecState::Active { session, recording, .. } = &mut self.rec else { return };
-        let shared = &session.shared;
-        // The clock starts with the encoder; if the replay buffer started it, count from now.
-        let since = if shared.encoder_ready.load(Ordering::Acquire) { shared.clock.elapsed() } else { Duration::ZERO };
         let path = new_output(&self.config.output_dir, None, "mp4", &mut self.named);
-        shared.outputs.lock().unwrap().start_file(path.clone());
-        *recording = Some(Recording { since });
+        session.shared.outputs.lock().unwrap().start_file(path.clone());
+        *recording = Some(Recording);
         self.status = None;
         // Saved now, so the next start can repair the file if obs-lite stops while writing it.
         self.config.last_recording = Some(path);
@@ -615,8 +610,7 @@ impl App {
             return self.stop_session(ctx, None);
         }
         *recording = None;
-        // The replay buffer keeps the session (and its clock) going: only the file ends.
-        session.shared.clock.set_paused(false);
+        // The replay buffer keeps the session going: only the file ends.
         let file = session.shared.outputs.lock().unwrap().take_file();
         self.set_status(tr!("Guardando grabación…", "Saving recording…"), None, false);
         self.spawn_job(ctx, move || match file.map(PendingFile::finish) {
@@ -1373,7 +1367,7 @@ impl App {
         if self.is_replaying() {
             ui.label(RichText::new(tr!("Búfer de repetición activo", "Replay buffer active")).small().color(PRIMARY_LIGHT));
         }
-        let (Some(session), RecState::Active { recording: Some(recording), .. }) = (self.active_session(), &self.rec) else {
+        let (Some(session), RecState::Active { recording: Some(_), .. }) = (self.active_session(), &self.rec) else {
             status_icon(ui, Icon::Record, GREY3, "00:00:00");
             return;
         };
@@ -1384,9 +1378,13 @@ impl App {
             ui.spinner();
             return;
         }
-        let secs = shared.clock.elapsed().saturating_sub(recording.since).as_secs();
+        let (recorded, paused) = {
+            let outputs = shared.outputs.lock().unwrap();
+            (outputs.recorded(), outputs.file_paused())
+        };
+        let secs = recorded.as_secs();
         let time = format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60);
-        if shared.clock.is_paused() {
+        if paused {
             status_icon(ui, Icon::Pause, YELLOW, &time);
         } else {
             status_icon(ui, Icon::Record, RED, &time);

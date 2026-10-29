@@ -123,7 +123,7 @@ fn selftest(args: &[String]) -> Result<(), String> {
     }
     std::thread::sleep(third);
     if pause {
-        session.shared.clock.set_paused(true);
+        session.shared.outputs.lock().unwrap().set_file_paused(true);
     }
     if shot {
         let (width, height, rgba) = session.snapshot()?;
@@ -132,7 +132,7 @@ fn selftest(args: &[String]) -> Result<(), String> {
         println!("screenshot: {} ({width}x{height})", path.display());
     }
     std::thread::sleep(third);
-    session.shared.clock.set_paused(false);
+    session.shared.outputs.lock().unwrap().set_file_paused(false);
     std::thread::sleep(third);
     let replay = replay.then(|| session.shared.outputs.lock().unwrap().replay());
     drop(mixer);

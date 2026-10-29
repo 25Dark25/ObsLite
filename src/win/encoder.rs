@@ -4,8 +4,8 @@
 //! (and the webcam) just draw into a GPU "canvas" texture. Like OBS's video thread, a producer
 //! thread converts the canvas to NV12 at the output size every 1/fps of recording time and
 //! queues it; the hardware encoder of the same GPU takes frames from the queue, and the
-//! encoded packets are written to the MP4 (see `mf`). Pausing stops the recording clock, so
-//! paused time never reaches the file.
+//! encoded packets are written to the MP4 (see `mf`). Pausing leaves the time out of the file
+//! only (see `media::Outputs`), so the replay buffer goes on.
 
 use std::collections::VecDeque;
 use std::path::Path;
