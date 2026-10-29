@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.95"
 description = "Lightweight screen recorder for Windows and Linux"
 license = "MIT"
-repository = "https://github.com/25Dark25/obs-lite"
+repository = "https://github.com/25Dark25/ObsLite"
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

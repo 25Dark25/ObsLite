@@ -20,7 +20,7 @@
 
     <Icon Id="ObsLite.ico" SourceFile="$(var.Icon)" />
     <Property Id="ARPPRODUCTICON" Value="ObsLite.ico" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/25Dark25/obs-lite" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/25Dark25/ObsLite" />
     <Property Id="ARPNOMODIFY" Value="1" />
     <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" />
 

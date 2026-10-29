@@ -1,7 +1,7 @@
 //! Looks up the latest obs-lite release on GitHub once at start-up. Settings › General can turn
 //! it off. Nothing is downloaded or installed: the user is only told, with a link.
 
-const LATEST: &str = "https://api.github.com/repos/25Dark25/obs-lite/releases/latest";
+const LATEST: &str = "https://api.github.com/repos/25Dark25/ObsLite/releases/latest";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Release {
@@ -49,10 +49,10 @@ mod tests {
 
     #[test]
     fn release_is_read_from_the_github_response() {
-        let json = r#"{"tag_name": "v0.3.0", "html_url": "https://github.com/25Dark25/obs-lite/releases/tag/v0.3.0", "assets": []}"#;
+        let json = r#"{"tag_name": "v0.3.0", "html_url": "https://github.com/25Dark25/ObsLite/releases/tag/v0.3.0", "assets": []}"#;
         let release = parse(json).unwrap();
         assert_eq!(release.version, "0.3.0");
-        assert_eq!(release.url, "https://github.com/25Dark25/obs-lite/releases/tag/v0.3.0");
+        assert_eq!(release.url, "https://github.com/25Dark25/ObsLite/releases/tag/v0.3.0");
         assert_eq!(parse(r#"{"message": "Not Found"}"#), None);
     }
 }

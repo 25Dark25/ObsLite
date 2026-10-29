@@ -26,16 +26,33 @@
   <developer id="io.github._25dark25">
     <name>25Dark25</name>
   </developer>
-  <url type="homepage">https://github.com/25Dark25/obs-lite</url>
-  <url type="bugtracker">https://github.com/25Dark25/obs-lite/issues</url>
-  <url type="vcs-browser">https://github.com/25Dark25/obs-lite</url>
+  <url type="homepage">https://github.com/25Dark25/ObsLite</url>
+  <url type="bugtracker">https://github.com/25Dark25/ObsLite/issues</url>
+  <url type="vcs-browser">https://github.com/25Dark25/ObsLite</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/25Dark25/ObsLite/160a9fcd091c85ac79fb9c199e1a44608c872a18/docs/images/main-window.png</image>
+      <caption>Recording, with the preview, the sources, the audio mixer and the controls</caption>
+    </screenshot>
+  </screenshots>
+  <branding>
+    <color type="primary" scheme_preference="light">#f9dcdd</color>
+    <color type="primary" scheme_preference="dark">#5c1a1d</color>
+  </branding>
   <content_rating type="oars-1.1"/>
+  <requires>
+    <display_length compare="ge">900</display_length>
+  </requires>
   <supports>
     <control>pointing</control>
     <control>keyboard</control>
   </supports>
   <releases>
-    <release version="0.5.0" date="2026-10-25"/>
+    <release version="0.5.0" date="2026-10-25">
+      <description>
+        <p>Recordings survive a crash or a power cut, and are repaired at the next start.</p>
+      </description>
+    </release>
     <release version="0.4.1" date="2026-10-24"/>
     <release version="0.4.0" date="2026-10-23"/>
     <release version="0.3.0" date="2026-10-18"/>
