@@ -544,3 +544,18 @@ the build run inside the Flatpak runtime:
 
 Not verified: Windows (the change is in the shared outputs, and the Windows encoder now keeps
 encoding while paused, as on Linux); pausing from the interface (the self-test pauses the same way).
+
+2026-10-29, release preparation for 0.6.0 (`main` plus the version bump), same laptop, the
+Flatpak built from it (metainfo release 0.6.0):
+
+| Step | Result |
+|---|---|
+| Self-test 8 s 1080p60 | `vah264enc`, frames on the GPU; 448 frames, 0 lagged, 7.47 s, 0 decode errors |
+| Self-test 8 s with `pause replay` | 5.00 s file, 3.60 s replay, 0 lagged, 0 decode errors |
+| Self-test 8 s with `region webcam preview shot` | 960×540, 489 frames, 0 lagged, 0 decode errors; 38 preview pictures; a 1920×1080 screenshot |
+| Automated tests and clippy | 90 passed (one ignored) on 1.95 and stable; clippy clean on both for Linux and Windows |
+| Flathub's linter | The metainfo passes `flatpak-builder-lint appstream`; the Flathub manifest passes `manifest` and builds offline with `org.flatpak.Builder` |
+
+Not verified for this release: any of the Windows changes since 0.5.0 on Windows (no machine
+available; only CI and cross-compiled clippy), notably the audio capture rewrite, the encoder
+error handling, the webcam mode changes and pausing without pausing the replay buffer.
