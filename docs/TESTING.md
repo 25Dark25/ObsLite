@@ -559,3 +559,10 @@ Flatpak built from it (metainfo release 0.6.0):
 Not verified for this release: any of the Windows changes since 0.5.0 on Windows (no machine
 available; only CI and cross-compiled clippy), notably the audio capture rewrite, the encoder
 error handling, the webcam mode changes and pausing without pausing the replay buffer.
+
+2026-10-29, the 0.6.0 release build on a fresh Windows 11 (a VirtualBox virtual machine): it did
+not start, "VCRUNTIME140.dll was not found". The build linked the Visual C++ runtime as a DLL,
+which only other programs install. Now the runtime is linked into the exe (`crt-static`), and the
+CI installer job and the release build check with `dumpbin /dependents` that the exe imports no
+`vcruntime*`, `msvcp*` or `api-ms-win-crt-*` DLL; the check failed on the build before the fix,
+listing VCRUNTIME140.dll and six `api-ms-win-crt-*` DLLs.
