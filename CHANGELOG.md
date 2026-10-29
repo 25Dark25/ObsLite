@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The project moved to https://github.com/25Dark25/ObsLite (the old address redirects there), so
+  that the Flatpak's id matches it, as Flathub requires. The Linux metainfo has a screenshot,
+  brand colours, the smallest screen it fits and notes for the last release.
+
 ### Fixed
 
 - Pausing a recording no longer pauses the replay buffer: the encoder goes on, and only the file
@@ -238,11 +244,11 @@ changes.
 - Minimum supported Rust version: 1.95.
 - Releases ship `THIRD-PARTY-LICENSES.html` with the licenses of the bundled crates.
 
-[Unreleased]: https://github.com/25Dark25/obs-lite/compare/v0.5.0...HEAD
-[0.5.0]: https://github.com/25Dark25/obs-lite/compare/v0.4.1...v0.5.0
-[0.4.1]: https://github.com/25Dark25/obs-lite/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/25Dark25/obs-lite/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/25Dark25/obs-lite/compare/v0.2.1...v0.3.0
-[0.2.1]: https://github.com/25Dark25/obs-lite/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/25Dark25/obs-lite/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/25Dark25/obs-lite/releases/tag/v0.1.0
+[Unreleased]: https://github.com/25Dark25/ObsLite/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/25Dark25/ObsLite/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/25Dark25/ObsLite/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/25Dark25/ObsLite/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/25Dark25/ObsLite/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/25Dark25/ObsLite/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/25Dark25/ObsLite/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/25Dark25/ObsLite/releases/tag/v0.1.0

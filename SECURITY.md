@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Report vulnerabilities privately through
-[GitHub private vulnerability reporting](https://github.com/25Dark25/obs-lite/security/advisories/new).
+[GitHub private vulnerability reporting](https://github.com/25Dark25/ObsLite/security/advisories/new).
 **Do not open a public issue.**
 
 Please include the obs-lite version (or commit), your Windows version or Linux distribution and

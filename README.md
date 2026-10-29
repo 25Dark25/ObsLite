@@ -75,7 +75,7 @@ every 2 s and no B-frames. Recording, OBS takes a little less CPU; obs-lite less
 
 ## Quick start
 
-1. Download from [Releases](https://github.com/25Dark25/obs-lite/releases) and
+1. Download from [Releases](https://github.com/25Dark25/ObsLite/releases) and
    [verify](#verifying-a-release) either:
    - `obs-lite-X.Y.Z-windows-x64.msi`, the installer: it needs no administrator rights, installs
      to `%LOCALAPPDATA%\Programs\obs-lite`, adds *Obs Lite* to the Start menu and, if you tick the
