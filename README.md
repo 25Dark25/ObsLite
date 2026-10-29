@@ -55,7 +55,7 @@ measured on 2026-10-29 on the laptop above, obs-lite built from `main`: both sho
 recording the whole screen with its audio, with VA-API on the Intel GPU at 12 Mbit/s, a keyframe
 every 2 s and no B-frames. Recording, OBS takes a little less CPU; obs-lite less memory.
 
-> **Status: early (0.5.0).** obs-lite has been tested on Windows on a single machine
+> **Status: early (0.6.0).** obs-lite has been tested on Windows on a single machine
 > (Windows 11, laptop with Intel and NVIDIA GPUs) and, on Linux, in a virtual machine (Ubuntu
 > 26.04, GNOME) and on a laptop (Pop!_OS 24.04, COSMIC, Intel and NVIDIA GPUs); see
 > [docs/TESTING.md](docs/TESTING.md) for what was and was not verified. It has
@@ -256,14 +256,14 @@ A7FC EDEA D7E6 C343 7312  284A 442D A687 E0FF 73EE
 2. Verify the signature of the zip (or, the same way, of the `.msi` or the `.flatpak`):
 
    ```sh
-   gpg --verify obs-lite-0.5.0-portable-windows-x64.zip.asc obs-lite-0.5.0-portable-windows-x64.zip
+   gpg --verify obs-lite-0.6.0-portable-windows-x64.zip.asc obs-lite-0.6.0-portable-windows-x64.zip
    ```
 
    The output must say `Good signature` and show the fingerprint above.
 
 3. Optionally, compare the file's SHA-256 with the one in the release notes:
-   `sha256sum obs-lite-0.5.0-portable-windows-x64.zip`, or on Windows
-   `Get-FileHash obs-lite-0.5.0-portable-windows-x64.zip -Algorithm SHA256`.
+   `sha256sum obs-lite-0.6.0-portable-windows-x64.zip`, or on Windows
+   `Get-FileHash obs-lite-0.6.0-portable-windows-x64.zip -Algorithm SHA256`.
 
 `gpg` ships with [Gpg4win](https://gpg4win.org/) and with Git for Windows.
 
