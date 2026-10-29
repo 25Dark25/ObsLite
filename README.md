@@ -17,9 +17,16 @@ Measured on Windows 11 on a laptop with an RTX 4060 GPU, encoding on its Intel i
 (Quick Sync), without a webcam; your numbers will vary. About 40 MB of the recording figure is the
 queue of converted frames that keeps the encoder from dropping frames when it briefly stalls.
 
-On Linux, a recording encoded with VA-API (Intel, AMD) keeps each frame on the GPU, as on Windows.
-The other encoders (NVENC, software) still copy and convert each frame on the CPU, which costs
-more. Figures for Linux will be published once that work is done.
+| Linux | Idle (preview + audio) | Recording 1080p60 + audio |
+|---|---|---|
+| Memory (PSS) | ~115 MB | ~225 MB |
+| CPU (16 threads) | ~0.2 % | ~0.7 % |
+
+Measured with the Flatpak on Pop!_OS 24.04 (COSMIC, Wayland) on the same laptop, recording the
+whole screen with VA-API on its Intel GPU, without a webcam; memory is the proportional set size of
+every process in the Flatpak's sandbox. With VA-API (Intel, AMD) each frame stays on the GPU, as on
+Windows. With NVENC or a software encoder it is still copied and converted on the CPU, which costs
+more.
 
 ## obs-lite and OBS Studio
 
@@ -28,6 +35,8 @@ obs-lite does one thing, record, and leaves out what it would need a much larger
 | | obs-lite | OBS Studio |
 |---|---|---|
 | Linux Flatpak: download / installed | 3.7 MB / 11.7 MB | 225 MB / 593 MB |
+| Linux, idle: memory / CPU (one core) | 115 MB / 3.5 % | 279 MB / 5.2 % |
+| Linux, recording 1080p60: memory / CPU (one core) | 225 MB / 11 % | 294 MB / 9 % |
 | Record the screen or a window, with desktop audio and microphone | ✓ | ✓ |
 | Replay buffer | ✓ | ✓ |
 | Recording kept after a crash | ✓ (fragmented MP4, repaired at the next start) | ✓ (MKV, or hybrid MP4) |
@@ -41,7 +50,10 @@ obs-lite does one thing, record, and leaves out what it would need a much larger
 | Interface languages | English, Spanish | many |
 
 The sizes are OBS Studio 33.0 from Flathub and obs-lite 0.5.0, both on the same runtime
-(`org.freedesktop.Platform` 26.08), measured with `flatpak info` on 2026-10-27.
+(`org.freedesktop.Platform` 26.08), measured with `flatpak info` on 2026-10-27. Memory and CPU were
+measured on 2026-10-29 on the laptop above, obs-lite built from `main`: both showing and then
+recording the whole screen with its audio, with VA-API on the Intel GPU at 12 Mbit/s, a keyframe
+every 2 s and no B-frames. Recording, OBS takes a little less CPU; obs-lite less memory.
 
 > **Status: early (0.5.0).** obs-lite has been tested on Windows on a single machine
 > (Windows 11, laptop with Intel and NVIDIA GPUs) and, on Linux, in a virtual machine (Ubuntu

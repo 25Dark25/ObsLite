@@ -517,3 +517,17 @@ each finding; 7 findings, 3 confirmed), same laptop:
 
 Not verified: a driver on which the first frame really fails (the waiting was tested with pipelines
 that refuse the frame or give nothing back).
+
+2026-10-29, the figures for the README, same laptop, the Flatpak built from `main` (`a5c1179`),
+little else running. Each program shown the whole screen (1920×1080) with its audio, then
+recording it at 1080p60 with VA-API on the Intel GPU, 12 Mbit/s, a keyframe every 2 s, no
+B-frames; CPU and memory of every process in the Flatpak's sandbox (`measure.py`), in 8–10 s
+windows, dropping those with a crash of COSMIC's portal:
+
+| | Idle (preview + audio) | Recording |
+|---|---|---|
+| obs-lite | 3.4–3.6 % of a core (0.21–0.22 % of 16 threads), 115 MB, 4 windows | 11.0–11.2 % (0.69–0.70 %), 214–227 MB, 7 windows (2 dropped) |
+| OBS Studio 33.0 | 5.0–5.3 %, 279 MB, 4 windows | 8.7–9.0 % (0.54–0.56 %), 293–294 MB, 6 windows |
+
+The recording obs-lite made from the interface: 2 min 41 s, 1920×1080, 60 fps, 9663 frames, 0
+decode errors.
