@@ -107,6 +107,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Release build
         run: cargo build --locked --release
+      - name: No Visual C++ runtime needed
+        shell: pwsh
+        run: installer/check-runtime.ps1
       # Keep the version in sync with release-build.yml.
       - name: Install WiX
         run: |

@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Windows: the C runtime is inside obs-lite.exe. The build needed VCRUNTIME140.dll, which a fresh
+  Windows does not have (other programs bring it), and did not start there.
+
 - The project moved to https://github.com/25Dark25/ObsLite (the old address redirects there), so
   that the Flatpak's id matches it, as Flathub requires. The Linux metainfo has a screenshot,
   brand colours, the smallest screen it fits and notes for the last release.
