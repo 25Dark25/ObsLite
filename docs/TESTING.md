@@ -566,3 +566,11 @@ which only other programs install. Now the runtime is linked into the exe (`crt-
 CI installer job and the release build check with `dumpbin /dependents` that the exe imports no
 `vcruntime*`, `msvcp*` or `api-ms-win-crt-*` DLL; the check failed on the build before the fix,
 listing VCRUNTIME140.dll and six `api-ms-win-crt-*` DLLs.
+
+Same virtual machine (VirtualBox, VBoxSVGA with 3D acceleration, no hardware encoder), the build
+with the runtime inside: it starts and captures. The self-test used the Windows software encoder
+("H264 Encoder MFT") and encoded 2 frames in 6 s at 1920×968, 335 slots lagged; a recording from
+the interface lost about 70 % of its frames and was green, with nothing in it. The conversion to
+NV12 on the GPU (`VideoProcessorBlt`) had its error ignored, so frames it did not write went to
+the encoder empty; now that error stops the recording and says so. Not yet known: whether
+VirtualBox's driver reports the error or writes nothing without one.
