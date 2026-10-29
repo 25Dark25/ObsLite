@@ -35,45 +35,23 @@ pub trait Muxer: Sized + Send {
     fn finish(self) -> Result<(), String>;
 }
 
-/// Recording clock that excludes paused intervals.
-pub struct Clock(Mutex<ClockState>);
-
-struct ClockState {
-    origin: Instant,
-    paused_at: Option<Instant>,
-    paused_total: Duration,
-}
+/// The encoding clock: video and audio times are taken from it. It never pauses: pausing the
+/// recording takes the time out of the file only (`Outputs::set_file_paused`), so the replay
+/// buffer goes on.
+pub struct Clock(Mutex<Instant>);
 
 impl Clock {
     pub fn new() -> Self {
-        Self(Mutex::new(ClockState { origin: Instant::now(), paused_at: None, paused_total: Duration::ZERO }))
+        Self(Mutex::new(Instant::now()))
     }
 
     pub fn restart(&self) {
-        *self.0.lock().unwrap() = ClockState { origin: Instant::now(), paused_at: None, paused_total: Duration::ZERO };
+        *self.0.lock().unwrap() = Instant::now();
     }
 
-    /// Active (unpaused) time since the last restart.
+    /// Time since the last restart.
     pub fn elapsed(&self) -> Duration {
-        let s = self.0.lock().unwrap();
-        let end = s.paused_at.unwrap_or_else(Instant::now);
-        end.saturating_duration_since(s.origin).saturating_sub(s.paused_total)
-    }
-
-    pub fn set_paused(&self, paused: bool) {
-        let mut s = self.0.lock().unwrap();
-        match (paused, s.paused_at) {
-            (true, None) => s.paused_at = Some(Instant::now()),
-            (false, Some(at)) => {
-                s.paused_total += at.elapsed();
-                s.paused_at = None;
-            }
-            _ => {}
-        }
-    }
-
-    pub fn is_paused(&self) -> bool {
-        self.0.lock().unwrap().paused_at.is_some()
+        self.0.lock().unwrap().elapsed()
     }
 }
 
@@ -91,6 +69,17 @@ pub struct Outputs<M: Muxer> {
     /// The encoder should make its next frame a keyframe, for a recording to start on.
     keyframe_wanted: bool,
     error: Option<String>,
+    /// While paused nothing reaches the file, which goes on at the first keyframe after (`resuming`),
+    /// its times moved back by the pause; the replay buffer keeps everything.
+    paused: bool,
+    resuming: bool,
+    /// Time taken out of the file by pauses, where the last pause began and ended (its video), the
+    /// file's first time and the end of its last video packet (encoder times).
+    skipped: i64,
+    paused_from: i64,
+    resumed_at: i64,
+    file_start: i64,
+    file_end: i64,
 }
 
 impl<M: Muxer> Default for Outputs<M> {
@@ -104,6 +93,13 @@ impl<M: Muxer> Default for Outputs<M> {
             audio_format: None,
             keyframe_wanted: false,
             error: None,
+            paused: false,
+            resuming: false,
+            skipped: 0,
+            paused_from: 0,
+            resumed_at: 0,
+            file_start: 0,
+            file_end: 0,
         }
     }
 }
@@ -112,6 +108,32 @@ impl<M: Muxer> Outputs<M> {
     /// Starts recording to `path` at the next keyframe, which is asked for right away.
     pub fn start_file(&mut self, path: PathBuf) {
         (self.path, self.file, self.error, self.keyframe_wanted) = (Some(path), None, None, true);
+        (self.paused, self.resuming, self.skipped, self.paused_from, self.resumed_at) = (false, false, 0, 0, 0);
+    }
+
+    /// Pauses or resumes the recording (not the replay buffer).
+    pub fn set_file_paused(&mut self, paused: bool) {
+        if self.path.is_none() || paused == self.paused {
+            return;
+        }
+        self.paused = paused;
+        if paused {
+            self.paused_from = self.file_end;
+        } else {
+            // The file goes on at a keyframe, asked for now; audio from then on waits for it.
+            (self.resuming, self.keyframe_wanted) = (true, true);
+            self.pending_audio.clear();
+        }
+    }
+
+    pub fn file_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// How long the file is so far, pauses left out.
+    pub fn recorded(&self) -> Duration {
+        let ticks = if self.file.is_some() { self.file_end - self.file_start - self.skipped } else { 0 };
+        Duration::from_nanos(ticks.max(0) as u64 * 100)
     }
 
     /// The recording asked for has failed (its file could not be created or written, or the
@@ -123,6 +145,7 @@ impl<M: Muxer> Outputs<M> {
     /// Stops recording; the returned file must still be finished (it can take a moment).
     pub fn take_file(&mut self) -> Option<PendingFile<M>> {
         let path = self.path.take()?;
+        (self.paused, self.resuming) = (false, false);
         Some(PendingFile { path, file: self.file.take(), error: self.error.take() })
     }
 
@@ -165,23 +188,32 @@ impl<M: Muxer> Outputs<M> {
             }
         }
         // A file that could not be created is not tried again at every keyframe.
-        if let (Some(path), None, None, true, Some(video)) = (&self.path, &self.file, &self.error, packet.key, &self.video_format) {
+        if let (Some(path), None, None, true, false, Some(video)) =
+            (&self.path, &self.file, &self.error, packet.key, self.paused, &self.video_format)
+        {
             match M::create(path, video, self.audio_format.as_ref(), packet.time) {
                 Ok(file) => {
                     for audio in self.pending_audio.drain(..) {
                         let _ = file.write(false, &audio);
                     }
-                    self.file = Some(file);
+                    (self.file, self.file_start, self.file_end, self.resuming) = (Some(file), packet.time, packet.time, false);
                 }
                 Err(e) => {
                     self.error.get_or_insert(e);
                 }
             }
         }
-        if let Some(file) = &self.file
-            && let Err(e) = file.write(true, &packet)
-        {
-            self.error.get_or_insert(e);
+        if self.resuming && packet.key && self.file.is_some() {
+            // The pause is taken out: the file goes on from where it stopped.
+            self.skipped += packet.time - self.file_end;
+            (self.resuming, self.resumed_at) = (false, packet.time);
+            for audio in std::mem::take(&mut self.pending_audio) {
+                self.write_file(false, &audio);
+            }
+        }
+        if !self.paused && !self.resuming {
+            self.write_file(true, &packet);
+            self.file_end = self.file_end.max(packet.time + packet.duration);
         }
         if let Some(ring) = &mut self.replay {
             ring.push_video(packet);
@@ -190,12 +222,15 @@ impl<M: Muxer> Outputs<M> {
 
     pub fn audio(&mut self, packets: Vec<Packet>) {
         for packet in packets {
+            // Audio comes a little after the video of its time: what was made before the pause
+            // is recorded even if it comes after it.
+            let paused = (self.paused || self.resuming) && packet.time >= self.paused_from;
             match &self.file {
-                Some(file) => {
-                    if let Err(e) = file.write(false, &packet) {
-                        self.error.get_or_insert(e);
-                    }
-                }
+                // Sound made while paused is not recorded.
+                _ if self.paused && paused => {}
+                Some(_) if !paused => self.write_file(false, &packet),
+                // Resuming: kept for the keyframe the file goes on at.
+                Some(_) => self.pending_audio.push_back(packet.clone()),
                 None => {
                     self.pending_audio.push_back(packet.clone());
                     // Without a recording waiting for its keyframe, a second is plenty.
@@ -214,6 +249,20 @@ impl<M: Muxer> Outputs<M> {
 
     pub fn record_error(&mut self, error: String) {
         self.error.get_or_insert(error);
+    }
+
+    /// Writes `packet` to the file, if there is one, with the time pauses took out removed.
+    /// Audio from the last pause (coming late) is dropped: it would overlap what came after it.
+    fn write_file(&mut self, video: bool, packet: &Packet) {
+        let Some(file) = &self.file else { return };
+        if !video && (self.paused_from..self.resumed_at).contains(&packet.time) {
+            return;
+        }
+        let time = packet.time - self.skipped;
+        let result = if self.skipped == 0 { file.write(video, packet) } else { file.write(video, &Packet { time, ..packet.clone() }) };
+        if let Err(e) = result {
+            self.error.get_or_insert(e);
+        }
     }
 }
 
@@ -521,22 +570,63 @@ mod tests {
         assert_eq!(*written.lock().unwrap(), vec![(true, 0), (false, 10), (true, 20)]);
     }
 
+    /// 30 fps video (a keyframe every 2 s, or when asked for) and audio every 1/30 s, from `from`
+    /// to `to` seconds, given to `outputs`.
+    fn feed(outputs: &mut Outputs<FakeMuxer>, written: &Arc<Mutex<Vec<(bool, i64)>>>, from: i64, to: i64) {
+        let step = TICKS_PER_SECOND / 30;
+        for n in from * 30..to * 30 {
+            outputs.audio(vec![Packet { duration: step, ..packet(n * step, true) }]);
+            let key = n % 60 == 0 || outputs.take_keyframe_request();
+            outputs.video(Packet { duration: step, ..packet(n * step, key) }, || Ok(written.clone()));
+        }
+    }
+
     #[test]
-    fn clock_excludes_paused_time() {
-        let clock = Clock::new();
-        thread::sleep(Duration::from_millis(30));
-        clock.set_paused(true);
-        let at_pause = clock.elapsed();
-        thread::sleep(Duration::from_millis(50));
-        assert_eq!(clock.elapsed(), at_pause);
-        assert!(clock.is_paused());
-        let resumed = Instant::now();
-        clock.set_paused(false);
-        thread::sleep(Duration::from_millis(20));
-        let after = clock.elapsed();
-        assert!(after >= at_pause + Duration::from_millis(15));
-        // Bounded by the real time since resuming, however long the sleep took: only the 50 ms
-        // pause leaking into the clock can break it.
-        assert!(after <= at_pause + resumed.elapsed(), "paused time leaked: {after:?}");
+    fn audio_made_before_a_pause_and_coming_after_it_is_recorded() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let mut outputs = Outputs::<FakeMuxer>::default();
+        outputs.start_file(PathBuf::from("rec.mp4"));
+        let step = TICKS_PER_SECOND / 30;
+        outputs.video(Packet { duration: step, ..packet(0, true) }, || Ok(written.clone()));
+        outputs.video(Packet { duration: step, ..packet(step, false) }, || unreachable!());
+        outputs.set_file_paused(true);
+        // Made before the video stopped, and after.
+        outputs.audio(vec![packet(step, true), packet(2 * step, true)]);
+        outputs.set_file_paused(false);
+        // Late, from the pause, and then the file goes on.
+        outputs.audio(vec![packet(3 * step, true)]);
+        outputs.video(Packet { duration: step, ..packet(10 * step, true) }, || unreachable!());
+        outputs.audio(vec![packet(5 * step, true), packet(10 * step, true)]);
+        let audio: Vec<i64> = written.lock().unwrap().iter().filter(|(v, _)| !*v).map(|(_, t)| *t).collect();
+        assert_eq!(audio, [step, 2 * step], "before the pause, and where the file goes on");
+    }
+
+    #[test]
+    fn a_pause_is_left_out_of_the_file_but_not_out_of_the_replay_buffer() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let mut outputs = Outputs::<FakeMuxer>::default();
+        outputs.set_replay(Some(20));
+        outputs.start_file(PathBuf::from("rec.mp4"));
+        feed(&mut outputs, &written, 0, 2);
+        outputs.set_file_paused(true);
+        assert!(outputs.file_paused());
+        feed(&mut outputs, &written, 2, 5);
+        let frames = |n: i64| Duration::from_nanos((n * (TICKS_PER_SECOND / 30) * 100) as u64);
+        assert_eq!(outputs.recorded(), frames(60), "the timer stops while paused");
+        // At 5 s, between keyframes: the file goes on at the one asked for.
+        outputs.set_file_paused(false);
+        feed(&mut outputs, &written, 5, 7);
+        assert_eq!(outputs.recorded(), frames(120));
+        let written = written.lock().unwrap();
+        let video: Vec<i64> = written.iter().filter(|(v, _)| *v).map(|(_, t)| *t).collect();
+        let audio: Vec<i64> = written.iter().filter(|(v, _)| !*v).map(|(_, t)| *t).collect();
+        // 4 s of frames, one after the other with no gap where the pause was, in both streams.
+        let step = TICKS_PER_SECOND / 30;
+        assert_eq!(video, (0..120).map(|n| n * step).collect::<Vec<_>>());
+        assert!(audio.windows(2).all(|w| w[1] - w[0] == step), "a gap or overlap in the audio");
+        assert!(*audio.last().unwrap() >= 119 * step - step);
+        // The replay buffer has all 7 s, from a keyframe.
+        let replay = outputs.replay().unwrap();
+        assert_eq!(replay.video.len(), 210);
     }
 }

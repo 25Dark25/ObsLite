@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Pausing a recording no longer pauses the replay buffer: the encoder goes on, and only the file
+  leaves the pause out, going on at a keyframe asked for on resuming. The timer shows the file's
+  length.
+
 - Linux: recording with VA-API (Intel, AMD) keeps the desktop's frames on the GPU, as on Windows:
   they are cropped to the region, converted, given the webcam on top and encoded there, and only
   the preview (small) and screenshots are brought into memory. Recording 1080p60 on Intel went
