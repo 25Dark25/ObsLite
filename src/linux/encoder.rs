@@ -42,6 +42,8 @@ impl AsRef<[u8]> for Shared {
 }
 /// Packet times are in 100 ns units.
 const NS_PER_TICK: u64 = 100;
+/// The smallest picture VA-API's compositor takes, in pixels a side.
+const MIN_COMPOSITED: u32 = 16;
 /// Whole frames kept a second when they come on the GPU, for screenshots and the preview: twice
 /// as many as it draws, so each finds a fresh one.
 const SOURCE_COPIES: u32 = 10;
@@ -273,7 +275,13 @@ impl Encoder {
         }
 
         let pipelines = || std::iter::once(&video).chain(audio.as_ref().map(|(p, _)| p));
-        if let Err(e) = pipelines().try_for_each(play) {
+        // The probe encoded a frame, but it also has to get through the crop, the webcam and the
+        // conversion: unless its surface comes before recording starts, frames are taken in memory.
+        let first = |()| match (&s.gpu, &frames) {
+            (Some(frame), Some(frames)) => first_surface(&video, frames, frame, &inner.ready),
+            _ => Ok(()),
+        };
+        if let Err(e) = pipelines().try_for_each(play).and_then(first) {
             for pipeline in pipelines() {
                 let _ = pipeline.set_state(gst::State::Null);
             }
@@ -324,13 +332,9 @@ impl Encoder {
     /// Converts a frame on the GPU (a DMA-BUF) into the newest picture, there. The PipeWire
     /// buffer is let go once converted, so the desktop can draw into it again.
     pub fn push_gpu_frame(&self, frame: &gst::Sample) {
-        let Some(frames) = &self.frames else { return };
-        let (Some(mut buffer), Some(caps)) = (frame.buffer_owned(), frame.caps_owned()) else { return };
-        // Timed by this pipeline as it comes (`do-timestamp`), for the webcam to be put on it.
-        let buffer_mut = buffer.make_mut();
-        buffer_mut.set_pts(gst::ClockTime::NONE);
-        buffer_mut.set_dts(gst::ClockTime::NONE);
-        let _ = frames.push_sample(&gst::Sample::builder().buffer(&buffer).caps(&caps).build());
+        if let Some(frames) = &self.frames {
+            push_retimed(frames, frame);
+        }
     }
 
     /// Where a `camera`-sized webcam picture goes on the recording, if there is an overlay.
@@ -351,13 +355,16 @@ impl Encoder {
                 camera.pad.set_property("height", h as i32);
                 *placed = Some(rect);
             }
+            // The compositor takes no picture under 16 pixels a side: a larger copy goes in its place.
+            let size = (rect.2.max(MIN_COMPOSITED), rect.3.max(MIN_COMPOSITED));
+            let pixels = if size == (rect.2, rect.3) { pixels.to_vec() } else { camera::resize(pixels, (rect.2, rect.3), size) };
             let caps = gst::Caps::builder("video/x-raw")
                 .field("format", "BGRA")
-                .field("width", rect.2 as i32)
-                .field("height", rect.3 as i32)
+                .field("width", size.0 as i32)
+                .field("height", size.1 as i32)
                 .field("framerate", gst::Fraction::new(0, 1))
                 .build();
-            let buffer = gst::Buffer::from_slice(pixels.to_vec());
+            let buffer = gst::Buffer::from_slice(pixels);
             let _ = camera.src.push_sample(&gst::Sample::builder().buffer(&buffer).caps(&caps).build());
             return;
         }
@@ -635,23 +642,68 @@ fn crop_on_the_way(pipeline: &gst::Pipeline, origin: (u32, u32), input: (u32, u3
             let s = caps.structure(0)?;
             Some((s.get::<i32>("width").ok()? as u32, s.get::<i32>("height").ok()? as u32))
         });
-        if let (Some(frame), Some(buffer)) = (frame, info.buffer_mut())
-            && let Some(rect) = crop_rect(frame, origin, input)
-        {
-            gst_video::VideoCropMeta::add(buffer.make_mut(), rect);
+        let (Some(frame), Some(buffer)) = (frame, info.buffer_mut()) else { return gst::PadProbeReturn::Ok };
+        match crop(frame, origin, input) {
+            Crop::Whole => {}
+            Crop::Part(rect) => {
+                gst_video::VideoCropMeta::add(buffer.make_mut(), rect);
+            }
+            // Nothing outside the region is recorded: the recording keeps its last picture.
+            Crop::Nothing => return gst::PadProbeReturn::Drop,
         }
         gst::PadProbeReturn::Ok
     });
     Ok(())
 }
 
-/// The part of a `frame`-sized frame recorded (`input` from `origin`, as much as the frame has of
-/// it), if not the whole frame: (x, y, width, height). A frame an odd number of pixels wide or
-/// high is cropped to the even size recorded, as in memory, not scaled to it.
-fn crop_rect(frame: (u32, u32), origin: (u32, u32), input: (u32, u32)) -> Option<(u32, u32, u32, u32)> {
+/// Hands `frame` to `frames`, timed by that pipeline as it comes (`do-timestamp`), for the webcam
+/// to be put on it.
+fn push_retimed(frames: &gst_app::AppSrc, frame: &gst::Sample) {
+    let (Some(mut buffer), Some(caps)) = (frame.buffer_owned(), frame.caps_owned()) else { return };
+    let buffer_mut = buffer.make_mut();
+    buffer_mut.set_pts(gst::ClockTime::NONE);
+    buffer_mut.set_dts(gst::ClockTime::NONE);
+    let _ = frames.push_sample(&gst::Sample::builder().buffer(&buffer).caps(&caps).build());
+}
+
+/// Hands `frame` to `frames` in `pipeline` and waits (at most 3 s) for its surface (`ready`), or
+/// the error that stopped it.
+fn first_surface(pipeline: &gst::Pipeline, frames: &gst_app::AppSrc, frame: &gst::Sample, ready: &AtomicBool) -> Result<(), String> {
+    push_retimed(frames, frame);
+    let start = std::time::Instant::now();
+    while !ready.load(Ordering::Acquire) {
+        if let Some(e) = posted_error(pipeline) {
+            return Err(e);
+        }
+        if start.elapsed() > Duration::from_secs(3) {
+            return Err(tr!("la GPU no convirtió la imagen", "the GPU did not convert the picture").to_owned());
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    Ok(())
+}
+
+/// What of a frame is recorded.
+#[derive(Debug, PartialEq)]
+enum Crop {
+    Whole,
+    /// (x, y, width, height).
+    Part((u32, u32, u32, u32)),
+    /// The frame has none of the recorded part (a window that shrank past the region).
+    Nothing,
+}
+
+/// The part of a `frame`-sized frame recorded: `input` from `origin`, as much as the frame has of
+/// it. A frame an odd number of pixels wide or high is cropped to the even size recorded, as in
+/// memory, not scaled to it.
+fn crop(frame: (u32, u32), origin: (u32, u32), input: (u32, u32)) -> Crop {
     let (x, y) = (origin.0.min(frame.0), origin.1.min(frame.1));
     let (w, h) = (input.0.min(frame.0 - x), input.1.min(frame.1 - y));
-    (w > 0 && h > 0 && (x, y, w, h) != (0, 0, frame.0, frame.1)).then_some((x, y, w, h))
+    match (x, y, w, h) {
+        (_, _, 0, _) | (_, _, _, 0) => Crop::Nothing,
+        rect if rect == (0, 0, frame.0, frame.1) => Crop::Whole,
+        rect => Crop::Part(rect),
+    }
 }
 
 /// `rect` on a `from`-sized picture, on the same picture scaled to `to`.
@@ -992,7 +1044,10 @@ mod tests {
         let (maker, frames) = gpu_frames(size, 30)?;
         assert_eq!(frames.len(), 30);
         let outputs = Arc::new(Mutex::new(Outputs::default()));
-        let path = std::env::temp_dir().join(format!("obs-lite-gpu-{}-{}-{}-{}.mp4", std::process::id(), size.0, origin.0, webcam.is_some()));
+        // One file per recording: tests run at once.
+        static RECORDINGS: AtomicU64 = AtomicU64::new(0);
+        let n = RECORDINGS.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("obs-lite-gpu-{}-{n}.mp4", std::process::id()));
         outputs.lock().unwrap().start_file(path.clone());
         let settings = EncoderSettings {
             origin,
@@ -1068,12 +1123,61 @@ mod tests {
     }
 
     #[test]
+    fn a_webcam_smaller_than_the_compositor_takes_is_still_recorded() {
+        gst::init().unwrap();
+        // A small webcam in a small region: 12×8 pixels.
+        let Some(picture) = record_on_gpu((320, 240), (0, 0), (320, 240), Some((16, 16, 12, 8))) else { return };
+        let [r, g, b] = pixel(&picture, 22, 20);
+        assert!(r > 150 && g < 80 && b < 80, "the webcam's red expected, got {:?}", [r, g, b]);
+    }
+
+    #[test]
+    fn a_first_frame_that_does_not_get_through_fails_at_once() {
+        gst::init().unwrap();
+        let frame = gst::Sample::builder()
+            .buffer(&gst::Buffer::from_slice(vec![0u8; 64 * 48 * 4]))
+            .caps(&gst::Caps::builder("video/x-raw").field("format", "BGRA").field("width", 64).field("height", 48).field("framerate", gst::Fraction::new(0, 1)).build())
+            .build();
+        let attempt = |rest: &str| {
+            let pipeline = launch(&format!("appsrc name=frames is-live=true format=time {rest}")).unwrap();
+            let frames = by_name::<gst_app::AppSrc>(&pipeline, "frames").unwrap();
+            let ready = Arc::new(AtomicBool::new(false));
+            if let Ok(sink) = by_name::<gst_app::AppSink>(&pipeline, "surfaces") {
+                let ready = ready.clone();
+                sink.set_callbacks(
+                    gst_app::AppSinkCallbacks::builder()
+                        .new_sample(move |sink| {
+                            let _ = sink.pull_sample();
+                            ready.store(true, Ordering::Release);
+                            Ok(gst::FlowSuccess::Ok)
+                        })
+                        .build(),
+                );
+            }
+            play(&pipeline).unwrap();
+            let start = std::time::Instant::now();
+            let result = first_surface(&pipeline, &frames, &frame, &ready);
+            let _ = pipeline.set_state(gst::State::Null);
+            (result, start.elapsed())
+        };
+        let (result, _) = attempt("! appsink name=surfaces sync=false async=false");
+        assert_eq!(result, Ok(()));
+        // A conversion that refuses the frame, and one that never gives anything back.
+        let (result, took) = attempt("! capsfilter caps=video/x-raw,format=RGB ! appsink name=surfaces sync=false async=false");
+        assert!(result.is_err() && took < Duration::from_secs(1), "{result:?} after {took:?}");
+        let (result, took) = attempt("! fakesink");
+        assert!(result.is_err() && took < Duration::from_secs(4), "{result:?} after {took:?}");
+    }
+
+    #[test]
     fn the_recorded_part_is_cropped_from_what_the_frame_has() {
-        assert_eq!(crop_rect((1920, 1080), (0, 0), (1920, 1080)), None, "the whole frame");
-        assert_eq!(crop_rect((1921, 1081), (0, 0), (1920, 1080)), Some((0, 0, 1920, 1080)));
-        assert_eq!(crop_rect((1920, 1080), (100, 50), (640, 360)), Some((100, 50, 640, 360)));
-        // A window that shrank below the region.
-        assert_eq!(crop_rect((800, 600), (500, 400), (640, 360)), Some((500, 400, 300, 200)));
+        assert_eq!(crop((1920, 1080), (0, 0), (1920, 1080)), Crop::Whole);
+        assert_eq!(crop((1921, 1081), (0, 0), (1920, 1080)), Crop::Part((0, 0, 1920, 1080)));
+        assert_eq!(crop((1920, 1080), (100, 50), (640, 360)), Crop::Part((100, 50, 640, 360)));
+        // A window that shrank into the region, and one that shrank past it: nothing outside the
+        // region is recorded.
+        assert_eq!(crop((800, 600), (500, 400), (640, 360)), Crop::Part((500, 400, 300, 200)));
+        assert_eq!(crop((800, 600), (1000, 0), (640, 360)), Crop::Nothing);
     }
 
     #[test]
