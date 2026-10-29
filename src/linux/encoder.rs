@@ -5,10 +5,10 @@
 //! once into a picture in memory; like on Windows, a producer thread hands the newest picture
 //! (with the webcam on top) to the encoder every 1/fps of recording time. The best available H.264 encoder is used:
 //! VA-API (Intel/AMD), NVENC, then x264 or OpenH264 in software. Frames on the GPU (DMA-BUFs) are
-//! instead converted there once each, by VA-API, and the newest surface is what is handed over.
+//! instead cropped and converted there once each, by VA-API, with the webcam put on top there, and
+//! the newest surface is what is handed over.
 
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -42,8 +42,13 @@ impl AsRef<[u8]> for Shared {
 }
 /// Packet times are in 100 ns units.
 const NS_PER_TICK: u64 = 100;
+/// Whole frames kept a second when they come on the GPU, for screenshots and the preview: twice
+/// as many as it draws, so each finds a fresh one.
+const SOURCE_COPIES: u32 = 10;
 
 pub struct EncoderSettings {
+    /// Top-left corner of the recorded part of each frame (a region), and its size.
+    pub origin: (u32, u32),
     pub input: (u32, u32),
     pub output: (u32, u32),
     pub fps: u32,
@@ -77,6 +82,8 @@ struct Inner {
     /// them; the newest is what the producer hands over, without copying it.
     pictures: Mutex<Vec<Arc<Vec<u8>>>>,
     latest: Mutex<Option<Picture>>,
+    /// The newest whole frame, a VA-API surface, if frames come on the GPU (`SOURCE_COPIES`).
+    source: Mutex<Option<gst::Sample>>,
     /// The webcam picture, already scaled, and where it goes.
     overlay: Mutex<Option<(Vec<u8>, PixelRect)>>,
     red_first: bool,
@@ -86,6 +93,7 @@ struct Inner {
     lagged: AtomicU64,
     stop: AtomicBool,
     fps: u64,
+    origin: (u32, u32),
     input: (u32, u32),
     output_size: (u32, u32),
     video_src: gst_app::AppSrc,
@@ -96,12 +104,22 @@ struct Inner {
     output: Arc<Mutex<Outputs>>,
 }
 
+/// The webcam on the GPU: its pictures' source, the compositor's pad they reach, and where on the
+/// recording they were last put.
+struct Camera {
+    src: gst_app::AppSrc,
+    pad: gst::Pad,
+    placed: Mutex<Option<PixelRect>>,
+}
+
 pub struct Encoder {
     inner: Arc<Inner>,
     producer: Option<JoinHandle<()>>,
     video: gst::Pipeline,
-    /// Where frames on the GPU go to be converted, if they come so.
+    /// Where frames on the GPU go to be converted, if they come so, and where the webcam's
+    /// pictures go then, if there is a webcam.
     frames: Option<gst_app::AppSrc>,
+    camera: Option<Camera>,
     audio: Option<(gst::Pipeline, gst_app::AppSrc)>,
     audio_frames: Mutex<u64>,
     overlay: Option<(Corner, CameraSize)>,
@@ -120,18 +138,9 @@ impl Encoder {
                 // VA-API converts the frames, so only its encoders can take them as they are.
                 let va = h264_candidates(s.bitrate, fps).into_iter().filter(|(factory, ..)| factory.starts_with("va"));
                 let (name, _, h264) = h264_encoder(va, |_, fragment| encodes_on_gpu(frame, fragment, s.output))?;
-                // Each frame is converted once, as it comes (`frames` to `surfaces`); the newest surface
-                // is what the producer hands the encoder (`src`).
-                let surfaces = surface_caps(s.output);
-                let video = launch(&format!(
-                    "appsrc name=frames is-live=true format=time block=false max-bytes=0 max-buffers=2 leaky-type=downstream \
-                     ! vapostproc add-borders=true ! {surfaces} ! appsink name=surfaces max-buffers=1 drop=true sync=false async=false \
-                     appsrc name=src is-live=true format=time block=false \
-                       caps=\"{surfaces},framerate={fps}/1\" \
-                     ! {h264} ! h264parse ! video/x-h264,stream-format=avc,alignment=au \
-                     ! appsink name=sink sync=false async=false"
-                ))?;
+                let video = launch(&gpu_pipeline(&s, fps, &h264))?;
                 super::gpu::share_display(&video);
+                crop_on_the_way(&video, s.origin, s.input)?;
                 (format!("{name}, frames on the GPU"), video)
             }
             None => {
@@ -161,6 +170,13 @@ impl Encoder {
         };
         let video_src = by_name::<gst_app::AppSrc>(&video, "src")?;
         let frames = s.gpu.as_ref().map(|_| by_name::<gst_app::AppSrc>(&video, "frames")).transpose()?;
+        let camera = match (&frames, s.overlay) {
+            (Some(_), Some(_)) => {
+                let pad = by_name::<gst::Element>(&video, "mix")?.static_pad("sink_1").ok_or("no webcam pad")?;
+                Some(Camera { src: by_name::<gst_app::AppSrc>(&video, "camera")?, pad, placed: Mutex::new(None) })
+            }
+            _ => None,
+        };
         let h264_element = by_name::<gst::Element>(&video, "enc")?;
 
         let audio = if s.audio {
@@ -181,6 +197,7 @@ impl Encoder {
         let inner = Arc::new(Inner {
             pictures: Mutex::new(Vec::new()),
             latest: Mutex::new(None),
+            source: Mutex::new(None),
             overlay: Mutex::new(None),
             red_first: s.red_first,
             ready: AtomicBool::new(false),
@@ -189,6 +206,7 @@ impl Encoder {
             lagged: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             fps: fps as u64,
+            origin: s.origin,
             input: s.input,
             output_size: s.output,
             video_src,
@@ -221,6 +239,18 @@ impl Encoder {
                         let (Some(inner), Some(surface)) = (weak.upgrade(), sample.buffer_owned()) else { return Ok(gst::FlowSuccess::Ok) };
                         *inner.latest.lock().unwrap() = Some(Picture::Surface(surface));
                         inner.ready.store(true, Ordering::Release);
+                        Ok(gst::FlowSuccess::Ok)
+                    })
+                    .build(),
+            );
+            let weak = Arc::downgrade(&inner);
+            by_name::<gst_app::AppSink>(&video, "sources")?.set_callbacks(
+                gst_app::AppSinkCallbacks::builder()
+                    .new_sample(move |sink| {
+                        let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                        if let Some(inner) = weak.upgrade() {
+                            *inner.source.lock().unwrap() = Some(sample);
+                        }
                         Ok(gst::FlowSuccess::Ok)
                     })
                     .build(),
@@ -260,7 +290,7 @@ impl Encoder {
                 move || produce_frames(&inner)
             })
             .map_err(|e| e.to_string())?;
-        Ok(Self { inner, producer: Some(producer), video, frames, audio, audio_frames: Mutex::new(0), overlay: s.overlay, name })
+        Ok(Self { inner, producer: Some(producer), video, frames, camera, audio, audio_frames: Mutex::new(0), overlay: s.overlay, name })
     }
 
     pub fn name(&self) -> &str {
@@ -272,37 +302,34 @@ impl Encoder {
         self.frames.is_some()
     }
 
-    /// The newest picture, if it is a VA-API surface (frames on the GPU).
-    pub fn newest_surface(&self) -> Option<gst::Sample> {
-        let Some(Picture::Surface(surface)) = self.inner.latest.lock().unwrap().clone() else { return None };
-        let caps = gst::Caps::from_str(&surface_caps(self.inner.output_size)).ok()?;
-        Some(gst::Sample::builder().buffer(&surface).caps(&caps).build())
+    /// The newest whole frame, a VA-API surface, if frames come on the GPU: for the preview and
+    /// screenshots, which must not read the desktop's frame while it is converted (two
+    /// conversions of one frame at once crashed Intel's driver).
+    pub fn newest_source(&self) -> Option<gst::Sample> {
+        self.inner.source.lock().unwrap().clone()
     }
 
-    /// Draws the part of a captured frame starting at `origin` onto a picture nothing reads,
-    /// which becomes the newest. With none free (the encoder far behind) the frame is skipped.
-    pub fn push_frame(&self, frame: &FrameRef, origin: (u32, u32)) {
+    /// Draws the recorded part of a captured frame onto a picture nothing reads, which becomes
+    /// the newest. With none free (the encoder far behind) the frame is skipped.
+    pub fn push_frame(&self, frame: &FrameRef) {
         let size = (self.inner.input.0 as usize * self.inner.input.1 as usize * 4, self.inner.input);
         let mut pictures = self.inner.pictures.lock().unwrap();
         let Some(free) = free_picture(&mut pictures, size.0) else { return };
         let picture = Arc::get_mut(&mut pictures[free]).expect("nothing else holds a free picture");
-        copy_region(frame, origin, picture, size.1);
+        copy_region(frame, self.inner.origin, picture, size.1);
         *self.inner.latest.lock().unwrap() = Some(Picture::Memory(pictures[free].clone()));
         self.inner.ready.store(true, Ordering::Release);
     }
 
-    /// Converts a `size` frame on the GPU (a DMA-BUF) into the newest picture, there. The PipeWire
+    /// Converts a frame on the GPU (a DMA-BUF) into the newest picture, there. The PipeWire
     /// buffer is let go once converted, so the desktop can draw into it again.
-    pub fn push_gpu_frame(&self, frame: &gst::Sample, size: (u32, u32)) {
+    pub fn push_gpu_frame(&self, frame: &gst::Sample) {
         let Some(frames) = &self.frames else { return };
-        let (w, h) = (size.0 & !1, size.1 & !1);
-        if (w, h) == size {
-            let _ = frames.push_sample(frame);
-            return;
-        }
-        // An odd width or height is cropped to the even one recorded, as in memory, not scaled to it.
         let (Some(mut buffer), Some(caps)) = (frame.buffer_owned(), frame.caps_owned()) else { return };
-        gst_video::VideoCropMeta::add(buffer.make_mut(), (0, 0, w, h));
+        // Timed by this pipeline as it comes (`do-timestamp`), for the webcam to be put on it.
+        let buffer_mut = buffer.make_mut();
+        buffer_mut.set_pts(gst::ClockTime::NONE);
+        buffer_mut.set_dts(gst::ClockTime::NONE);
         let _ = frames.push_sample(&gst::Sample::builder().buffer(&buffer).caps(&caps).build());
     }
 
@@ -313,6 +340,27 @@ impl Encoder {
 
     /// Takes a webcam picture already scaled to `rect` (see `overlay_rect`).
     pub fn push_overlay(&self, rect: PixelRect, pixels: &[u8]) {
+        if let Some(camera) = &self.camera {
+            // The compositor works at the recording's size, and scales the picture to its place there.
+            let mut placed = camera.placed.lock().unwrap();
+            if *placed != Some(rect) {
+                let (x, y, w, h) = scale_rect(rect, self.inner.input, self.inner.output_size);
+                camera.pad.set_property("xpos", x as i32);
+                camera.pad.set_property("ypos", y as i32);
+                camera.pad.set_property("width", w as i32);
+                camera.pad.set_property("height", h as i32);
+                *placed = Some(rect);
+            }
+            let caps = gst::Caps::builder("video/x-raw")
+                .field("format", "BGRA")
+                .field("width", rect.2 as i32)
+                .field("height", rect.3 as i32)
+                .field("framerate", gst::Fraction::new(0, 1))
+                .build();
+            let buffer = gst::Buffer::from_slice(pixels.to_vec());
+            let _ = camera.src.push_sample(&gst::Sample::builder().buffer(&buffer).caps(&caps).build());
+            return;
+        }
         // Webcam pictures are BGRA; the canvas may hold red first.
         let mut pixels = pixels.to_vec();
         if self.inner.red_first {
@@ -356,8 +404,9 @@ impl Encoder {
         self.inner.stop.store(true, Ordering::Release);
         let _ = producer.join();
         let _ = self.inner.video_src.end_of_stream();
-        if let Some(frames) = &self.frames {
-            let _ = frames.end_of_stream();
+        // The compositor ends once both its inputs have.
+        for src in self.frames.iter().chain(self.camera.as_ref().map(|c| &c.src)) {
+            let _ = src.end_of_stream();
         }
         if let Some((_, src)) = &self.audio {
             let _ = src.end_of_stream();
@@ -547,6 +596,68 @@ fn h264_encoder(
 fn raw_caps(format: &str, (width, height): (u32, u32)) -> String {
     let colorimetry = if format.starts_with("BGR") || format.starts_with("RGB") { "" } else { ",colorimetry=bt709" };
     format!("video/x-raw,format={format},width={width},height={height}{colorimetry}")
+}
+
+/// The pipeline for frames on the GPU. Each is cropped and scaled once, as it comes (`frames`, at
+/// `crop`, to `surfaces`), with the webcam put on top (from `camera`) if there is one; a few a
+/// second are also kept whole (`sources`). The newest surface is what the producer hands the
+/// encoder (`src`). Both branches run in the thread frames come in, one after the other: VA-API
+/// reading one frame twice at once crashed Intel's driver.
+fn gpu_pipeline(s: &EncoderSettings, fps: u32, h264: &str) -> String {
+    let surfaces = surface_caps(s.output);
+    let src = "is-live=true do-timestamp=true format=time block=false max-bytes=0 max-buffers=2 leaky-type=downstream";
+    let sink = "max-buffers=1 drop=true sync=false async=false";
+    // The compositor makes pictures at the frame rate (its inputs are live), the webcam's newest on
+    // the screen's newest.
+    let recorded = match s.overlay {
+        Some(_) => format!(
+            "! {surfaces} ! mix.sink_0 appsrc name=camera {src} ! mix.sink_1 \
+             vacompositor name=mix ! {surfaces},framerate={fps}/1"
+        ),
+        None => format!("! {surfaces}"),
+    };
+    format!(
+        "appsrc name=frames {src} ! tee name=t \
+         t. ! vapostproc name=crop add-borders=true {recorded} ! appsink name=surfaces {sink} \
+         t. ! videorate drop-only=true max-rate={SOURCE_COPIES} ! vapostproc \
+            ! video/x-raw(memory:VAMemory),format=BGRA ! appsink name=sources {sink} \
+         appsrc name=src is-live=true format=time block=false caps=\"{surfaces},framerate={fps}/1\" \
+         ! {h264} ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! appsink name=sink {sink}"
+    )
+}
+
+/// Crops each frame reaching `crop` in `pipeline` to the recorded part (`input` from `origin`),
+/// for that branch only: the whole frames are kept too.
+fn crop_on_the_way(pipeline: &gst::Pipeline, origin: (u32, u32), input: (u32, u32)) -> Result<(), String> {
+    let pad = by_name::<gst::Element>(pipeline, "crop")?.static_pad("sink").ok_or("no crop pad")?;
+    pad.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
+        let frame = pad.current_caps().and_then(|caps| {
+            let s = caps.structure(0)?;
+            Some((s.get::<i32>("width").ok()? as u32, s.get::<i32>("height").ok()? as u32))
+        });
+        if let (Some(frame), Some(buffer)) = (frame, info.buffer_mut())
+            && let Some(rect) = crop_rect(frame, origin, input)
+        {
+            gst_video::VideoCropMeta::add(buffer.make_mut(), rect);
+        }
+        gst::PadProbeReturn::Ok
+    });
+    Ok(())
+}
+
+/// The part of a `frame`-sized frame recorded (`input` from `origin`, as much as the frame has of
+/// it), if not the whole frame: (x, y, width, height). A frame an odd number of pixels wide or
+/// high is cropped to the even size recorded, as in memory, not scaled to it.
+fn crop_rect(frame: (u32, u32), origin: (u32, u32), input: (u32, u32)) -> Option<(u32, u32, u32, u32)> {
+    let (x, y) = (origin.0.min(frame.0), origin.1.min(frame.1));
+    let (w, h) = (input.0.min(frame.0 - x), input.1.min(frame.1 - y));
+    (w > 0 && h > 0 && (x, y, w, h) != (0, 0, frame.0, frame.1)).then_some((x, y, w, h))
+}
+
+/// `rect` on a `from`-sized picture, on the same picture scaled to `to`.
+fn scale_rect((x, y, w, h): PixelRect, from: (u32, u32), to: (u32, u32)) -> PixelRect {
+    let scale = |v: u32, to: u32, from: u32| (v as u64 * to as u64 / from.max(1) as u64) as u32;
+    (scale(x, to.0, from.0), scale(y, to.1, from.1), scale(w, to.0, from.0).max(1), scale(h, to.1, from.1).max(1))
 }
 
 /// VA-API surfaces of `size`, as the GPU path converts frames to.
@@ -852,15 +963,16 @@ mod tests {
         assert_eq!(factory, "identity");
     }
 
-    /// `count` BGRA frames of `size` on the GPU, made by VA-API, and the pipeline that made them,
-    /// to stop once they are used (GStreamer 1.24 drops its surfaces when it stops); `None` where
-    /// VA-API cannot record them (CI). They are VA-API's own memory rather than DMA-BUFs, which it
-    /// gives only to elements taking their video meta (appsink does not), but are converted the same way.
+    /// `count` BGRA frames of `size` on the GPU with SMPTE colour bars, made by VA-API, and the
+    /// pipeline that made them, to stop once they are used (GStreamer 1.24 drops its surfaces when
+    /// it stops); `None` where VA-API cannot record them (CI). They are VA-API's own memory rather
+    /// than DMA-BUFs, which it gives only to elements taking their video meta (appsink does not),
+    /// but are converted the same way.
     fn gpu_frames(size: (u32, u32), count: usize) -> Option<(gst::Pipeline, Vec<gst::Sample>)> {
         super::super::gpu::formats()?;
         let pipeline = launch(&format!(
-            "videotestsrc num-buffers={count} ! video/x-raw,format=BGRA,width={},height={},framerate=30/1 ! vapostproc \
-             ! video/x-raw(memory:VAMemory),format=BGRA ! appsink name=sink sync=false",
+            "videotestsrc num-buffers={count} pattern=smpte ! video/x-raw,format=BGRA,width={},height={},framerate=30/1 \
+             ! vapostproc ! video/x-raw(memory:VAMemory),format=BGRA ! appsink name=sink sync=false",
             size.0, size.1,
         ))
         .unwrap();
@@ -873,39 +985,101 @@ mod tests {
         Some((pipeline, frames))
     }
 
-    #[test]
-    fn frames_on_the_gpu_are_recorded() {
-        gst::init().unwrap();
-        // An odd size is cropped to the even one recorded.
-        for (size, input) in [((320, 240), (320, 240)), ((321, 241), (320, 240))] {
-            let Some((maker, frames)) = gpu_frames(size, 30) else { return };
-            assert_eq!(frames.len(), 30);
-            let first = &frames[0];
-            let outputs = Arc::new(Mutex::new(Outputs::default()));
-            let path = std::env::temp_dir().join(format!("obs-lite-gpu-{}-{}.mp4", std::process::id(), size.0));
-            outputs.lock().unwrap().start_file(path.clone());
-            let settings = EncoderSettings {
-                input,
-                output: input,
-                fps: 30,
-                bitrate: 2_000_000,
-                audio: false,
-                overlay: None,
-                red_first: false,
-                gpu: Some(first.clone()),
-            };
-            let encoder = Encoder::new(settings, Arc::new(Clock::new()), Arc::default(), outputs).unwrap();
-            assert!(encoder.on_gpu());
-            for frame in &frames {
-                encoder.push_gpu_frame(frame, size);
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            let finished = encoder.finish().expect("a recording").finish();
-            drop(frames);
-            let _ = maker.set_state(gst::State::Null);
-            let _ = std::fs::remove_file(&path);
-            finished.unwrap_or_else(|e| panic!("{size:?}: {e}"));
+    /// Records 30 colour-bar frames of `size` on the GPU, the part `input` from `origin`, with a
+    /// red webcam picture at `webcam` if given; the last picture of the file as RGBA, `None`
+    /// where VA-API cannot record (CI).
+    fn record_on_gpu(size: (u32, u32), origin: (u32, u32), input: (u32, u32), webcam: Option<PixelRect>) -> Option<(u32, u32, Vec<u8>)> {
+        let (maker, frames) = gpu_frames(size, 30)?;
+        assert_eq!(frames.len(), 30);
+        let outputs = Arc::new(Mutex::new(Outputs::default()));
+        let path = std::env::temp_dir().join(format!("obs-lite-gpu-{}-{}-{}-{}.mp4", std::process::id(), size.0, origin.0, webcam.is_some()));
+        outputs.lock().unwrap().start_file(path.clone());
+        let settings = EncoderSettings {
+            origin,
+            input,
+            output: input,
+            fps: 30,
+            bitrate: 2_000_000,
+            audio: false,
+            overlay: webcam.map(|_| (Corner::TopLeft, CameraSize::Small)),
+            red_first: false,
+            gpu: Some(frames[0].clone()),
+        };
+        let encoder = Encoder::new(settings, Arc::new(Clock::new()), Arc::default(), outputs).unwrap();
+        assert!(encoder.on_gpu());
+        // One picture, before the frames: it stays until the next, as a webcam's does.
+        if let Some(rect) = webcam {
+            let red: Vec<u8> = [0u8, 0, 255, 255].repeat((rect.2 * rect.3) as usize);
+            encoder.push_overlay(rect, &red);
         }
+        for frame in &frames {
+            encoder.push_gpu_frame(frame);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let finishing = std::time::Instant::now();
+        let finished = encoder.finish().expect("a recording").finish();
+        assert!(finishing.elapsed() < Duration::from_secs(5), "every input of the pipeline ends");
+        drop(frames);
+        let _ = maker.set_state(gst::State::Null);
+        finished.unwrap_or_else(|e| panic!("{size:?} {origin:?}: {e}"));
+        let decoder = launch(&format!(
+            "filesrc location={} ! decodebin ! videoconvert ! video/x-raw,format=RGBA ! appsink name=sink sync=false",
+            path.display()
+        ))
+        .unwrap();
+        let sink = by_name::<gst_app::AppSink>(&decoder, "sink").unwrap();
+        play(&decoder).unwrap();
+        let last = std::iter::from_fn(|| sink.pull_sample().ok()).last();
+        let _ = decoder.set_state(gst::State::Null);
+        let _ = std::fs::remove_file(&path);
+        super::super::gpu::rgba(&last.expect("a decoded picture"))
+    }
+
+    /// The colour at (x, y) of an RGBA picture `width` wide.
+    fn pixel((width, _, rgba): &(u32, u32, Vec<u8>), x: u32, y: u32) -> [u8; 3] {
+        let i = ((y * width + x) * 4) as usize;
+        [rgba[i], rgba[i + 1], rgba[i + 2]]
+    }
+
+    #[test]
+    fn frames_on_the_gpu_are_recorded_and_cropped() {
+        gst::init().unwrap();
+        let Some(whole) = record_on_gpu((320, 240), (0, 0), (320, 240), None) else { return };
+        assert_eq!((whole.0, whole.1), (320, 240));
+        // An odd size is cropped to the even one recorded.
+        let odd = record_on_gpu((321, 241), (0, 0), (320, 240), None).unwrap();
+        assert_eq!((odd.0, odd.1), (320, 240));
+        // A region: x 96 to 128 lies within the third bar, cyan.
+        let region = record_on_gpu((320, 240), (96, 0), (32, 64), None).unwrap();
+        assert_eq!((region.0, region.1), (32, 64));
+        let [r, g, b] = pixel(&region, 16, 32);
+        assert!(r < 60 && g > 130 && b > 130, "cyan expected, got {:?}", [r, g, b]);
+    }
+
+    #[test]
+    fn the_webcam_is_put_on_frames_on_the_gpu() {
+        gst::init().unwrap();
+        let Some(picture) = record_on_gpu((320, 240), (0, 0), (320, 240), Some((16, 16, 64, 48))) else { return };
+        let [r, g, b] = pixel(&picture, 48, 40);
+        assert!(r > 150 && g < 80 && b < 80, "the webcam's red expected, got {:?}", [r, g, b]);
+        // Beside it the first bar, grey, shows.
+        let [r, g, b] = pixel(&picture, 30, 100);
+        assert!(r > 150 && g > 150 && b > 150, "grey expected, got {:?}", [r, g, b]);
+    }
+
+    #[test]
+    fn the_recorded_part_is_cropped_from_what_the_frame_has() {
+        assert_eq!(crop_rect((1920, 1080), (0, 0), (1920, 1080)), None, "the whole frame");
+        assert_eq!(crop_rect((1921, 1081), (0, 0), (1920, 1080)), Some((0, 0, 1920, 1080)));
+        assert_eq!(crop_rect((1920, 1080), (100, 50), (640, 360)), Some((100, 50, 640, 360)));
+        // A window that shrank below the region.
+        assert_eq!(crop_rect((800, 600), (500, 400), (640, 360)), Some((500, 400, 300, 200)));
+    }
+
+    #[test]
+    fn the_webcam_is_placed_at_the_recordings_size() {
+        assert_eq!(scale_rect((1600, 900, 320, 180), (1920, 1080), (1280, 720)), (1066, 600, 213, 120));
+        assert_eq!(scale_rect((10, 10, 20, 20), (100, 100), (100, 100)), (10, 10, 20, 20));
     }
 
     #[test]

@@ -92,8 +92,6 @@ struct Handler {
     fps: u32,
     preview_interval: Option<Duration>,
     last_preview: Option<Instant>,
-    /// Top-left corner of the recorded region, fixed when the encoder is created.
-    origin: (u32, u32),
     /// Why handling a frame failed (the encoder could not be made, say), which ends the stream.
     failed: Option<String>,
     /// The GPU could not encode the frames it was sent, so they are taken in memory.
@@ -110,7 +108,6 @@ impl Handler {
             fps,
             preview_interval: (preview_fps > 0).then(|| Duration::from_secs_f64(1.0 / preview_fps as f64)),
             last_preview: None,
-            origin: (0, 0),
             failed: None,
             gpu_failed: false,
             scaler: None,
@@ -128,14 +125,12 @@ impl Handler {
                 *encoder = Some(self.new_encoder(sample, size)?);
             }
             let Some(enc) = encoder.as_ref() else { return Ok(()) };
-            enc.push_gpu_frame(sample, size);
-            // The preview is made from the recording's surface: VA-API reading the desktop's frame
-            // twice at once (the preview's and the recording's conversions) crashed Intel's driver.
+            enc.push_gpu_frame(sample);
             if let Some(to) = self.preview_due(size)
                 && let Some(scaler) = &mut self.scaler
-                && let Some(surface) = enc.newest_surface()
+                && let Some(source) = enc.newest_source()
             {
-                scaler.push(&surface, to);
+                scaler.push(&source, to);
             }
             return Ok(());
         }
@@ -148,7 +143,7 @@ impl Handler {
                 *encoder = Some(self.new_encoder(sample, size)?);
             }
             if let Some(enc) = encoder.as_ref() {
-                enc.push_frame(&frame, self.origin);
+                enc.push_frame(&frame);
             }
         }
 
@@ -167,15 +162,13 @@ impl Handler {
     /// The encoder for frames like `sample` (`size`), which starts the recording's clock.
     fn new_encoder(&mut self, sample: &gst::Sample, size: Size) -> Result<Encoder, String> {
         let rec = self.record.as_ref().ok_or("not recording")?;
-        let input = match rec.region.and_then(|r| r.fit(size)) {
-            Some(r) => {
-                self.origin = (r.x, r.y);
-                (r.width, r.height)
-            }
-            None => (size.0 & !1, size.1 & !1),
+        let (origin, input) = match rec.region.and_then(|r| r.fit(size)) {
+            Some(r) => ((r.x, r.y), (r.width, r.height)),
+            None => ((0, 0), (size.0 & !1, size.1 & !1)),
         };
         let output = rec.resolution.apply(input);
         let settings = EncoderSettings {
+            origin,
             input,
             output,
             fps: self.fps,
@@ -203,11 +196,10 @@ impl Handler {
         Some((pw as u32, (h * pw / w).max(1) as u32))
     }
 
-    /// Whether frames can come as DMA-BUFs, and in which formats: when recording with no region
-    /// or webcam (drawn in memory), and on a GPU that has encoded such frames, if it has had any.
+    /// Whether frames can come as DMA-BUFs, and in which formats: when recording, on a GPU that
+    /// has encoded such frames, if it has had any.
     fn gpu_formats(&self) -> Option<String> {
-        let rec = self.record.as_ref()?;
-        if self.gpu_failed || rec.region.is_some() || rec.overlay.is_some() {
+        if self.record.is_none() || self.gpu_failed {
             return None;
         }
         if self.shared.encoder.lock().unwrap().as_ref().is_some_and(|e| !e.on_gpu()) {
@@ -291,10 +283,9 @@ impl Session {
         let sample = last.as_ref().ok_or_else(none)?;
         let (w, h) = frame_size(sample).ok_or_else(none)?;
         if gpu::on_gpu(sample) {
-            // From the recording's surface, as the preview (`Handler::on_frame`).
             drop(last);
-            let surface = self.shared.encoder.lock().unwrap().as_ref().and_then(Encoder::newest_surface).ok_or_else(none)?;
-            return gpu::download(&surface);
+            let source = self.shared.encoder.lock().unwrap().as_ref().and_then(Encoder::newest_source).ok_or_else(none)?;
+            return gpu::download(&source);
         }
         let map = sample.buffer().ok_or_else(none)?.map_readable().map_err(|e| e.to_string())?;
         let mut rgba = bgra_to_rgba(map.as_slice(), w as usize, h as usize, map.size() / h.max(1) as usize);
@@ -479,16 +470,17 @@ mod tests {
     use crate::config::{Quality, Region, Resolution};
 
     #[test]
-    fn only_a_plain_recording_takes_frames_on_the_gpu() {
+    fn a_recording_takes_frames_on_the_gpu() {
         gst::init().unwrap();
         let recording = |region, overlay| RecordConfig { quality: Quality::Medium, resolution: Resolution::Native, audio: false, region, overlay };
         let handler = |record| Handler::new(Arc::new(Shared::new(None)), record, 30, 5);
-        // Where VA-API can record them (not in CI), as many formats as it reads.
-        assert_eq!(handler(Some(recording(None, None))).gpu_formats(), gpu::formats());
-        // The region and the webcam are drawn in memory.
+        // Where VA-API can record them (not in CI), in as many formats as it reads, with a region
+        // and the webcam too.
         let region = Region { x: 0, y: 0, width: 640, height: 360 };
-        assert_eq!(handler(Some(recording(Some(region), None))).gpu_formats(), None);
-        assert_eq!(handler(Some(recording(None, Some((Corner::BottomRight, CameraSize::Small))))).gpu_formats(), None);
+        let webcam = Some((Corner::BottomRight, CameraSize::Small));
+        for (region, overlay) in [(None, None), (Some(region), None), (None, webcam), (Some(region), webcam)] {
+            assert_eq!(handler(Some(recording(region, overlay))).gpu_formats(), gpu::formats());
+        }
         // The preview alone is small, and a GPU that failed is not asked again.
         assert_eq!(handler(None).gpu_formats(), None);
         let mut failed = handler(Some(recording(None, None)));
