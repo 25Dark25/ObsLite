@@ -26,6 +26,9 @@ jobs:
           rustc -Vv
       - name: Build
         run: cargo build --locked --release
+      - name: No Visual C++ runtime needed
+        shell: pwsh
+        run: installer/check-runtime.ps1
       # Keep version and hash in sync with ci.yml.
       - name: Install cargo-about
         shell: bash
