@@ -51,7 +51,9 @@ cargo test --locked
 | `linux::encoder::aac_codec_data_describes_lc_48k_stereo` | Linux only: the AAC stream description given to the muxer before any audio is AAC-LC, 48 kHz, stereo. |
 | `linux::encoder::frames_on_the_gpu_are_recorded_and_cropped` | Linux only, skipped without VA-API (CI): colour-bar frames on the GPU are converted and encoded there into a file that finishes: 320×240; an odd 321×241, cropped to 320×240; and a 32×64 region, which decodes to the cyan bar it lies on. |
 | `linux::encoder::the_webcam_is_put_on_frames_on_the_gpu` | Linux only, skipped without VA-API: a red webcam picture given once, before the frames, is in its place on the last decoded picture, and the bars show beside it; stopping takes under 5 s (10 s before the fix: the webcam's input never ended). |
-| `linux::encoder::the_recorded_part_is_cropped_from_what_the_frame_has` | Linux only: the crop for frames on the GPU: none for a whole frame, the even size for an odd one, the region, and what is left of it when a window shrank below it. |
+| `linux::encoder::the_recorded_part_is_cropped_from_what_the_frame_has` | Linux only: the crop for frames on the GPU: none for a whole frame, the even size for an odd one, the region, what is left of it when a window shrank into it, and nothing when it shrank past it (before the fix, the whole window was recorded). |
+| `linux::encoder::a_webcam_smaller_than_the_compositor_takes_is_still_recorded` | Linux only, skipped without VA-API: a 12×8 webcam picture (a small webcam in a small region) is recorded in its place; before the fix, VA-API's compositor refused it and the recording stopped. |
+| `linux::encoder::a_first_frame_that_does_not_get_through_fails_at_once` | Linux only: starting a recording on the GPU waits for the first frame's surface, and fails at once when the conversion refuses the frame, or after 3 s when nothing comes back, so frames are taken in memory instead of recording without video. |
 | `linux::encoder::the_webcam_is_placed_at_the_recordings_size` | Linux only: the webcam's place, worked out at the captured size, is scaled to the recording's. |
 | `linux::capture::a_recording_takes_frames_on_the_gpu` | Linux only: frames are asked for on the GPU when recording, with or without a region and the webcam, and not for the preview alone or again after the GPU failed to encode them. |
 | `linux::gpu::the_desktops_formats_are_offered_in_va_apis_layout_and_linear` | Linux only: the desktop is asked for its four formats in the layout VA-API reads, each also linear (COSMIC's portal fails when offered one layout), and nothing when VA-API reads none of them. |
@@ -500,3 +502,18 @@ Not verified: a real webcam (only the stand-in picture of the self-test; the app
 the same scaled pictures as before); the interface; AMD; other desktops. With a region, memory is
 higher on the GPU (185 against 152 MB): whole frames are kept there for the preview, where in
 memory only the region is.
+
+2026-10-29, fixes from a review of the GPU path by five agents (four reviewers, one trying to refute
+each finding; 7 findings, 3 confirmed), same laptop:
+
+| Step | Result |
+|---|---|
+| Confirmed: an error in the crop, the webcam or the conversion of the first frame went unnoticed | The recording ran without video until stopped, with no fallback. Now the first surface is waited for (at most 3 s) before recording starts, and frames are taken in memory if it does not come |
+| Confirmed: a window that shrank past the region recorded the whole window | Now nothing new is recorded while it is past it: the last picture stays (in memory the picture is black) |
+| Confirmed: a webcam picture under 16 px a side (a small region) stopped the recording | A larger copy goes to the compositor, at the same place |
+| Rejected | A capture that ends cleanly before its first frame (speculative); the capture's frame rate on desktops sending frames only on damage (older than these changes); black frames from linear DMA-BUFs of another GPU (speculative on this path) |
+| Automated tests and clippy | 89 passed (one ignored) on 1.95 and stable natively, 3 runs; the GPU tests 5 runs in parallel inside the runtime; clippy clean on both for Linux and Windows. Two tests recording with the webcam at once had written to the same file, which made them fail or hang: each now has its own |
+| Self-test 8 s, plain and with `region webcam preview shot pause replay` | 457 and 322 frames, 0 lagged, 0 decode errors |
+
+Not verified: a driver on which the first frame really fails (the waiting was tested with pipelines
+that refuse the frame or give nothing back).
