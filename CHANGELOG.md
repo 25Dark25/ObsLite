@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Windows: a GPU that cannot convert the picture for the encoder now stops the recording with
+  that error; the recording was green, with nothing in it.
 - Windows: the C runtime is inside obs-lite.exe. The build needed VCRUNTIME140.dll, which a fresh
   Windows does not have (other programs bring it), and did not start there.
 

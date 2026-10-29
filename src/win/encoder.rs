@@ -99,13 +99,14 @@ struct Canvas {
 impl Canvas {
     /// Converts the canvas into NV12 frame `slot` and waits until the GPU has done it: the
     /// hardware encoder reads the frame on another GPU engine, without waiting for this
-    /// context, so handing it over earlier showed up as half-drawn frames.
-    fn snapshot(&self, slot: usize) {
+    /// context, so handing it over earlier showed up as half-drawn frames. A GPU that cannot
+    /// convert fails the recording: its frames would be empty (green).
+    fn snapshot(&self, slot: usize) -> windows::core::Result<()> {
         let ctx = &self.context.0;
         unsafe {
             {
                 let _gpu = self.lock.lock().unwrap();
-                let _ = self.converter.0.convert(slot);
+                self.converter.0.convert(slot)?;
                 ctx.End(&self.converted.0);
                 ctx.Flush();
             }
@@ -118,6 +119,7 @@ impl Canvas {
                 thread::sleep(Duration::from_millis(1));
             }
         }
+        Ok(())
     }
 }
 
@@ -435,7 +437,11 @@ fn produce_frames(inner: &Inner) {
         }
         let (slot, dropped) = inner.queue.lock().unwrap().free_slot();
         inner.lagged.fetch_add(dropped, Ordering::Relaxed);
-        inner.canvas.snapshot(slot);
+        if let Err(e) = inner.canvas.snapshot(slot) {
+            let what = tr!("la GPU no pudo convertir la imagen", "the GPU could not convert the picture");
+            inner.output.lock().unwrap().record_error(format!("{what}: {e}"));
+            break;
+        }
         inner.queue.lock().unwrap().frames.push_back((n, slot));
         inner.queued.notify_one();
         n += 1;
