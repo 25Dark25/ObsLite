@@ -251,9 +251,22 @@ impl App {
     /// fragmented MP4: make it a regular one. A finished recording is left as it is.
     fn recover_last_recording(&mut self) {
         let Some(path) = self.config.last_recording.take() else { return };
-        if let Ok(true) = crate::mp4::repair(&path) {
-            let shown = crate::platform::sys::display_path(&path);
-            self.set_status(tr!("Se recuperó la grabación interrumpida '{}'", "Recovered the interrupted recording '{}'", shown.display()), Some(path), false);
+        match crate::mp4::repair(&path) {
+            Ok(true) => {
+                let shown = crate::platform::sys::display_path(&path);
+                self.set_status(tr!("Se recuperó la grabación interrumpida '{}'", "Recovered the interrupted recording '{}'", shown.display()), Some(path), false);
+            }
+            // Another obs-lite is still writing it: kept, in case that one stops before finishing it.
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => self.config.last_recording = Some(path),
+            _ => {}
+        }
+    }
+
+    /// `path` was finished whole: there is nothing to repair at the next start. Saved with the
+    /// settings on exit; if obs-lite stops before that, the repair finds a regular file.
+    fn recording_finished(&mut self, path: &Path) {
+        if self.config.last_recording.as_deref() == Some(path) {
+            self.config.last_recording = None;
         }
     }
 
@@ -607,7 +620,7 @@ impl App {
             return;
         }
         if !*replay {
-            return self.stop_session(ctx, None);
+            return self.stop_session(ctx, StopReason::User);
         }
         *recording = None;
         // The replay buffer keeps the session going: only the file ends.
@@ -624,13 +637,13 @@ impl App {
         let RecState::Active { session, recording, replay, .. } = &mut self.rec else { return };
         *replay = false;
         if recording.is_none() {
-            return self.stop_session(ctx, None);
+            return self.stop_session(ctx, StopReason::User);
         }
         session.shared.outputs.lock().unwrap().set_replay(None);
     }
 
     /// Ends capture and encoding, writing out the recording if there is one.
-    fn stop_session(&mut self, ctx: &egui::Context, reason: Option<String>) {
+    fn stop_session(&mut self, ctx: &egui::Context, why: StopReason) {
         let RecState::Active { session, mixer, recording, .. } = std::mem::replace(&mut self.rec, RecState::Idle) else {
             return;
         };
@@ -639,6 +652,7 @@ impl App {
             *camera.shared.sink.lock().unwrap() = None;
         }
         let (encoder, stop_error) = session.stop();
+        let reason = stop_message(&why, stop_error.as_deref(), recording.is_some());
         if recording.is_none() {
             // Only the replay buffer: nothing to write; let the encoder wind down elsewhere.
             if let Some(encoder) = encoder {
@@ -778,7 +792,10 @@ impl App {
             // Before the status: if the source is gone, its error must not hide where the file went.
             self.restart_preview(ctx);
             match result {
-                Ok(path) => self.set_status(tr!("Grabación guardada en '{}'", "Recording saved to '{}'", crate::platform::sys::display_path(&path).display()), Some(path), false),
+                Ok(path) => {
+                    self.recording_finished(&path);
+                    self.set_status(tr!("Grabación guardada en '{}'", "Recording saved to '{}'", crate::platform::sys::display_path(&path).display()), Some(path), false)
+                }
                 Err(e) => self.set_status(tr!("Error al guardar la grabación: {}", "Error saving the recording: {}", e), None, true),
             }
         }
@@ -797,27 +814,37 @@ impl App {
         self.jobs = running;
         for job in done {
             if let Ok(status) = job.join() {
+                // A recording saved while the replay buffer goes on.
+                if let (false, Some(path)) = (status.error, &status.file) {
+                    self.recording_finished(path);
+                }
                 self.status = Some(status);
             }
         }
 
-        // A recording that cannot be written (its folder, a full disk, a failed encoder) is stopped
-        // now, not when the user stops it, so the error shows right away.
-        if let RecState::Active { session, recording: Some(_), .. } = &self.rec
-            && session.shared.outputs.lock().unwrap().failed()
-        {
-            return self.stop_recording(ctx);
+        // An encoder that failed ends the session, replay buffer included: nothing more would be
+        // encoded. A recording that cannot be written (its folder, a full disk) is stopped now,
+        // not when the user stops it, so the error shows right away.
+        if let RecState::Active { session, recording, .. } = &self.rec {
+            let outputs = session.shared.outputs.lock().unwrap();
+            if let Some(e) = outputs.encoder_error().map(str::to_owned) {
+                drop(outputs);
+                return self.stop_session(ctx, StopReason::EncoderFailed(e));
+            }
+            if recording.is_some() && outputs.failed() {
+                drop(outputs);
+                return self.stop_recording(ctx);
+            }
         }
         if self.active_session().is_some_and(Session::is_finished) {
-            let reason = if self.is_recording() {
-                tr!("La fuente dejó de estar disponible; guardando…", "The source is no longer available; saving…")
-            } else {
-                tr!("La fuente dejó de estar disponible; búfer de repetición detenido.", "The source is no longer available; replay buffer stopped.")
-            };
-            return self.stop_session(ctx, Some(reason.into()));
+            return self.stop_session(ctx, StopReason::Ended);
         }
         if self.preview.as_ref().is_some_and(Session::is_finished) {
-            self.source_lost(tr!("La fuente ya no está disponible. Añade otra con el botón +.", "The source is no longer available. Add another one with the + button.").into());
+            let (_, error) = self.preview.take().expect("checked").stop();
+            self.source_lost(match error {
+                Some(e) => tr!("No se pudo capturar la fuente: {}", "Could not capture the source: {}", e),
+                None => tr!("La fuente ya no está disponible. Añade otra con el botón +.", "The source is no longer available. Add another one with the + button.").into(),
+            });
         }
         self.cpu.update();
     }
@@ -1692,8 +1719,12 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Saved first, in case finishing the recording hangs.
         self.config.save();
-        finish_on_exit(std::mem::replace(&mut self.rec, RecState::Idle));
+        if let Some(path) = finish_on_exit(std::mem::replace(&mut self.rec, RecState::Idle)) {
+            self.recording_finished(&path);
+            self.config.save();
+        }
         for job in self.jobs.drain(..) {
             let _ = job.join();
         }
@@ -1708,21 +1739,17 @@ fn failed(text: String) -> Status {
     Status { text, file: None, error: true }
 }
 
-/// Never leaves the MP4 half-written when the app closes mid-recording or mid-save.
-fn finish_on_exit(rec: RecState) {
+/// Never leaves the MP4 half-written when the app closes mid-recording or mid-save. Returns the
+/// recording if it was finished whole.
+fn finish_on_exit(rec: RecState) -> Option<PathBuf> {
     match rec {
         RecState::Active { session, mixer, .. } => {
             drop(mixer);
-            if let (Some(enc), _) = session.stop()
-                && let Some(file) = enc.finish()
-            {
-                let _ = file.finish();
-            }
+            let (encoder, _) = session.stop();
+            encoder?.finish()?.finish().ok()
         }
-        RecState::Saving(rx) => {
-            let _ = rx.recv_timeout(Duration::from_secs(10));
-        }
-        RecState::Idle => {}
+        RecState::Saving(rx) => rx.recv_timeout(Duration::from_secs(10)).ok()?.ok(),
+        RecState::Idle => None,
     }
 }
 
@@ -2116,6 +2143,39 @@ fn input_failed(input: &Option<Input>) -> bool {
     input.as_ref().is_some_and(|i| i.shared.error().is_some())
 }
 
+/// Why a recording session is stopped.
+enum StopReason {
+    /// The user stopped it.
+    User,
+    /// The capture ended by itself: the source went away, or it failed.
+    Ended,
+    /// The encoder failed.
+    EncoderFailed(String),
+}
+
+/// What the status line says when a session stops, given the error the capture ended with
+/// (if any) and whether a recording is being saved; `None` keeps the usual messages.
+fn stop_message(why: &StopReason, capture_error: Option<&str>, recording: bool) -> Option<String> {
+    match (why, capture_error) {
+        // A recording being saved says what went wrong once it is saved.
+        (StopReason::User, _) | (StopReason::EncoderFailed(_), _) if recording => None,
+        (StopReason::User, _) => None,
+        (StopReason::EncoderFailed(e), _) => Some(tr!("Búfer de repetición detenido: {}", "Replay buffer stopped: {}", e)),
+        // E.g. the encoder could not be made for the first frame.
+        (StopReason::Ended, Some(e)) if recording => Some(tr!("La captura se detuvo: {}; guardando…", "Capture stopped: {}; saving…", e)),
+        (StopReason::Ended, Some(e)) => {
+            Some(tr!("La captura se detuvo: {}; búfer de repetición detenido.", "Capture stopped: {}; replay buffer stopped.", e))
+        }
+        (StopReason::Ended, None) if recording => {
+            Some(tr!("La fuente dejó de estar disponible; guardando…", "The source is no longer available; saving…").into())
+        }
+        (StopReason::Ended, None) => Some(
+            tr!("La fuente dejó de estar disponible; búfer de repetición detenido.", "The source is no longer available; replay buffer stopped.")
+                .into(),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
@@ -2193,9 +2253,39 @@ mod tests {
                 let _ = tx.send(Ok(PathBuf::from("rec.mp4")));
             }
         });
-        finish_on_exit(RecState::Saving(rx));
+        assert_eq!(finish_on_exit(RecState::Saving(rx)), Some(PathBuf::from("rec.mp4")));
         assert!(saved.load(Ordering::SeqCst), "exited before the recording was finalized");
         saver.join().unwrap();
+    }
+
+    #[test]
+    fn a_recording_saved_whole_is_not_repaired_at_the_next_start() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        let ctx = egui::Context::default();
+        for (result, kept) in [(Ok(PathBuf::from("rec.mp4")), false), (Err("disk full".to_owned()), true)] {
+            let mut app = test_app();
+            app.config.last_recording = Some(PathBuf::from("rec.mp4"));
+            let (tx, rx) = mpsc::channel();
+            tx.send(result).unwrap();
+            app.rec = RecState::Saving(rx);
+            app.poll(&ctx);
+            assert_eq!(app.config.last_recording.is_some(), kept);
+        }
+    }
+
+    #[test]
+    fn a_session_that_ended_says_why() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        let encoder = "could not start the H.264 encoder";
+        for recording in [false, true] {
+            // Without an error the source went away; with one, that error is what is shown.
+            let gone = stop_message(&StopReason::Ended, None, recording).unwrap();
+            let message = stop_message(&StopReason::Ended, Some(encoder), recording).unwrap();
+            assert!(message.contains(encoder) && !message.contains(&gone[..gone.find(';').unwrap()]), "{message}");
+        }
+        let message = stop_message(&StopReason::EncoderFailed(encoder.into()), None, false).unwrap();
+        assert!(message.contains(encoder), "{message}");
+        assert!(stop_message(&StopReason::User, None, false).is_none());
     }
 
     #[test]

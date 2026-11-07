@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The README no longer says that pausing a recording pauses the replay buffer too, which stopped
+  being so in 0.6.0.
+- Windows: the update check and starting a capture no longer lean on COM started by other
+  threads. Once those threads had ended, Windows unloaded code that was still in use, and the
+  next call crashed the process. The tests crashed so about once in 20 runs; it was not seen in
+  the app, whose window keeps COM running.
+- Pausing a recording, resuming and pausing again before the file went on took the first pause
+  out twice: the rest of the recording got times from before what was already in it, or was
+  dropped, and the timer went back.
+- Saving a replay no longer copies the whole replay buffer while the encoder waits for it: with a
+  long buffer (minutes, high quality) the copy took up to about half a second and took memory
+  again, the window stopped for that time and a recording running at the same time lost frames.
+- An encoder that fails while only the replay buffer runs (a GPU reset, a driver error) now
+  stops it and says why. Before, the replay buffer went on saying it was on but kept nothing new,
+  and a recording started afterwards got no frame and said only "no frame was encoded".
+- A capture that ends with an error (the encoder could not be started, the screen-sharing
+  dialog was cancelled, a missing plugin on Linux) shows that error, instead of "The source is
+  no longer available".
+- A power cut (or a crash of the system) while a recording was being made regular could leave a
+  file that the repair at the next start made unplayable, taking its only full index for padding,
+  or that players read as empty. The initial index is now made padding first and put on the
+  disk before the fragments' indexes, and the repair takes only an index before the fragments
+  for the initial one.
+- Starting obs-lite after a recording no longer reads the whole box list of that recording
+  again, looking for something to repair, before the window shows; on a hard disk or a network
+  folder after a restart this could take seconds or more. Only a recording that was not finished
+  whole is checked.
+- Linux: an obs-lite started while another one was recording (after the first one was closed)
+  could take that recording for one cut short and "repair" it while it was still being written,
+  ruining it. A recording is now locked while it is written, and the repair leaves a locked file
+  alone (and checks it again at the next start).
 - Windows: a computer that slept while recording no longer fills the recording with the time
   asleep. obs-lite made up for it at once on waking: all that silence was allocated (gigabytes
   after a night, enough to crash it), encoded and written. The time asleep is now left out of
