@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed (a native build): it offered only "Default", and a device chosen before was reset.
 - Linux: every recording pipeline uses one VA-API display, as was meant: the sharing never took
   place, so each opened its own.
+- Linux: listing the webcams no longer leaves the closed connection to the desktop's camera
+  service on GStreamer's PipeWire device provider, which is shared by the whole process.
 
 ## [0.6.0] - 2026-10-29
 
