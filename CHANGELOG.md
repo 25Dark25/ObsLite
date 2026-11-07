@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   screen or window was recorded, scaled down to the region's size.
 - Linux: Settings › Audio lists the audio devices again when GStreamer's PipeWire plugin is
   installed (a native build): it offered only "Default", and a device chosen before was reset.
+- Linux: every recording pipeline uses one VA-API display, as was meant: the sharing never took
+  place, so each opened its own.
 
 ## [0.6.0] - 2026-10-29
 
