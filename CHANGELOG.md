@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   picture frozen in the preview, screenshots and recordings. The status bar says so, a recording
   going on stops showing it, and the camera is tried again when the next recording or replay
   buffer starts.
+- A webcam no longer wakes obs-lite for every picture (about 30 times a second) while the window
+  is minimized or in the tray, as the screen preview already did not.
 
 ## [0.6.0] - 2026-10-29
 

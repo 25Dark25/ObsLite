@@ -141,6 +141,8 @@ pub struct CameraShared {
     pub error: Mutex<Option<String>>,
     /// Receives every frame while recording.
     pub sink: Mutex<Option<Sink>>,
+    /// Set while the window is not shown: pictures are kept but do not wake it.
+    pub hidden: AtomicBool,
     stop: AtomicBool,
 }
 
@@ -164,6 +166,7 @@ impl Camera {
             seq: AtomicU64::new(0),
             error: Mutex::new(None),
             sink: Mutex::new(None),
+            hidden: AtomicBool::new(false),
             stop: AtomicBool::new(false),
         });
         let thread = thread::Builder::new()
@@ -211,7 +214,7 @@ impl CameraShared {
         }
         *self.latest.lock().unwrap() = Some(Arc::new(frame));
         self.seq.fetch_add(1, Ordering::Relaxed);
-        if let Some(ctx) = repaint {
+        if let Some(ctx) = repaint.filter(|_| !self.hidden.load(Ordering::Relaxed)) {
             crate::capture::repaint_for_picture(ctx);
         }
     }
@@ -256,6 +259,26 @@ mod tests {
         let start = Instant::now();
         while !done() && start.elapsed() < Duration::from_secs(1) {
             thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn a_hidden_window_is_not_woken_for_every_camera_picture() {
+        for hidden in [false, true] {
+            let camera = Camera::start_with(|_, _| Ok(()), None);
+            camera.shared.hidden.store(hidden, Ordering::Relaxed);
+            let ctx = eframe::egui::Context::default();
+            let woken = Arc::new(AtomicU64::new(0));
+            ctx.set_request_repaint_callback({
+                let woken = woken.clone();
+                move |_| {
+                    woken.fetch_add(1, Ordering::Relaxed);
+                }
+            });
+            camera.shared.deliver(picture(), Some(&ctx));
+            // Minimized or in the tray, about 30 wake-ups a second for nothing.
+            assert_eq!(woken.load(Ordering::Relaxed) > 0, !hidden, "hidden: {hidden}");
+            assert!(camera.shared.latest.lock().unwrap().is_some(), "kept for when the window shows");
         }
     }
 

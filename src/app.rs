@@ -1693,6 +1693,9 @@ impl eframe::App for App {
         if let Some(session) = self.active_session().or(self.preview.as_ref()) {
             session.shared.preview_hidden.store(hidden, Ordering::Relaxed);
         }
+        if let Some(camera) = &self.camera {
+            camera.shared.hidden.store(hidden, Ordering::Relaxed);
+        }
         // The meters fall only while drawn: hidden, they would keep the window waking 15 times a
         // second. They start again from silence when it shows.
         if hidden {
