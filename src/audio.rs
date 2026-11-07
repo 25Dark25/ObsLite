@@ -388,7 +388,7 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
         // Ten minutes asleep: they were allocated, encoded and written at once (and an
         // overnight sleep ran out of memory).
-        clock.backdate(Duration::from_secs(600));
+        clock.move_on(Duration::from_secs(600));
         thread::sleep(Duration::from_millis(100));
         drop(mixer);
         let largest = blocks.lock().unwrap().iter().copied().max().unwrap();

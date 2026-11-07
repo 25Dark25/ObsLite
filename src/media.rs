@@ -43,8 +43,31 @@ pub struct Clock(Mutex<ClockState>);
 
 struct ClockState {
     start: Instant,
-    /// The time last read.
+    /// The time last read, and the time the computer slept since the start.
     last: Duration,
+    asleep: Duration,
+    /// How far tests moved the clock on: an `Instant` can't go back before the computer started.
+    #[cfg(test)]
+    ahead: Duration,
+}
+
+impl ClockState {
+    fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            last: Duration::ZERO,
+            asleep: Duration::ZERO,
+            #[cfg(test)]
+            ahead: Duration::ZERO,
+        }
+    }
+
+    fn now(&self) -> Duration {
+        let now = self.start.elapsed();
+        #[cfg(test)]
+        let now = now + self.ahead;
+        now.saturating_sub(self.asleep)
+    }
 }
 
 /// A jump of the clock at least this long is the computer having slept, and is left out: the
@@ -55,20 +78,20 @@ const SLEEP_GAP: Duration = Duration::from_secs(5);
 
 impl Clock {
     pub fn new() -> Self {
-        Self(Mutex::new(ClockState { start: Instant::now(), last: Duration::ZERO }))
+        Self(Mutex::new(ClockState::new()))
     }
 
     pub fn restart(&self) {
-        *self.0.lock().unwrap() = ClockState { start: Instant::now(), last: Duration::ZERO };
+        *self.0.lock().unwrap() = ClockState::new();
     }
 
     /// Time since the last restart, sleeps of the computer left out.
     pub fn elapsed(&self) -> Duration {
         let mut clock = self.0.lock().unwrap();
-        let now = clock.start.elapsed();
+        let now = clock.now();
         if now >= clock.last + SLEEP_GAP {
             let asleep = now - clock.last;
-            clock.start += asleep;
+            clock.asleep += asleep;
         } else {
             clock.last = clock.last.max(now);
         }
@@ -77,8 +100,8 @@ impl Clock {
 
     /// Moves the clock on by `by`, as time passing (or the computer sleeping) would.
     #[cfg(test)]
-    pub fn backdate(&self, by: Duration) {
-        self.0.lock().unwrap().start -= by;
+    pub fn move_on(&self, by: Duration) {
+        self.0.lock().unwrap().ahead += by;
     }
 }
 
@@ -534,10 +557,10 @@ mod tests {
         let clock = Clock::new();
         let _ = clock.elapsed();
         // Windows' clock counts the time asleep: it jumps by it on waking up.
-        clock.backdate(Duration::from_secs(600));
+        clock.move_on(Duration::from_secs(600));
         assert!(clock.elapsed() < Duration::from_secs(1), "{:?}", clock.elapsed());
         // Time goes on from there.
-        clock.backdate(Duration::from_millis(500));
+        clock.move_on(Duration::from_millis(500));
         let after = clock.elapsed();
         assert!(after >= Duration::from_millis(500) && after < Duration::from_secs(1), "{after:?}");
     }
