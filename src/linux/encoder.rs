@@ -342,6 +342,17 @@ impl Encoder {
         self.overlay.map(|(corner, size)| camera::overlay_rect(self.inner.input, camera, corner, size))
     }
 
+    /// The camera stopped: its last picture is no longer put on the recording.
+    pub fn clear_overlay(&self) {
+        if let Some(camera) = &self.camera {
+            set_alpha(&camera.pad, 0.0);
+            // Shown again, at its place, by the next picture.
+            *camera.placed.lock().unwrap() = None;
+            return;
+        }
+        *self.inner.overlay.lock().unwrap() = None;
+    }
+
     /// Takes a webcam picture already scaled to `rect` (see `overlay_rect`).
     pub fn push_overlay(&self, rect: PixelRect, pixels: &[u8]) {
         if let Some(camera) = &self.camera {
@@ -353,6 +364,7 @@ impl Encoder {
                 camera.pad.set_property("ypos", y as i32);
                 camera.pad.set_property("width", w as i32);
                 camera.pad.set_property("height", h as i32);
+                set_alpha(&camera.pad, 1.0);
                 *placed = Some(rect);
             }
             // The compositor takes no picture under 16 pixels a side: a larger copy goes in its place.
@@ -551,7 +563,7 @@ fn to_packet(sample: &gst::Sample) -> Option<Packet> {
     let time = segment.to_running_time(buffer.pts()?)?;
     let map = buffer.map_readable().ok()?;
     Some(Packet {
-        data: map.as_slice().to_vec(),
+        data: map.as_slice().into(),
         time: (time.nseconds() / NS_PER_TICK) as i64,
         duration: buffer.duration().map_or(0, |d| (d.nseconds() / NS_PER_TICK) as i64),
         key: !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT),
@@ -714,6 +726,13 @@ fn crop(frame: (u32, u32), origin: (u32, u32), input: (u32, u32)) -> Crop {
     }
 }
 
+/// Shows (1) or hides (0) the webcam's input of the compositor, where its pads can.
+fn set_alpha(pad: &gst::Pad, alpha: f64) {
+    if pad.has_property_with_type("alpha", f64::static_type()) {
+        pad.set_property("alpha", alpha);
+    }
+}
+
 /// `rect` on a `from`-sized picture, on the same picture scaled to `to`.
 fn scale_rect((x, y, w, h): PixelRect, from: (u32, u32), to: (u32, u32)) -> PixelRect {
     let scale = |v: u32, to: u32, from: u32| (v as u64 * to as u64 / from.max(1) as u64) as u32;
@@ -832,6 +851,8 @@ pub struct Mp4 {
     start: i64,
     /// Why the pipeline failed, once it has: it will not reach end-of-stream.
     failed: Mutex<Option<String>>,
+    /// Locked while the file is written (see `mp4::repair`).
+    _lock: std::fs::File,
 }
 
 impl Muxer for Mp4 {
@@ -866,8 +887,12 @@ impl Muxer for Mp4 {
         // filesink takes text: a path that is not valid UTF-8 would be written somewhere else.
         let location = path.to_str().ok_or_else(|| tr!("la ruta de grabación no es UTF-8 válido", "the recording path is not valid UTF-8").to_owned())?;
         by_name::<gst::Element>(&pipeline, "file")?.set_property("location", location);
+        // filesink takes no lock: this one, held until the file is finished, keeps another
+        // obs-lite from taking it for a recording cut short and repairing it while it is written.
+        let lock = std::fs::File::create(path).map_err(|e| e.to_string())?;
+        let _ = lock.try_lock();
         play(&pipeline)?;
-        Ok(Self { pipeline, path: path.to_owned(), video: video_src, audio: audio_src, start, failed: Mutex::new(None) })
+        Ok(Self { pipeline, path: path.to_owned(), video: video_src, audio: audio_src, start, failed: Mutex::new(None), _lock: lock })
     }
 
     fn write(&self, video: bool, packet: &Packet) -> Result<(), String> {
@@ -982,7 +1007,7 @@ mod tests {
         let sample = gst::Sample::builder().buffer(&buffer).segment(&segment).build();
         let packet = to_packet(&sample).unwrap();
         assert_eq!(packet.time, 5_000_000, "0.5 s in 100 ns units");
-        assert_eq!(packet.data, [1, 2, 3]);
+        assert_eq!(*packet.data, [1, 2, 3]);
         assert!(packet.key, "a buffer without DELTA_UNIT is a keyframe");
     }
 

@@ -90,11 +90,19 @@ pub fn list_devices() -> Vec<CameraDevice> {
     }
 }
 
+/// Opening asks the user, through the camera portal, for access (once per run).
+pub const OPENING_ASKS_USER: bool = true;
+
 /// Captures from `device` (the default camera if empty) until asked to stop, handing every
 /// picture to `shared`.
 pub fn capture(device: &str, shared: &CameraShared, repaint: Option<&eframe::egui::Context>) -> Result<(), String> {
     gst::init().map_err(|e| e.to_string())?;
     let fd = open()?.ok_or_else(|| tr!("cámara no encontrada", "camera not found").to_owned())?;
+    shared.set_opened();
+    // Removed while the user was being asked: nothing to start.
+    if shared.stopped() {
+        return Ok(());
+    }
     let pipeline = gst::parse::launch(&format!(
         // An unplugged camera ends the stream (otherwise the last picture would stay, frozen).
         "pipewiresrc name=src fd={fd} on-disconnect=error ! videoconvert ! video/x-raw,format=BGRA ! appsink name=sink max-buffers=1 drop=true sync=false",
