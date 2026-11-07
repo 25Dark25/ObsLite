@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or that players read as empty. The initial index is now made padding first and put on the
   disk before the fragments' indexes, and the repair takes only an index before the fragments
   for the initial one.
+- Starting obs-lite after a recording no longer reads the whole box list of that recording
+  again, looking for something to repair, before the window shows; on a hard disk or a network
+  folder after a restart this could take seconds or more. Only a recording that was not finished
+  whole is checked.
 
 ## [0.6.0] - 2026-10-29
 

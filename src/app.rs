@@ -257,6 +257,14 @@ impl App {
         }
     }
 
+    /// `path` was finished whole: there is nothing to repair at the next start. Saved with the
+    /// settings on exit; if obs-lite stops before that, the repair finds a regular file.
+    fn recording_finished(&mut self, path: &Path) {
+        if self.config.last_recording.as_deref() == Some(path) {
+            self.config.last_recording = None;
+        }
+    }
+
     fn is_recording(&self) -> bool {
         matches!(self.rec, RecState::Active { recording: Some(_), .. })
     }
@@ -778,7 +786,10 @@ impl App {
             // Before the status: if the source is gone, its error must not hide where the file went.
             self.restart_preview(ctx);
             match result {
-                Ok(path) => self.set_status(tr!("Grabación guardada en '{}'", "Recording saved to '{}'", crate::platform::sys::display_path(&path).display()), Some(path), false),
+                Ok(path) => {
+                    self.recording_finished(&path);
+                    self.set_status(tr!("Grabación guardada en '{}'", "Recording saved to '{}'", crate::platform::sys::display_path(&path).display()), Some(path), false)
+                }
                 Err(e) => self.set_status(tr!("Error al guardar la grabación: {}", "Error saving the recording: {}", e), None, true),
             }
         }
@@ -797,6 +808,10 @@ impl App {
         self.jobs = running;
         for job in done {
             if let Ok(status) = job.join() {
+                // A recording saved while the replay buffer goes on.
+                if let (false, Some(path)) = (status.error, &status.file) {
+                    self.recording_finished(path);
+                }
                 self.status = Some(status);
             }
         }
@@ -1692,8 +1707,12 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Saved first, in case finishing the recording hangs.
         self.config.save();
-        finish_on_exit(std::mem::replace(&mut self.rec, RecState::Idle));
+        if let Some(path) = finish_on_exit(std::mem::replace(&mut self.rec, RecState::Idle)) {
+            self.recording_finished(&path);
+            self.config.save();
+        }
         for job in self.jobs.drain(..) {
             let _ = job.join();
         }
@@ -1708,21 +1727,17 @@ fn failed(text: String) -> Status {
     Status { text, file: None, error: true }
 }
 
-/// Never leaves the MP4 half-written when the app closes mid-recording or mid-save.
-fn finish_on_exit(rec: RecState) {
+/// Never leaves the MP4 half-written when the app closes mid-recording or mid-save. Returns the
+/// recording if it was finished whole.
+fn finish_on_exit(rec: RecState) -> Option<PathBuf> {
     match rec {
         RecState::Active { session, mixer, .. } => {
             drop(mixer);
-            if let (Some(enc), _) = session.stop()
-                && let Some(file) = enc.finish()
-            {
-                let _ = file.finish();
-            }
+            let (encoder, _) = session.stop();
+            encoder?.finish()?.finish().ok()
         }
-        RecState::Saving(rx) => {
-            let _ = rx.recv_timeout(Duration::from_secs(10));
-        }
-        RecState::Idle => {}
+        RecState::Saving(rx) => rx.recv_timeout(Duration::from_secs(10)).ok()?.ok(),
+        RecState::Idle => None,
     }
 }
 
@@ -2193,9 +2208,24 @@ mod tests {
                 let _ = tx.send(Ok(PathBuf::from("rec.mp4")));
             }
         });
-        finish_on_exit(RecState::Saving(rx));
+        assert_eq!(finish_on_exit(RecState::Saving(rx)), Some(PathBuf::from("rec.mp4")));
         assert!(saved.load(Ordering::SeqCst), "exited before the recording was finalized");
         saver.join().unwrap();
+    }
+
+    #[test]
+    fn a_recording_saved_whole_is_not_repaired_at_the_next_start() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        let ctx = egui::Context::default();
+        for (result, kept) in [(Ok(PathBuf::from("rec.mp4")), false), (Err("disk full".to_owned()), true)] {
+            let mut app = test_app();
+            app.config.last_recording = Some(PathBuf::from("rec.mp4"));
+            let (tx, rx) = mpsc::channel();
+            tx.send(result).unwrap();
+            app.rec = RecState::Saving(rx);
+            app.poll(&ctx);
+            assert_eq!(app.config.last_recording.is_some(), kept);
+        }
     }
 
     #[test]
