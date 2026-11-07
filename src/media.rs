@@ -4,7 +4,7 @@
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::i18n::tr;
@@ -15,7 +15,8 @@ pub const TICKS_PER_SECOND: i64 = 10_000_000;
 /// One encoded video frame or block of audio.
 #[derive(Clone, Debug)]
 pub struct Packet {
-    pub data: Vec<u8>,
+    /// Shared, so the replay buffer is copied without copying what was encoded.
+    pub data: Arc<[u8]>,
     /// 100 ns units since the recording clock started.
     pub time: i64,
     pub duration: i64,
@@ -377,13 +378,12 @@ impl<M: Muxer> Replay<M> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::thread;
 
     use super::*;
 
     fn packet(time: i64, key: bool) -> Packet {
-        Packet { data: vec![0; 4], time, duration: 0, key }
+        Packet { data: vec![0; 4].into(), time, duration: 0, key }
     }
 
     /// 30 fps video with a keyframe every 2 s, and audio every 1024 samples, for `seconds`.
@@ -632,6 +632,19 @@ mod tests {
         // The replay buffer has all 7 s, from a keyframe.
         let replay = outputs.replay().unwrap();
         assert_eq!(replay.video.len(), 210);
+    }
+
+    #[test]
+    fn saving_a_replay_does_not_copy_what_was_encoded() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let mut outputs = Outputs::<FakeMuxer>::default();
+        outputs.set_replay(Some(20));
+        feed(&mut outputs, &written, 0, 1);
+        let replay = outputs.replay().unwrap();
+        let ring = outputs.replay.as_ref().unwrap();
+        // Taken under the lock the encoders need: it must be quick even for minutes of video.
+        assert_eq!(replay.video[0].data.as_ptr(), ring.video[0].data.as_ptr());
+        assert_eq!(replay.audio[0].data.as_ptr(), ring.audio[0].data.as_ptr());
     }
 
     #[test]

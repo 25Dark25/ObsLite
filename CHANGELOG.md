@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pausing a recording, resuming and pausing again before the file went on took the first pause
   out twice: the rest of the recording got times from before what was already in it, or was
   dropped, and the timer went back.
+- Saving a replay no longer copies the whole replay buffer while the encoder waits for it: with a
+  long buffer (minutes, high quality) the copy took up to about half a second and took memory
+  again, the window stopped for that time and a recording running at the same time lost frames.
 
 ## [0.6.0] - 2026-10-29
 
