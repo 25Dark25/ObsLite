@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Linux: an empty or cut-short picture from the desktop (PipeWire before 1.4 sends empty ones;
+  GNOME does when only the pointer moved) no longer closes obs-lite at once: it is skipped.
+
 ## [0.6.0] - 2026-10-29
 
 ### Changed

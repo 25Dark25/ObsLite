@@ -116,10 +116,19 @@ impl Handler {
 
     fn on_frame(&mut self, sample: &gst::Sample) -> Result<(), String> {
         let shared = self.shared.clone();
+        let (Some(buffer), Some(size)) = (sample.buffer(), frame_size(sample)) else { return Ok(()) };
+        // PipeWire before 1.4 hands on empty buffers, flagged corrupted (GNOME sends them when only
+        // the pointer moved, for one): they hold no picture, and reading one past its end panicked.
+        if buffer.flags().contains(gst::BufferFlags::CORRUPTED) {
+            return Ok(());
+        }
+        let on_gpu = gpu::on_gpu(sample);
+        if !on_gpu && buffer.size() < size.0 as usize * 4 * size.1 as usize {
+            return Ok(());
+        }
         shared.frames.fetch_add(1, Ordering::Relaxed);
         *shared.last_frame.lock().unwrap() = Some(sample.clone());
-        let (Some(buffer), Some(size)) = (sample.buffer(), frame_size(sample)) else { return Ok(()) };
-        if gpu::on_gpu(sample) {
+        if on_gpu {
             let mut encoder = shared.encoder.lock().unwrap();
             if encoder.is_none() {
                 *encoder = Some(self.new_encoder(sample, size)?);
@@ -486,5 +495,19 @@ mod tests {
         let mut failed = handler(Some(recording(None, None)));
         failed.gpu_failed = true;
         assert_eq!(failed.gpu_formats(), None);
+    }
+
+    #[test]
+    fn an_empty_or_short_frame_is_skipped_not_read_past_its_end() {
+        gst::init().unwrap();
+        let caps = gst::Caps::builder("video/x-raw").field("format", "BGRx").field("width", 64i32).field("height", 64i32).build();
+        // PipeWire before 1.4 hands on empty buffers (GNOME sends them when only the pointer
+        // moved), which made the preview read past the end: a panic, so the whole app ended.
+        for buffer in [gst::Buffer::new(), gst::Buffer::with_size(64 * 4 * 10).unwrap()] {
+            let mut handler = Handler::new(Arc::new(Shared::new(None)), None, 30, 5);
+            let sample = gst::Sample::builder().buffer(&buffer).caps(&caps).build();
+            assert!(handler.on_frame(&sample).is_ok());
+            assert!(handler.shared.last_frame.lock().unwrap().is_none(), "a screenshot would read it");
+        }
     }
 }
