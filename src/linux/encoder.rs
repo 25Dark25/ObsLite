@@ -645,8 +645,16 @@ fn crop_on_the_way(pipeline: &gst::Pipeline, origin: (u32, u32), input: (u32, u3
         let (Some(frame), Some(buffer)) = (frame, info.buffer_mut()) else { return gst::PadProbeReturn::Ok };
         match crop(frame, origin, input) {
             Crop::Whole => {}
+            // PipeWire may have put a crop on the frame already (GNOME does on every one), and
+            // VA-API uses the first: that one is set, not a second one added.
             Crop::Part(rect) => {
-                gst_video::VideoCropMeta::add(buffer.make_mut(), rect);
+                let buffer = buffer.make_mut();
+                match buffer.meta_mut::<gst_video::VideoCropMeta>() {
+                    Some(mut meta) => meta.set_rect(rect),
+                    None => {
+                        gst_video::VideoCropMeta::add(buffer, rect);
+                    }
+                }
             }
             // Nothing outside the region is recorded: the recording keeps its last picture.
             Crop::Nothing => return gst::PadProbeReturn::Drop,
@@ -1068,7 +1076,11 @@ mod tests {
             encoder.push_overlay(rect, &red);
         }
         for frame in &frames {
-            encoder.push_gpu_frame(frame);
+            // As GNOME's frames come from pipewiresrc: with a crop meta for the whole frame. A
+            // region's own crop was added after it, and VA-API used the first one: the whole frame.
+            let mut buffer = frame.buffer_owned().unwrap();
+            gst_video::VideoCropMeta::add(buffer.make_mut(), (0, 0, size.0, size.1));
+            encoder.push_gpu_frame(&gst::Sample::builder().buffer(&buffer).caps(frame.caps().unwrap()).build());
             std::thread::sleep(Duration::from_millis(20));
         }
         let finishing = std::time::Instant::now();

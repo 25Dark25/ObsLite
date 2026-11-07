@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Linux: an empty or cut-short picture from the desktop (PipeWire before 1.4 sends empty ones;
   GNOME does when only the pointer moved) no longer closes obs-lite at once: it is skipped.
+- Linux: recording a region on the GPU (VA-API) on GNOME records that region again; the whole
+  screen or window was recorded, scaled down to the region's size.
 
 ## [0.6.0] - 2026-10-29
 
