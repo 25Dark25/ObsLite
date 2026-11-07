@@ -5,89 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Fixed
-
-- The README no longer says that pausing a recording pauses the replay buffer too, which stopped
-  being so in 0.6.0.
-- Windows: the update check and starting a capture no longer lean on COM started by other
-  threads. Once those threads had ended, Windows unloaded code that was still in use, and the
-  next call crashed the process. The tests crashed so about once in 20 runs; it was not seen in
-  the app, whose window keeps COM running.
-- Pausing a recording, resuming and pausing again before the file went on took the first pause
-  out twice: the rest of the recording got times from before what was already in it, or was
-  dropped, and the timer went back.
-- Saving a replay no longer copies the whole replay buffer while the encoder waits for it: with a
-  long buffer (minutes, high quality) the copy took up to about half a second and took memory
-  again, the window stopped for that time and a recording running at the same time lost frames.
-- An encoder that fails while only the replay buffer runs (a GPU reset, a driver error) now
-  stops it and says why. Before, the replay buffer went on saying it was on but kept nothing new,
-  and a recording started afterwards got no frame and said only "no frame was encoded".
-- A capture that ends with an error (the encoder could not be started, the screen-sharing
-  dialog was cancelled, a missing plugin on Linux) shows that error, instead of "The source is
-  no longer available".
-- A power cut (or a crash of the system) while a recording was being made regular could leave a
-  file that the repair at the next start made unplayable, taking its only full index for padding,
-  or that players read as empty. The initial index is now made padding first and put on the
-  disk before the fragments' indexes, and the repair takes only an index before the fragments
-  for the initial one.
-- Starting obs-lite after a recording no longer reads the whole box list of that recording
-  again, looking for something to repair, before the window shows; on a hard disk or a network
-  folder after a restart this could take seconds or more. Only a recording that was not finished
-  whole is checked.
-- Linux: an obs-lite started while another one was recording (after the first one was closed)
-  could take that recording for one cut short and "repair" it while it was still being written,
-  ruining it. A recording is now locked while it is written, and the repair leaves a locked file
-  alone (and checks it again at the next start).
-- Windows: a computer that slept while recording no longer fills the recording with the time
-  asleep. obs-lite made up for it at once on waking: all that silence was allocated (gigabytes
-  after a night, enough to crash it), encoded and written. The time asleep is now left out of
-  the recording, as on Linux.
-- When the computer fell behind and frames were skipped, the video lost that time and ran ahead
-  of the audio, more with every skip (on Windows about half the skipped time was lost). Each
-  frame now lasts until the next one, in recordings and saved replays.
-- Opening the + menu after the recorded window was closed no longer selects the first display by
-  itself: it went on to record that display (with the region drawn on the window) while the
-  preview stayed black. The source changes only when one is chosen; a saved region is dropped at
-  start-up too when the saved source is not there.
-- Windows: Application Audio Capture follows an application that was closed and opened again
-  while obs-lite stayed open. It stayed bound to the old process: the application's channel
-  recorded nothing, and desktop audio no longer left the application out.
-- Windows: a webcam whose picture rows are padded (picture widths such as 424 or 1366) no
-  longer stays blank: every such picture was skipped.
-- Windows: Application Audio Capture lists Store apps (Calculator, Media Player…) by their own
-  names and records them. They were all one entry, "ApplicationFrameHost.exe", which recorded
-  silence.
-- A webcam that stops (unplugged, access taken away, its stream ended) no longer leaves its last
-  picture frozen in the preview, screenshots and recordings. The status bar says so, a recording
-  going on stops showing it, and the camera is tried again when the next recording or replay
-  buffer starts.
-- A webcam no longer wakes obs-lite for every picture (about 30 times a second) while the window
-  is minimized or in the tray, as the screen preview already did not.
-- Linux: removing or changing the webcam, or closing obs-lite, while the desktop is still asking
-  whether obs-lite may use the cameras no longer freezes the window until that is answered.
-- OK in Settings during a recording no longer restarts an audio device that had failed: its meter
-  moved again, but the recording stayed silent until it was stopped. The device is tried again
-  when the next recording or replay buffer starts, as before.
-- With two obs-lite open, closing one no longer makes the other's recording go unrepaired if
-  that one then stops partway (a crash, a power cut): saving its settings wrote over the
-  recording the other one had just started.
-- Volumes, mutes, the region, the webcam and the other choices made in the docks are saved
-  within a second, not only when obs-lite closes: signing out or shutting down Windows with
-  obs-lite open (in the tray, say) ends it without closing it, and they were lost.
-- Linux: an empty or cut-short picture from the desktop (PipeWire before 1.4 sends empty ones;
-  GNOME does when only the pointer moved) no longer closes obs-lite at once: it is skipped.
-- Linux: recording a region on the GPU (VA-API) on GNOME records that region again; the whole
-  screen or window was recorded, scaled down to the region's size.
-- Linux: Settings › Audio lists the audio devices again when GStreamer's PipeWire plugin is
-  installed (a native build): it offered only "Default", and a device chosen before was reset.
-- Linux: every recording pipeline uses one VA-API display, as was meant: the sharing never took
-  place, so each opened its own.
-- Linux: listing the webcams no longer leaves the closed connection to the desktop's camera
-  service on GStreamer's PipeWire device provider, which is shared by the whole process.
-
-## [0.6.0] - 2026-10-29
+## [0.6.0] - 2026-11-07
 
 ### Changed
 
@@ -205,6 +123,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Menus close when a session starts, so an open one can no longer remove the camera or the
   application audio from a running recording.
 - A minimized window no longer wakes 15 times a second after loud audio.
+- Windows: the update check and starting a capture no longer lean on COM started by other
+  threads. Once those threads had ended, Windows unloaded code that was still in use, and the
+  next call crashed the process. The tests crashed so about once in 20 runs; it was not seen in
+  the app, whose window keeps COM running.
+- Pausing a recording, resuming and pausing again before the file went on took the first pause
+  out twice: the rest of the recording got times from before what was already in it, or was
+  dropped, and the timer went back.
+- Saving a replay no longer copies the whole replay buffer while the encoder waits for it: with a
+  long buffer (minutes, high quality) the copy took up to about half a second and took memory
+  again, the window stopped for that time and a recording running at the same time lost frames.
+- An encoder that fails while only the replay buffer runs (a GPU reset, a driver error) now
+  stops it and says why. Before, the replay buffer went on saying it was on but kept nothing new,
+  and a recording started afterwards got no frame and said only "no frame was encoded".
+- A capture that ends with an error (the encoder could not be started, the screen-sharing
+  dialog was cancelled, a missing plugin on Linux) shows that error, instead of "The source is
+  no longer available".
+- A power cut (or a crash of the system) while a recording was being made regular could leave a
+  file that the repair at the next start made unplayable, taking its only full index for padding,
+  or that players read as empty. The initial index is now made padding first and put on the
+  disk before the fragments' indexes, and the repair takes only an index before the fragments
+  for the initial one.
+- Starting obs-lite after a recording no longer reads the whole box list of that recording
+  again, looking for something to repair, before the window shows; on a hard disk or a network
+  folder after a restart this could take seconds or more. Only a recording that was not finished
+  whole is checked.
+- Linux: an obs-lite started while another one was recording (after the first one was closed)
+  could take that recording for one cut short and "repair" it while it was still being written,
+  ruining it. A recording is now locked while it is written, and the repair leaves a locked file
+  alone (and checks it again at the next start).
+- Windows: a computer that slept while recording no longer fills the recording with the time
+  asleep. obs-lite made up for it at once on waking: all that silence was allocated (gigabytes
+  after a night, enough to crash it), encoded and written. The time asleep is now left out of
+  the recording, as on Linux.
+- When the computer fell behind and frames were skipped, the video lost that time and ran ahead
+  of the audio, more with every skip (on Windows about half the skipped time was lost). Each
+  frame now lasts until the next one, in recordings and saved replays.
+- Opening the + menu after the recorded window was closed no longer selects the first display by
+  itself: it went on to record that display (with the region drawn on the window) while the
+  preview stayed black. The source changes only when one is chosen; a saved region is dropped at
+  start-up too when the saved source is not there.
+- Windows: Application Audio Capture follows an application that was closed and opened again
+  while obs-lite stayed open. It stayed bound to the old process: the application's channel
+  recorded nothing, and desktop audio no longer left the application out.
+- Windows: a webcam whose picture rows are padded (picture widths such as 424 or 1366) no
+  longer stays blank: every such picture was skipped.
+- Windows: Application Audio Capture lists Store apps (Calculator, Media Player…) by their own
+  names and records them. They were all one entry, "ApplicationFrameHost.exe", which recorded
+  silence.
+- A webcam that stops (unplugged, access taken away, its stream ended) no longer leaves its last
+  picture frozen in the preview, screenshots and recordings. The status bar says so, a recording
+  going on stops showing it, and the camera is tried again when the next recording or replay
+  buffer starts.
+- A webcam no longer wakes obs-lite for every picture (about 30 times a second) while the window
+  is minimized or in the tray, as the screen preview already did not.
+- Linux: removing or changing the webcam, or closing obs-lite, while the desktop is still asking
+  whether obs-lite may use the cameras no longer freezes the window until that is answered.
+- OK in Settings during a recording no longer restarts an audio device that had failed: its meter
+  moved again, but the recording stayed silent until it was stopped. The device is tried again
+  when the next recording or replay buffer starts, as before.
+- With two obs-lite open, closing one no longer makes the other's recording go unrepaired if
+  that one then stops partway (a crash, a power cut): saving its settings wrote over the
+  recording the other one had just started.
+- Volumes, mutes, the region, the webcam and the other choices made in the docks are saved
+  within a second, not only when obs-lite closes: signing out or shutting down Windows with
+  obs-lite open (in the tray, say) ends it without closing it, and they were lost.
+- Linux: an empty or cut-short picture from the desktop (PipeWire before 1.4 sends empty ones;
+  GNOME does when only the pointer moved) no longer closes obs-lite at once: it is skipped.
+- Linux: recording a region on the GPU (VA-API) on GNOME records that region again; the whole
+  screen or window was recorded, scaled down to the region's size.
+- Linux: Settings › Audio lists the audio devices again when GStreamer's PipeWire plugin is
+  installed (a native build): it offered only "Default", and a device chosen before was reset.
+- Linux: every recording pipeline uses one VA-API display, as was meant: the sharing never took
+  place, so each opened its own.
+- Linux: listing the webcams no longer leaves the closed connection to the desktop's camera
+  service on GStreamer's PipeWire device provider, which is shared by the whole process.
 
 ## [0.5.0] - 2026-10-25
 
