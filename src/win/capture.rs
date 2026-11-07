@@ -98,7 +98,7 @@ pub struct Shared {
     /// nothing would draw the preview, so no preview pictures are made.
     pub preview_hidden: AtomicBool,
     pub frames: AtomicU64,
-    /// Drives video and audio timestamps; pausing it pauses the recording.
+    /// Drives video and audio timestamps. A pause leaves it running: only the file leaves it out.
     pub clock: Arc<Clock>,
     /// Set once the encoder is pulling samples and the clock has started.
     pub encoder_ready: Arc<AtomicBool>,
