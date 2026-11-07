@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A power cut (or a crash of the system) while a recording was being made regular could leave a
+  file that the repair at the next start made unplayable, taking its only full index for padding,
+  or that players read as empty. The initial index is now made padding first and put on the
+  disk before the fragments' indexes, and the repair takes only an index before the fragments
+  for the initial one.
+
 ## [0.6.0] - 2026-10-29
 
 ### Changed

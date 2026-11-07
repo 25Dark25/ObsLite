@@ -461,9 +461,16 @@ fn rebuild_trak(trak: Vec<Node>, track: &Track, duration: u64, in_movie: u64) ->
 /// Converts in place, returning whether the file was fragmented. With `cut_short`, a file whose
 /// writing stopped partway is accepted: its unfinished last box, and any fragment whose data it
 /// held, are dropped. `truncate` cuts the file when the new index ends before the old end.
-/// Marks the old indexes as padding, the initial `moov` last.
-fn pad(file: &mut impl Storage, boxes: &[Header], init: &Header) -> io::Result<()> {
-    for header in boxes.iter().filter(|h| &h.kind == b"moof").chain([init]) {
+/// Marks the old indexes as padding: the initial `moov` first, and on the disk before the
+/// fragments' (a power cut can leave any of these small writes undone), so the full index at the
+/// end is the first `moov` from then on and repairing never takes another one for the initial.
+fn pad(file: &mut impl Storage, boxes: &[Header], init: Option<&Header>) -> io::Result<()> {
+    if let Some(init) = init {
+        file.seek(SeekFrom::Start(init.start + 4))?;
+        file.write_all(b"free")?;
+        file.sync()?;
+    }
+    for header in boxes.iter().filter(|h| &h.kind == b"moof") {
         file.seek(SeekFrom::Start(header.start + 4))?;
         file.write_all(b"free")?;
     }
@@ -487,16 +494,18 @@ fn convert(file: &mut impl Storage, cut_short: bool) -> io::Result<bool> {
     if !top.iter().any(|h| &h.kind == b"moof") {
         return Ok(false);
     }
-    let init_header = top.iter().find(|h| &h.kind == b"moov").ok_or_else(|| invalid("no moov"))?;
-    // A conversion that was interrupted (obs-lite stopped while marking the padding) already
-    // wrote the full index after the fragments: only the padding is left to do, rather than
-    // adding a second index made from the fragments not yet marked.
+    // The initial moov comes before the fragments; a moov after them is a full index.
     let first_moof = top.iter().position(|h| &h.kind == b"moof").expect("checked above");
+    let init_header = top[..first_moof].iter().find(|h| &h.kind == b"moov");
+    // A conversion that was interrupted (obs-lite stopped, or the power went, while marking the
+    // padding) already wrote the full index after the fragments: only the padding is left to do,
+    // rather than adding a second index made from the fragments not yet marked.
     let indexed = top[first_moof..].iter().any(|h| &h.kind == b"moov" && h.read_body(file).is_ok_and(|b| parse(&b).is_ok()));
     if indexed {
         pad(file, &top, init_header)?;
         return Ok(true);
     }
+    let init_header = init_header.ok_or_else(|| invalid("no moov"))?;
     let init = parse(&init_header.read_body(file)?)?;
 
     let mut tracks = Vec::new();
@@ -552,7 +561,7 @@ fn convert(file: &mut impl Storage, cut_short: bool) -> io::Result<bool> {
         file.truncate(new_end)?;
     }
     file.sync()?;
-    pad(file, &top, init_header)?;
+    pad(file, &top, Some(init_header))?;
     Ok(true)
 }
 
@@ -901,6 +910,32 @@ pub(crate) mod tests {
         assert_eq!(file.log.iter().filter(|&&op| op == "pad").count(), 1);
         // Repaired at the next start.
         assert_regular(&converted(file.file.into_inner(), true).unwrap(), &video, &audio);
+    }
+
+    #[test]
+    fn a_power_cut_while_padding_does_not_cost_the_index() {
+        // The system wrote the initial moov's padding but not every fragment's (a power cut
+        // before the disk caught up): the only full index is the one at the end.
+        let (original, video, audio) = fragmented();
+        let moofs: Vec<u64> = top_level(&original).into_iter().filter(|(_, k)| k == b"moof").map(|(at, _)| at).collect();
+        let mut file = converted(original, false).unwrap();
+        for &at in &moofs[1..] {
+            file[at as usize + 4..at as usize + 8].copy_from_slice(b"moof");
+        }
+        assert_regular(&converted(file, true).unwrap(), &video, &audio);
+    }
+
+    #[test]
+    fn the_initial_index_is_padded_first_so_the_full_one_comes_first() {
+        // Stopped after the new index and one padding mark: the full index at the end must be the
+        // first moov left, or players would take the empty one.
+        let (original, _, _) = fragmented();
+        let mut file = Logged { file: Cursor::new(original), log: Vec::new(), writes_left: 2 };
+        assert!(convert(&mut file, false).is_err());
+        let file = file.file.into_inner();
+        let kinds: Vec<[u8; 4]> = top_level(&file).into_iter().map(|(_, k)| k).collect();
+        assert_eq!(kinds.iter().filter(|k| *k == b"moov").count(), 1, "boxes: {kinds:?}");
+        assert_eq!(kinds.last(), Some(b"moov"), "boxes: {kinds:?}");
     }
 
     #[test]
