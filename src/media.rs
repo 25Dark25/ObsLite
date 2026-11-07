@@ -118,7 +118,11 @@ impl<M: Muxer> Outputs<M> {
         }
         self.paused = paused;
         if paused {
+            // Paused again before the file went on: that resume is called off, or the keyframe
+            // it waited for would take the first pause out a second time.
             self.paused_from = self.file_end;
+            self.resuming = false;
+            self.pending_audio.clear();
         } else {
             // The file goes on at a keyframe, asked for now; audio from then on waits for it.
             (self.resuming, self.keyframe_wanted) = (true, true);
@@ -628,5 +632,27 @@ mod tests {
         // The replay buffer has all 7 s, from a keyframe.
         let replay = outputs.replay().unwrap();
         assert_eq!(replay.video.len(), 210);
+    }
+
+    #[test]
+    fn pausing_again_before_the_file_goes_on_takes_the_pause_out_once() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let mut outputs = Outputs::<FakeMuxer>::default();
+        outputs.start_file(PathBuf::from("rec.mp4"));
+        feed(&mut outputs, &written, 0, 2);
+        outputs.set_file_paused(true);
+        feed(&mut outputs, &written, 2, 5);
+        // Resumed and paused again before the keyframe the file would go on at.
+        outputs.set_file_paused(false);
+        outputs.set_file_paused(true);
+        feed(&mut outputs, &written, 5, 8);
+        let frames = |n: i64| Duration::from_nanos((n * (TICKS_PER_SECOND / 30) * 100) as u64);
+        assert_eq!(outputs.recorded(), frames(60), "still 2 s while paused");
+        outputs.set_file_paused(false);
+        feed(&mut outputs, &written, 8, 10);
+        assert_eq!(outputs.recorded(), frames(120));
+        let step = TICKS_PER_SECOND / 30;
+        let video: Vec<i64> = written.lock().unwrap().iter().filter(|(v, _)| *v).map(|(_, t)| *t).collect();
+        assert_eq!(video, (0..120).map(|n| n * step).collect::<Vec<_>>());
     }
 }

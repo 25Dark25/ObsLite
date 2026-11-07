@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Pausing a recording, resuming and pausing again before the file went on took the first pause
+  out twice: the rest of the recording got times from before what was already in it, or was
+  dropped, and the timer went back.
+
 ## [0.6.0] - 2026-10-29
 
 ### Changed
