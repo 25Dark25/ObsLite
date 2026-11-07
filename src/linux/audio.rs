@@ -21,13 +21,22 @@ fn source_name(device: &gst::Device) -> Option<String> {
     element.property::<Option<String>>("device")
 }
 
+/// Watches the audio sources. With GStreamer's PipeWire plugin installed, its provider hides the
+/// PulseAudio one, whose devices are the ones pulsesrc records; its own ones are left out later,
+/// having no `device` to give pulsesrc (`source_name`).
+fn audio_monitor() -> gst::DeviceMonitor {
+    let monitor = gst::DeviceMonitor::new();
+    monitor.add_filter(Some("Audio/Source"), None);
+    monitor.set_show_all_devices(true);
+    monitor
+}
+
 /// Devices for an input kind.
 pub fn list_devices(kind: InputKind) -> Vec<Device> {
     if gst::init().is_err() || matches!(kind, InputKind::Application(_)) {
         return Vec::new();
     }
-    let monitor = gst::DeviceMonitor::new();
-    monitor.add_filter(Some("Audio/Source"), None);
+    let monitor = audio_monitor();
     if monitor.start().is_err() {
         return Vec::new();
     }
@@ -81,4 +90,17 @@ pub fn capture(kind: InputKind, device_id: Option<&str>, shared: &InputShared) -
     }
     let _ = pipeline.set_state(gst::State::Null);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_device_list_shows_the_devices_pulsesrc_records() {
+        gst::init().unwrap();
+        // With GStreamer's PipeWire plugin installed, its provider hides the PulseAudio one,
+        // whose devices are the ones pulsesrc records: Settings listed only "Default".
+        assert!(audio_monitor().shows_all_devices());
+    }
 }

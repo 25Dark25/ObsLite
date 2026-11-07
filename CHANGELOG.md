@@ -76,6 +76,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Volumes, mutes, the region, the webcam and the other choices made in the docks are saved
   within a second, not only when obs-lite closes: signing out or shutting down Windows with
   obs-lite open (in the tray, say) ends it without closing it, and they were lost.
+- Linux: an empty or cut-short picture from the desktop (PipeWire before 1.4 sends empty ones;
+  GNOME does when only the pointer moved) no longer closes obs-lite at once: it is skipped.
+- Linux: recording a region on the GPU (VA-API) on GNOME records that region again; the whole
+  screen or window was recorded, scaled down to the region's size.
+- Linux: Settings › Audio lists the audio devices again when GStreamer's PipeWire plugin is
+  installed (a native build): it offered only "Default", and a device chosen before was reset.
+- Linux: every recording pipeline uses one VA-API display, as was meant: the sharing never took
+  place, so each opened its own.
+- Linux: listing the webcams no longer leaves the closed connection to the desktop's camera
+  service on GStreamer's PipeWire device provider, which is shared by the whole process.
 
 ## [0.6.0] - 2026-10-29
 

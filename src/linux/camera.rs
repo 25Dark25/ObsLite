@@ -53,12 +53,16 @@ fn present() -> bool {
 /// Cameras on a portal connection, identified by their PipeWire node name.
 fn devices_on(fd: &OwnedFd) -> Vec<CameraDevice> {
     let Some(provider) = gst::DeviceProviderFactory::by_name("pipewiredeviceprovider") else { return Vec::new() };
+    // The provider is one for the whole process: the portal's connection, closed once listed,
+    // is not left on it.
     provider.set_property("fd", fd.as_raw_fd());
     if provider.start().is_err() {
+        provider.set_property("fd", -1i32);
         return Vec::new();
     }
     let devices = provider.devices();
     provider.stop();
+    provider.set_property("fd", -1i32);
     // The provider may report a camera more than once.
     let mut cameras: Vec<CameraDevice> = Vec::new();
     for device in devices.iter().filter(|d| d.has_classes("Video/Source")) {
@@ -152,6 +156,18 @@ fn pack(data: &[u8], stride: usize, width: u32, height: u32) -> Option<Vec<u8>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listing_cameras_leaves_no_closed_connection_on_the_shared_provider() {
+        gst::init().unwrap();
+        // Where GStreamer's PipeWire plugin is (not in CI).
+        let Some(provider) = gst::DeviceProviderFactory::by_name("pipewiredeviceprovider") else { return };
+        // Any file stands in for the portal's connection, which is closed once listed.
+        let (reader, _writer) = std::io::pipe().unwrap();
+        devices_on(&OwnedFd::from(reader));
+        // The provider is one for the whole process: whatever lists devices next would use it.
+        assert_eq!(provider.property::<i32>("fd"), -1);
+    }
 
     #[test]
     fn denied_access_says_how_to_allow_it() {

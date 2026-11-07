@@ -2,7 +2,7 @@
 //! and encodes without the CPU touching their pixels. Only the preview (small) and screenshots
 //! (once) are brought into memory.
 
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
 use gstreamer as gst;
 use gstreamer::prelude::*;
@@ -56,18 +56,25 @@ fn offer(readable: &[String]) -> Option<String> {
 /// Makes `pipeline` use the same VA-API display as every other: Intel's driver crashed converting
 /// frames while another display in the process was converting too (the preview's).
 pub fn share_display(pipeline: &gst::Pipeline) {
-    static DISPLAY: OnceLock<Option<gst::Context>> = OnceLock::new();
-    let display = DISPLAY.get_or_init(|| {
-        // A VA-API element opens the display when it gets ready, and keeps it as its context.
-        let element = gst::ElementFactory::make("vapostproc").build().ok()?;
-        element.set_state(gst::State::Ready).ok()?;
-        let context = element.context("gst.va.display.handle");
-        let _ = element.set_state(gst::State::Null);
-        context
-    });
-    if let Some(display) = display {
+    static DISPLAY: Mutex<Option<gst::Context>> = Mutex::new(None);
+    let mut display = DISPLAY.lock().unwrap();
+    if display.is_none() {
+        *display = open_display();
+    }
+    if let Some(display) = display.as_ref() {
         pipeline.set_context(display);
     }
+}
+
+/// A VA-API display, as a context. A VA-API element opens one when it gets ready and posts it to
+/// its bin, which keeps it: a lone element keeps none.
+fn open_display() -> Option<gst::Context> {
+    let bin = gst::Pipeline::new();
+    bin.add(&gst::ElementFactory::make("vapostproc").build().ok()?).ok()?;
+    bin.set_state(gst::State::Ready).ok()?;
+    let context = bin.context("gst.va.display.handle");
+    let _ = bin.set_state(gst::State::Null);
+    context
 }
 
 /// Whether the frame is a DMA-BUF, which only the GPU reads.
@@ -182,6 +189,19 @@ pub(super) fn rgba(sample: &gst::Sample) -> Option<(u32, u32, Vec<u8>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pipelines_are_given_the_shared_display() {
+        gst::init().unwrap();
+        // Where VA-API is (not in CI).
+        if gst::ElementFactory::find("vapostproc").is_none() {
+            return;
+        }
+        let pipeline = gst::Pipeline::new();
+        share_display(&pipeline);
+        // A lone element keeps no context it makes, so nothing was shared.
+        assert!(pipeline.context("gst.va.display.handle").is_some());
+    }
 
     #[test]
     fn the_desktops_formats_are_offered_in_va_apis_layout_and_linear() {
