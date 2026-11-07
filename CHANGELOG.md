@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OK in Settings during a recording no longer restarts an audio device that had failed: its meter
   moved again, but the recording stayed silent until it was stopped. The device is tried again
   when the next recording or replay buffer starts, as before.
+- With two obs-lite open, closing one no longer makes the other's recording go unrepaired if
+  that one then stops partway (a crash, a power cut): saving its settings wrote over the
+  recording the other one had just started.
 
 ## [0.6.0] - 2026-10-29
 
