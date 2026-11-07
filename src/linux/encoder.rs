@@ -551,7 +551,7 @@ fn to_packet(sample: &gst::Sample) -> Option<Packet> {
     let time = segment.to_running_time(buffer.pts()?)?;
     let map = buffer.map_readable().ok()?;
     Some(Packet {
-        data: map.as_slice().to_vec(),
+        data: map.as_slice().into(),
         time: (time.nseconds() / NS_PER_TICK) as i64,
         duration: buffer.duration().map_or(0, |d| (d.nseconds() / NS_PER_TICK) as i64),
         key: !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT),
@@ -974,7 +974,7 @@ mod tests {
         let sample = gst::Sample::builder().buffer(&buffer).segment(&segment).build();
         let packet = to_packet(&sample).unwrap();
         assert_eq!(packet.time, 5_000_000, "0.5 s in 100 ns units");
-        assert_eq!(packet.data, [1, 2, 3]);
+        assert_eq!(*packet.data, [1, 2, 3]);
         assert!(packet.key, "a buffer without DELTA_UNIT is a keyframe");
     }
 

@@ -607,7 +607,7 @@ impl App {
             return;
         }
         if !*replay {
-            return self.stop_session(ctx, None);
+            return self.stop_session(ctx, StopReason::User);
         }
         *recording = None;
         // The replay buffer keeps the session going: only the file ends.
@@ -624,13 +624,13 @@ impl App {
         let RecState::Active { session, recording, replay, .. } = &mut self.rec else { return };
         *replay = false;
         if recording.is_none() {
-            return self.stop_session(ctx, None);
+            return self.stop_session(ctx, StopReason::User);
         }
         session.shared.outputs.lock().unwrap().set_replay(None);
     }
 
     /// Ends capture and encoding, writing out the recording if there is one.
-    fn stop_session(&mut self, ctx: &egui::Context, reason: Option<String>) {
+    fn stop_session(&mut self, ctx: &egui::Context, why: StopReason) {
         let RecState::Active { session, mixer, recording, .. } = std::mem::replace(&mut self.rec, RecState::Idle) else {
             return;
         };
@@ -639,6 +639,7 @@ impl App {
             *camera.shared.sink.lock().unwrap() = None;
         }
         let (encoder, stop_error) = session.stop();
+        let reason = stop_message(&why, stop_error.as_deref(), recording.is_some());
         if recording.is_none() {
             // Only the replay buffer: nothing to write; let the encoder wind down elsewhere.
             if let Some(encoder) = encoder {
@@ -801,23 +802,29 @@ impl App {
             }
         }
 
-        // A recording that cannot be written (its folder, a full disk, a failed encoder) is stopped
-        // now, not when the user stops it, so the error shows right away.
-        if let RecState::Active { session, recording: Some(_), .. } = &self.rec
-            && session.shared.outputs.lock().unwrap().failed()
-        {
-            return self.stop_recording(ctx);
+        // An encoder that failed ends the session, replay buffer included: nothing more would be
+        // encoded. A recording that cannot be written (its folder, a full disk) is stopped now,
+        // not when the user stops it, so the error shows right away.
+        if let RecState::Active { session, recording, .. } = &self.rec {
+            let outputs = session.shared.outputs.lock().unwrap();
+            if let Some(e) = outputs.encoder_error().map(str::to_owned) {
+                drop(outputs);
+                return self.stop_session(ctx, StopReason::EncoderFailed(e));
+            }
+            if recording.is_some() && outputs.failed() {
+                drop(outputs);
+                return self.stop_recording(ctx);
+            }
         }
         if self.active_session().is_some_and(Session::is_finished) {
-            let reason = if self.is_recording() {
-                tr!("La fuente dejó de estar disponible; guardando…", "The source is no longer available; saving…")
-            } else {
-                tr!("La fuente dejó de estar disponible; búfer de repetición detenido.", "The source is no longer available; replay buffer stopped.")
-            };
-            return self.stop_session(ctx, Some(reason.into()));
+            return self.stop_session(ctx, StopReason::Ended);
         }
         if self.preview.as_ref().is_some_and(Session::is_finished) {
-            self.source_lost(tr!("La fuente ya no está disponible. Añade otra con el botón +.", "The source is no longer available. Add another one with the + button.").into());
+            let (_, error) = self.preview.take().expect("checked").stop();
+            self.source_lost(match error {
+                Some(e) => tr!("No se pudo capturar la fuente: {}", "Could not capture the source: {}", e),
+                None => tr!("La fuente ya no está disponible. Añade otra con el botón +.", "The source is no longer available. Add another one with the + button.").into(),
+            });
         }
         self.cpu.update();
     }
@@ -2116,6 +2123,39 @@ fn input_failed(input: &Option<Input>) -> bool {
     input.as_ref().is_some_and(|i| i.shared.error().is_some())
 }
 
+/// Why a recording session is stopped.
+enum StopReason {
+    /// The user stopped it.
+    User,
+    /// The capture ended by itself: the source went away, or it failed.
+    Ended,
+    /// The encoder failed.
+    EncoderFailed(String),
+}
+
+/// What the status line says when a session stops, given the error the capture ended with
+/// (if any) and whether a recording is being saved; `None` keeps the usual messages.
+fn stop_message(why: &StopReason, capture_error: Option<&str>, recording: bool) -> Option<String> {
+    match (why, capture_error) {
+        // A recording being saved says what went wrong once it is saved.
+        (StopReason::User, _) | (StopReason::EncoderFailed(_), _) if recording => None,
+        (StopReason::User, _) => None,
+        (StopReason::EncoderFailed(e), _) => Some(tr!("Búfer de repetición detenido: {}", "Replay buffer stopped: {}", e)),
+        // E.g. the encoder could not be made for the first frame.
+        (StopReason::Ended, Some(e)) if recording => Some(tr!("La captura se detuvo: {}; guardando…", "Capture stopped: {}; saving…", e)),
+        (StopReason::Ended, Some(e)) => {
+            Some(tr!("La captura se detuvo: {}; búfer de repetición detenido.", "Capture stopped: {}; replay buffer stopped.", e))
+        }
+        (StopReason::Ended, None) if recording => {
+            Some(tr!("La fuente dejó de estar disponible; guardando…", "The source is no longer available; saving…").into())
+        }
+        (StopReason::Ended, None) => Some(
+            tr!("La fuente dejó de estar disponible; búfer de repetición detenido.", "The source is no longer available; replay buffer stopped.")
+                .into(),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
@@ -2196,6 +2236,21 @@ mod tests {
         finish_on_exit(RecState::Saving(rx));
         assert!(saved.load(Ordering::SeqCst), "exited before the recording was finalized");
         saver.join().unwrap();
+    }
+
+    #[test]
+    fn a_session_that_ended_says_why() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        let encoder = "could not start the H.264 encoder";
+        for recording in [false, true] {
+            // Without an error the source went away; with one, that error is what is shown.
+            let gone = stop_message(&StopReason::Ended, None, recording).unwrap();
+            let message = stop_message(&StopReason::Ended, Some(encoder), recording).unwrap();
+            assert!(message.contains(encoder) && !message.contains(&gone[..gone.find(';').unwrap()]), "{message}");
+        }
+        let message = stop_message(&StopReason::EncoderFailed(encoder.into()), None, false).unwrap();
+        assert!(message.contains(encoder), "{message}");
+        assert!(stop_message(&StopReason::User, None, false).is_none());
     }
 
     #[test]
