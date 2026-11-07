@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recorded nothing, and desktop audio no longer left the application out.
 - Windows: a webcam whose picture rows are padded (picture widths such as 424 or 1366) no
   longer stays blank: every such picture was skipped.
+- Windows: Application Audio Capture lists Store apps (Calculator, Media Player…) by their own
+  names and records them. They were all one entry, "ApplicationFrameHost.exe", which recorded
+  silence.
 
 ## [0.6.0] - 2026-10-29
 
