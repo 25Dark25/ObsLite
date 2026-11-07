@@ -116,6 +116,9 @@ pub struct App {
     camera: Option<Camera>,
     camera_texture: Option<TextureHandle>,
     camera_seq: Option<u64>,
+    /// The settings as last saved, and when they were last compared with them.
+    saved_settings: String,
+    settings_checked: Instant,
     meters: [f32; 3],
     /// For audio inputs to wake the UI when they start to make sound.
     ctx: egui::Context,
@@ -180,6 +183,8 @@ impl App {
             camera: None,
             camera_texture: None,
             camera_seq: None,
+            saved_settings: serde_json::to_string(&config).unwrap_or_default(),
+            settings_checked: Instant::now(),
             config,
             sources: Vec::new(),
             selected: None,
@@ -887,6 +892,20 @@ impl App {
         }
         self.apply_capture_visibility();
         self.config.save();
+    }
+
+    /// Saves the settings once a second when they changed (a volume, a mute, the region…):
+    /// signing out or shutting down Windows ends obs-lite without its exit, which saved them.
+    fn save_changed_settings(&mut self) {
+        if self.settings_checked.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        self.settings_checked = Instant::now();
+        let Ok(now) = serde_json::to_string(&self.config) else { return };
+        if now != self.saved_settings {
+            self.config.save();
+            self.saved_settings = serde_json::to_string(&self.config).unwrap_or(now);
+        }
     }
 
     /// Registers the configured hotkeys, reporting the ones another application already uses.
@@ -1660,6 +1679,7 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll(ctx);
+        self.save_changed_settings();
         let hidden = preview_hidden(ctx.input(|i| i.viewport().visible()), self.last_drawn.elapsed());
         if let Some(session) = self.active_session().or(self.preview.as_ref()) {
             session.shared.preview_hidden.store(hidden, Ordering::Relaxed);
@@ -2152,6 +2172,8 @@ mod tests {
             camera: None,
             camera_texture: None,
             camera_seq: None,
+            saved_settings: String::new(),
+            settings_checked: Instant::now(),
             meters: [0.0; 3],
             ctx: egui::Context::default(),
             last_drawn: Instant::now(),
@@ -2205,6 +2227,20 @@ mod tests {
         finish_on_exit(RecState::Saving(rx));
         assert!(saved.load(Ordering::SeqCst), "exited before the recording was finalized");
         saver.join().unwrap();
+    }
+
+    #[test]
+    fn a_volume_or_mute_change_is_saved_without_waiting_for_exit() {
+        let mut app = test_app();
+        app.saved_settings = serde_json::to_string(&app.config).unwrap();
+        // Signing out or shutting down Windows ends obs-lite without its exit, which saved them.
+        app.config.mic_muted = true;
+        app.config.system_volume = 0.25;
+        app.settings_checked -= Duration::from_secs(2);
+        app.save_changed_settings();
+        let saved = Config::load();
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("obs-lite-test-{}", std::process::id())));
+        assert!(saved.mic_muted && saved.system_volume == 0.25, "not saved");
     }
 
     #[test]

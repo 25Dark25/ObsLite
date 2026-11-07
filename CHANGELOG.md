@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - With two obs-lite open, closing one no longer makes the other's recording go unrepaired if
   that one then stops partway (a crash, a power cut): saving its settings wrote over the
   recording the other one had just started.
+- Volumes, mutes, the region, the webcam and the other choices made in the docks are saved
+  within a second, not only when obs-lite closes: signing out or shutting down Windows with
+  obs-lite open (in the tray, say) ends it without closing it, and they were lost.
 
 ## [0.6.0] - 2026-10-29
 
