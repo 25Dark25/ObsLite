@@ -251,9 +251,14 @@ impl App {
     /// fragmented MP4: make it a regular one. A finished recording is left as it is.
     fn recover_last_recording(&mut self) {
         let Some(path) = self.config.last_recording.take() else { return };
-        if let Ok(true) = crate::mp4::repair(&path) {
-            let shown = crate::platform::sys::display_path(&path);
-            self.set_status(tr!("Se recuperó la grabación interrumpida '{}'", "Recovered the interrupted recording '{}'", shown.display()), Some(path), false);
+        match crate::mp4::repair(&path) {
+            Ok(true) => {
+                let shown = crate::platform::sys::display_path(&path);
+                self.set_status(tr!("Se recuperó la grabación interrumpida '{}'", "Recovered the interrupted recording '{}'", shown.display()), Some(path), false);
+            }
+            // Another obs-lite is still writing it: kept, in case that one stops before finishing it.
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => self.config.last_recording = Some(path),
+            _ => {}
         }
     }
 

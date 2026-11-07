@@ -15,9 +15,11 @@ pub fn defragment(path: &Path) -> io::Result<()> {
 }
 
 /// Converts a recording whose writing stopped partway (a crash, a power cut), keeping every whole
-/// fragment. Returns whether it was fragmented: a finished recording is already regular.
+/// fragment. Returns whether it was fragmented: a finished recording is already regular. Fails
+/// with `WouldBlock` while another obs-lite still writes it (it holds a lock on it until then).
 pub fn repair(path: &Path) -> io::Result<bool> {
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    file.try_lock()?;
     convert(&mut file, true)
 }
 
@@ -910,6 +912,22 @@ pub(crate) mod tests {
         assert_eq!(file.log.iter().filter(|&&op| op == "pad").count(), 1);
         // Repaired at the next start.
         assert_regular(&converted(file.file.into_inner(), true).unwrap(), &video, &audio);
+    }
+
+    #[test]
+    fn a_recording_still_being_written_is_not_repaired() {
+        let (original, _, _) = fragmented();
+        let path = std::env::temp_dir().join(format!("obs-lite-busy-{}.mp4", std::process::id()));
+        std::fs::write(&path, &original).unwrap();
+        // Another obs-lite writing it holds this lock until it finishes the file.
+        let writer = File::open(&path).unwrap();
+        writer.lock().unwrap();
+        let result = repair(&path);
+        drop(writer);
+        let after = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(result.map_err(|e| e.kind()), Err(io::ErrorKind::WouldBlock));
+        assert!(after == original, "the file was changed");
     }
 
     #[test]

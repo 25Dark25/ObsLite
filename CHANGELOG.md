@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again, looking for something to repair, before the window shows; on a hard disk or a network
   folder after a restart this could take seconds or more. Only a recording that was not finished
   whole is checked.
+- Linux: an obs-lite started while another one was recording (after the first one was closed)
+  could take that recording for one cut short and "repair" it while it was still being written,
+  ruining it. A recording is now locked while it is written, and the repair leaves a locked file
+  alone (and checks it again at the next start).
 
 ## [0.6.0] - 2026-10-29
 
