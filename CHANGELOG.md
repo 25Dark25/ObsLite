@@ -27,6 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A capture that ends with an error (the encoder could not be started, the screen-sharing
   dialog was cancelled, a missing plugin on Linux) shows that error, instead of "The source is
   no longer available".
+- A power cut (or a crash of the system) while a recording was being made regular could leave a
+  file that the repair at the next start made unplayable, taking its only full index for padding,
+  or that players read as empty. The initial index is now made padding first and put on the
+  disk before the fragments' indexes, and the repair takes only an index before the fragments
+  for the initial one.
+- Starting obs-lite after a recording no longer reads the whole box list of that recording
+  again, looking for something to repair, before the window shows; on a hard disk or a network
+  folder after a restart this could take seconds or more. Only a recording that was not finished
+  whole is checked.
+- Linux: an obs-lite started while another one was recording (after the first one was closed)
+  could take that recording for one cut short and "repair" it while it was still being written,
+  ruining it. A recording is now locked while it is written, and the repair leaves a locked file
+  alone (and checks it again at the next start).
 
 ## [0.6.0] - 2026-10-29
 
