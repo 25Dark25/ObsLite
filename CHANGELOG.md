@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The README no longer says that pausing a recording pauses the replay buffer too, which stopped
+  being so in 0.6.0.
+
 ## [0.6.0] - 2026-10-29
 
 ### Changed

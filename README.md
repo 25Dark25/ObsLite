@@ -222,7 +222,6 @@ Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and scre
   installer shows an unknown publisher.
 - The installer is per user: each Windows account that wants obs-lite installs it. Uninstalling
   keeps the settings in `%APPDATA%\obs-lite`.
-- Pausing a recording also pauses the replay buffer: both share one encoder and clock.
 - A replay starts at a keyframe (one every 2 s), so it is up to 2 s longer than the maximum
   replay time.
 - Linux: the Flatpak bundle is not updated by `flatpak update`, and with no network access there
@@ -316,7 +315,7 @@ with [WiX](https://wixtoolset.org/) 6.0.2 (`installer/build.ps1`).
 WGC (only when the image changes) ─┐
 webcam (Media Foundation) ─────────┴─► GPU canvas (region crop + webcam overlay)
                                                 │
-recording clock (excludes pauses) ─► video thread converts the canvas every 1/fps
+recording clock ───────────────────► video thread converts the canvas every 1/fps
                                      to NV12 (GPU video processor, scaling) into a queue
 WASAPI desktop + mic + app ─► mixer paced by the same clock (fills silence)
                                                 │
