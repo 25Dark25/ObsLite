@@ -208,6 +208,10 @@ impl Default for Config {
 }
 
 fn path() -> Option<PathBuf> {
+    // Tests never touch the user's settings.
+    if cfg!(test) {
+        return Some(std::env::temp_dir().join(format!("obs-lite-test-{}", std::process::id())).join("settings.json"));
+    }
     Some(dirs::config_dir()?.join("obs-lite").join("settings.json"))
 }
 
