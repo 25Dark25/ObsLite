@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   itself: it went on to record that display (with the region drawn on the window) while the
   preview stayed black. The source changes only when one is chosen; a saved region is dropped at
   start-up too when the saved source is not there.
+- Windows: Application Audio Capture follows an application that was closed and opened again
+  while obs-lite stayed open. It stayed bound to the old process: the application's channel
+  recorded nothing, and desktop audio no longer left the application out.
 
 ## [0.6.0] - 2026-10-29
 

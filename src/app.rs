@@ -548,10 +548,17 @@ impl App {
         // A menu left open (the session started from a hotkey) would still change the sources.
         egui::Popup::close_all(ctx);
 
-        // The application may have started after obs-lite, and a device that failed (unplugged)
-        // may be back.
-        if self.app_audio.is_none() {
-            self.restart_app_audio();
+        // The application may have started, restarted or exited since, and a device that failed
+        // (unplugged) may be back.
+        if let Some(exe) = &self.config.app_audio {
+            let running = capture::list_audio_apps().into_iter().find(|a| a.exe.eq_ignore_ascii_case(exe)).map(|a| a.pid);
+            let captured = self.app_audio.as_ref().and_then(|a| match a.kind {
+                InputKind::Application(pid) => Some(pid),
+                _ => None,
+            });
+            if app_audio_stale(captured, running, input_failed(&self.app_audio)) {
+                self.restart_app_audio();
+            }
         }
         if input_failed(&self.system) {
             self.restart_input(InputKind::System);
@@ -2122,6 +2129,12 @@ fn input_failed(input: &Option<Input>) -> bool {
     input.as_ref().is_some_and(|i| i.shared.error().is_some())
 }
 
+/// Whether the application's audio has to be captured again: the process captured is not the
+/// one running now (the application started, restarted or exited since), or its capture failed.
+fn app_audio_stale(captured: Option<u32>, running: Option<u32>, failed: bool) -> bool {
+    captured != running || failed
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
@@ -2202,6 +2215,17 @@ mod tests {
         finish_on_exit(RecState::Saving(rx));
         assert!(saved.load(Ordering::SeqCst), "exited before the recording was finalized");
         saver.join().unwrap();
+    }
+
+    #[test]
+    fn application_audio_follows_the_application_to_its_new_process() {
+        // (process captured, process of that application running now, capture failed)
+        assert!(app_audio_stale(None, Some(2), false), "started after obs-lite");
+        assert!(app_audio_stale(Some(1), Some(2), false), "restarted: a new process");
+        assert!(app_audio_stale(Some(1), None, false), "exited: desktop audio must take it back");
+        assert!(app_audio_stale(Some(1), Some(1), true), "its capture failed");
+        assert!(!app_audio_stale(Some(1), Some(1), false));
+        assert!(!app_audio_stale(None, None, false));
     }
 
     #[test]
