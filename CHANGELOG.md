@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GNOME does when only the pointer moved) no longer closes obs-lite at once: it is skipped.
 - Linux: recording a region on the GPU (VA-API) on GNOME records that region again; the whole
   screen or window was recorded, scaled down to the region's size.
+- Linux: Settings › Audio lists the audio devices again when GStreamer's PipeWire plugin is
+  installed (a native build): it offered only "Default", and a device chosen before was reset.
 
 ## [0.6.0] - 2026-10-29
 
