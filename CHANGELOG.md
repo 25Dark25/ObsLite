@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows: Application Audio Capture follows an application that was closed and opened again
   while obs-lite stayed open. It stayed bound to the old process: the application's channel
   recorded nothing, and desktop audio no longer left the application out.
+- Windows: a webcam whose picture rows are padded (picture widths such as 424 or 1366) no
+  longer stays blank: every such picture was skipped.
 
 ## [0.6.0] - 2026-10-29
 
