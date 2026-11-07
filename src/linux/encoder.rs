@@ -1078,9 +1078,9 @@ mod tests {
         for frame in &frames {
             // As GNOME's frames come from pipewiresrc: with a crop meta for the whole frame. A
             // region's own crop was added after it, and VA-API used the first one: the whole frame.
-            let mut buffer = frame.buffer_owned().unwrap();
+            let (mut buffer, caps) = (frame.buffer_owned().unwrap(), frame.caps_owned().unwrap());
             gst_video::VideoCropMeta::add(buffer.make_mut(), (0, 0, size.0, size.1));
-            encoder.push_gpu_frame(&gst::Sample::builder().buffer(&buffer).caps(frame.caps().unwrap()).build());
+            encoder.push_gpu_frame(&gst::Sample::builder().buffer(&buffer).caps(&caps).build());
             std::thread::sleep(Duration::from_millis(20));
         }
         let finishing = std::time::Instant::now();
