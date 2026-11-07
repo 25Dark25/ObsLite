@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asleep. obs-lite made up for it at once on waking: all that silence was allocated (gigabytes
   after a night, enough to crash it), encoded and written. The time asleep is now left out of
   the recording, as on Linux.
+- When the computer fell behind and frames were skipped, the video lost that time and ran ahead
+  of the audio, more with every skip (on Windows about half the skipped time was lost). Each
+  frame now lasts until the next one, in recordings and saved replays.
 
 ## [0.6.0] - 2026-10-29
 
