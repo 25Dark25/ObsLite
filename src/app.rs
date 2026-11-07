@@ -874,11 +874,12 @@ impl App {
             self.refresh_sources();
             self.config.source_label = self.selected_source().map(|s| s.label.clone());
         }
-        // OK also tries again a device that failed (unplugged, then plugged back in).
-        if system_changed || input_failed(&self.system) {
+        // OK also tries again a device that failed, when no session reads it.
+        let active = self.is_session_active();
+        if restart_on_ok(system_changed, input_failed(&self.system), active) {
             self.restart_input(InputKind::System);
         }
-        if mic_changed || input_failed(&self.mic) {
+        if restart_on_ok(mic_changed, input_failed(&self.mic), active) {
             self.restart_input(InputKind::Microphone);
         }
         if let Some(mic) = &self.mic {
@@ -2116,6 +2117,14 @@ fn input_failed(input: &Option<Input>) -> bool {
     input.as_ref().is_some_and(|i| i.shared.error().is_some())
 }
 
+/// Whether OK in Settings restarts an audio input: its device changed, or it failed (unplugged,
+/// then plugged back in). Not while recording: the mixer reads the inputs it started with, so a
+/// new one would move the meter while the recording stayed silent. Starting the next session
+/// tries a failed input again.
+fn restart_on_ok(changed: bool, failed: bool, session_active: bool) -> bool {
+    !session_active && (changed || failed)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
@@ -2196,6 +2205,16 @@ mod tests {
         finish_on_exit(RecState::Saving(rx));
         assert!(saved.load(Ordering::SeqCst), "exited before the recording was finalized");
         saver.join().unwrap();
+    }
+
+    #[test]
+    fn ok_in_settings_does_not_swap_an_input_the_recording_reads() {
+        // The mixer reads the inputs it was started with: a new one would move the meter while
+        // the recording stays silent. The device is tried again when the next session starts.
+        assert!(!restart_on_ok(false, true, true));
+        assert!(restart_on_ok(false, true, false), "an input that failed is tried again");
+        assert!(restart_on_ok(true, false, false));
+        assert!(!restart_on_ok(false, false, false));
     }
 
     #[test]

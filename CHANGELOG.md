@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- OK in Settings during a recording no longer restarts an audio device that had failed: its meter
+  moved again, but the recording stayed silent until it was stopped. The device is tried again
+  when the next recording or replay buffer starts, as before.
+
 ## [0.6.0] - 2026-10-29
 
 ### Changed
