@@ -85,11 +85,29 @@ pub fn volatile(_path: &Path) -> bool {
     false
 }
 
+/// Starts COM on this thread (multithreaded) unless it already runs here, as it must before
+/// calling Windows Runtime APIs, and keeps the multithreaded apartment up for good. windows-rs
+/// caches the objects those APIs are reached through, for the whole process; once every thread
+/// that had started COM ended, Windows unloaded the code behind them, and the next call crashed.
+/// On the UI thread, which winit started as single-threaded, the first part changes nothing.
+pub fn init_com() {
+    use std::sync::Once;
+    use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoIncrementMTAUsage, CoInitializeEx};
+    static KEEP_MTA: Once = Once::new();
+    // The cookie would only give the usage back, which is never wanted.
+    KEEP_MTA.call_once(|| {
+        let _ = unsafe { CoIncrementMTAUsage() };
+    });
+    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+}
+
 /// GET `url` and return the body as text.
 pub fn http_get(url: &str) -> Result<String, String> {
     use windows::Foundation::Uri;
     use windows::Web::Http::HttpClient;
     use windows::core::HSTRING;
+    // Called on a thread of its own.
+    init_com();
     let get = || -> windows::core::Result<String> {
         let client = HttpClient::new()?;
         // GitHub's API rejects requests without a User-Agent.
