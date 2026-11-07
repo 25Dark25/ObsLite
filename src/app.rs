@@ -233,7 +233,7 @@ impl App {
         app.restart_app_audio();
         app.restart_input(InputKind::System);
         app.restart_input(InputKind::Microphone);
-        app.refresh_sources();
+        app.pick_saved_source();
         app.restart_preview(&cc.egui_ctx);
         app.restart_camera(&cc.egui_ctx);
         app.bind_hotkeys();
@@ -286,17 +286,23 @@ impl App {
         self.is_recording() && self.active_session().is_some_and(|s| s.shared.encoder_ready.load(Ordering::Acquire))
     }
 
-    fn refresh_sources(&mut self) {
+    /// Lists the sources again (windows come and go). The selection is left as it is: only the
+    /// user changes it, and a source that went away is noticed when its capture ends.
+    fn refresh_source_list(&mut self) {
         self.sources = capture::list_sources();
-        let still_there = self.selected.is_some_and(|id| self.sources.iter().any(|s| s.id == id));
-        if !still_there {
-            let wanted = self.config.source_label.as_deref();
-            self.selected = self
-                .sources
-                .iter()
-                .find(|s| Some(s.label.as_str()) == wanted)
-                .or_else(|| self.sources.first())
-                .map(|s| s.id);
+    }
+
+    /// At start-up: selects the saved source, or else the first one.
+    fn pick_saved_source(&mut self) {
+        self.refresh_source_list();
+        let wanted = self.config.source_label.as_deref();
+        match self.sources.iter().find(|s| Some(s.label.as_str()) == wanted) {
+            Some(saved) => self.selected = Some(saved.id),
+            None => {
+                self.selected = self.sources.first().map(|s| s.id);
+                // A region belongs to the source it was drawn on.
+                self.config.region = None;
+            }
         }
     }
 
@@ -871,7 +877,7 @@ impl App {
         if old.language != c.language {
             i18n::set(c.language.unwrap_or_else(Language::system));
             // Source names are translated ("Pantalla 1" / "Display 1").
-            self.refresh_sources();
+            self.refresh_source_list();
             self.config.source_label = self.selected_source().map(|s| s.label.clone());
         }
         // OK also tries again a device that failed (unplugged, then plugged back in).
@@ -1109,7 +1115,7 @@ impl App {
                     });
                     // Windows come and go; refresh the list each time the menu opens.
                     if add.response.clicked() {
-                        self.refresh_sources();
+                        self.refresh_source_list();
                         self.cameras = camera::list_devices();
                         self.audio_apps = capture::list_audio_apps();
                     }
@@ -2196,6 +2202,18 @@ mod tests {
         finish_on_exit(RecState::Saving(rx));
         assert!(saved.load(Ordering::SeqCst), "exited before the recording was finalized");
         saver.join().unwrap();
+    }
+
+    #[test]
+    fn opening_the_add_menu_does_not_pick_a_source() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut app = test_app();
+        app.config.region = Some(Region { x: 100, y: 100, width: 800, height: 600 });
+        app.source_lost("gone".into());
+        // The + menu lists the sources again: the region drawn on the window that went away
+        // must not end up recording another source the user never chose.
+        app.refresh_source_list();
+        assert!(app.selected.is_none(), "{:?} chosen without the user", app.selected);
     }
 
     #[test]

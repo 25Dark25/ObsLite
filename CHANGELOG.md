@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Opening the + menu after the recorded window was closed no longer selects the first display by
+  itself: it went on to record that display (with the region drawn on the window) while the
+  preview stayed black. The source changes only when one is chosen; a saved region is dropped at
+  start-up too when the saved source is not there.
+
 ## [0.6.0] - 2026-10-29
 
 ### Changed
