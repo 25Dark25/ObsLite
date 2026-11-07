@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The README no longer says that pausing a recording pauses the replay buffer too, which stopped
+  being so in 0.6.0.
 - Windows: the update check and starting a capture no longer lean on COM started by other
   threads. Once those threads had ended, Windows unloaded code that was still in use, and the
   next call crashed the process. The tests crashed so about once in 20 runs; it was not seen in
