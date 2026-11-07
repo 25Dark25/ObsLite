@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Saving a replay no longer copies the whole replay buffer while the encoder waits for it: with a
   long buffer (minutes, high quality) the copy took up to about half a second and took memory
   again, the window stopped for that time and a recording running at the same time lost frames.
+- An encoder that fails while only the replay buffer runs (a GPU reset, a driver error) now
+  stops it and says why. Before, the replay buffer went on saying it was on but kept nothing new,
+  and a recording started afterwards got no frame and said only "no frame was encoded".
+- A capture that ends with an error (the encoder could not be started, the screen-sharing
+  dialog was cancelled, a missing plugin on Linux) shows that error, instead of "The source is
+  no longer available".
 
 ## [0.6.0] - 2026-10-29
 

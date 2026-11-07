@@ -69,7 +69,9 @@ pub struct Outputs<M: Muxer> {
     audio_format: Option<M::Format>,
     /// The encoder should make its next frame a keyframe, for a recording to start on.
     keyframe_wanted: bool,
+    /// Why the recording failed, and why the encoder did (which outlives the recording).
     error: Option<String>,
+    encoder_error: Option<String>,
     /// While paused nothing reaches the file, which goes on at the first keyframe after (`resuming`),
     /// its times moved back by the pause; the replay buffer keeps everything.
     paused: bool,
@@ -94,6 +96,7 @@ impl<M: Muxer> Default for Outputs<M> {
             audio_format: None,
             keyframe_wanted: false,
             error: None,
+            encoder_error: None,
             paused: false,
             resuming: false,
             skipped: 0,
@@ -108,7 +111,9 @@ impl<M: Muxer> Default for Outputs<M> {
 impl<M: Muxer> Outputs<M> {
     /// Starts recording to `path` at the next keyframe, which is asked for right away.
     pub fn start_file(&mut self, path: PathBuf) {
-        (self.path, self.file, self.error, self.keyframe_wanted) = (Some(path), None, None, true);
+        (self.path, self.file, self.keyframe_wanted) = (Some(path), None, true);
+        // A failed encoder makes no frame for it.
+        self.error = self.encoder_error.clone();
         (self.paused, self.resuming, self.skipped, self.paused_from, self.resumed_at) = (false, false, 0, 0, 0);
     }
 
@@ -252,8 +257,15 @@ impl<M: Muxer> Outputs<M> {
         }
     }
 
+    /// The encoder failed: nothing more will be encoded, for this recording or any later one.
     pub fn record_error(&mut self, error: String) {
-        self.error.get_or_insert(error);
+        self.error.get_or_insert_with(|| error.clone());
+        self.encoder_error.get_or_insert(error);
+    }
+
+    /// Why the encoder failed, if it did: the whole session should be stopped.
+    pub fn encoder_error(&self) -> Option<&str> {
+        self.encoder_error.as_deref()
     }
 
     /// Writes `packet` to the file, if there is one, with the time pauses took out removed.
@@ -632,6 +644,21 @@ mod tests {
         // The replay buffer has all 7 s, from a keyframe.
         let replay = outputs.replay().unwrap();
         assert_eq!(replay.video.len(), 210);
+    }
+
+    #[test]
+    fn an_encoder_that_failed_fails_the_replay_buffer_and_every_later_recording() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let mut outputs = Outputs::<FakeMuxer>::default();
+        outputs.set_replay(Some(20));
+        feed(&mut outputs, &written, 0, 1);
+        outputs.record_error("the GPU could not convert the picture".into());
+        assert!(outputs.encoder_error().is_some(), "the replay buffer alone must hear of it too");
+        // No frame will come: a recording started now must say why, not 'no frame was encoded'.
+        outputs.start_file(PathBuf::from("rec.mp4"));
+        assert!(outputs.failed());
+        let error = outputs.take_file().unwrap().finish().unwrap_err();
+        assert!(error.contains("GPU"), "{error}");
     }
 
     #[test]
