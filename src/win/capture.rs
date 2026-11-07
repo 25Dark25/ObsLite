@@ -13,13 +13,14 @@ use windows_capture::settings::{
     ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings, MinimumUpdateIntervalSettings,
     SecondaryWindowSettings, Settings,
 };
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, TRUE};
+use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D,
 };
-use windows::core::Interface;
+use windows::core::{BOOL, Interface};
 use windows_capture::window::Window;
 
 use super::encoder::{Com, Encoder, EncoderSettings, Outputs};
@@ -62,7 +63,11 @@ pub fn list_audio_apps() -> Vec<AudioApp> {
     let mut apps: Vec<AudioApp> = Vec::new();
     for w in Window::enumerate().unwrap_or_default() {
         let (Ok(title), Ok(pid), Ok(exe)) = (w.title(), w.process_id(), w.process_name()) else { continue };
-        if title.trim().is_empty() || pid == own_pid || cloaked(&w) || apps.iter().any(|a| a.exe.eq_ignore_ascii_case(&exe)) {
+        if title.trim().is_empty() || pid == own_pid || cloaked(&w) {
+            continue;
+        }
+        let Some((pid, exe)) = app_process(pid, exe, &children(&w)) else { continue };
+        if apps.iter().any(|a| a.exe.eq_ignore_ascii_case(&exe)) {
             continue;
         }
         apps.push(AudioApp { pid, exe, title });
@@ -374,6 +379,36 @@ fn start_with_border(
     result.map_err(|e| e.to_string())
 }
 
+/// A child window, as (class, process id, executable).
+type Child = (String, u32, String);
+
+/// The process that plays a window's application, as (process id, executable). A Store app's
+/// top-level window is a frame of ApplicationFrameHost.exe, whose process plays nothing: the app
+/// is the process of the frame's CoreWindow child, which is there while the app is shown.
+fn app_process(pid: u32, exe: String, children: &[Child]) -> Option<(u32, String)> {
+    if !exe.eq_ignore_ascii_case("ApplicationFrameHost.exe") {
+        return Some((pid, exe));
+    }
+    children.iter().find(|(class, ..)| class == "Windows.UI.Core.CoreWindow").map(|(_, pid, exe)| (*pid, exe.clone()))
+}
+
+/// The child windows of `window`.
+fn children(window: &Window) -> Vec<Child> {
+    unsafe extern "system" fn add(hwnd: HWND, children: LPARAM) -> BOOL {
+        let children = unsafe { &mut *(children.0 as *mut Vec<Child>) };
+        let mut class = [0u16; 64];
+        let len = unsafe { GetClassNameW(hwnd, &mut class) };
+        let child = Window::from_raw_hwnd(hwnd.0);
+        if let (Ok(pid), Ok(exe)) = (child.process_id(), child.process_name()) {
+            children.push((String::from_utf16_lossy(&class[..len.max(0) as usize]), pid, exe));
+        }
+        TRUE
+    }
+    let mut out: Vec<Child> = Vec::new();
+    let _ = unsafe { EnumChildWindows(Some(HWND(window.as_raw_hwnd())), Some(add), LPARAM(&raw mut out as isize)) };
+    out
+}
+
 /// Whether the capture can be asked for fewer frames (Windows 11 24H2 and later).
 fn min_interval_supported() -> bool {
     super::sys::init_com();
@@ -388,6 +423,17 @@ mod tests {
     use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
     use super::*;
+
+    #[test]
+    fn a_store_app_is_the_process_inside_its_frame() {
+        // Store apps are drawn inside a frame of ApplicationFrameHost.exe: capturing that process
+        // records silence, and every Store app had that one entry.
+        let children = [("ApplicationFrameTitleBarWindow".into(), 10, "ApplicationFrameHost.exe".into()), ("Windows.UI.Core.CoreWindow".into(), 20, "CalculatorApp.exe".into())];
+        assert_eq!(app_process(10, "ApplicationFrameHost.exe".into(), &children), Some((20, "CalculatorApp.exe".into())));
+        // A frame whose app is not shown (suspended) has nothing to capture.
+        assert_eq!(app_process(10, "ApplicationFrameHost.exe".into(), &children[..1]), None);
+        assert_eq!(app_process(30, "spotify.exe".into(), &[]), Some((30, "spotify.exe".into())));
+    }
 
     #[test]
     fn asking_windows_survives_another_thread_leaving_com() {

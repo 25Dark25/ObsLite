@@ -47,6 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When the computer fell behind and frames were skipped, the video lost that time and ran ahead
   of the audio, more with every skip (on Windows about half the skipped time was lost). Each
   frame now lasts until the next one, in recordings and saved replays.
+- Opening the + menu after the recorded window was closed no longer selects the first display by
+  itself: it went on to record that display (with the region drawn on the window) while the
+  preview stayed black. The source changes only when one is chosen; a saved region is dropped at
+  start-up too when the saved source is not there.
+- Windows: Application Audio Capture follows an application that was closed and opened again
+  while obs-lite stayed open. It stayed bound to the old process: the application's channel
+  recorded nothing, and desktop audio no longer left the application out.
+- Windows: a webcam whose picture rows are padded (picture widths such as 424 or 1366) no
+  longer stays blank: every such picture was skipped.
+- Windows: Application Audio Capture lists Store apps (Calculator, Media Player…) by their own
+  names and records them. They were all one entry, "ApplicationFrameHost.exe", which recorded
+  silence.
 
 ## [0.6.0] - 2026-10-29
 
