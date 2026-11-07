@@ -67,6 +67,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is minimized or in the tray, as the screen preview already did not.
 - Linux: removing or changing the webcam, or closing obs-lite, while the desktop is still asking
   whether obs-lite may use the cameras no longer freezes the window until that is answered.
+- OK in Settings during a recording no longer restarts an audio device that had failed: its meter
+  moved again, but the recording stayed silent until it was stopped. The device is tried again
+  when the next recording or replay buffer starts, as before.
+- With two obs-lite open, closing one no longer makes the other's recording go unrepaired if
+  that one then stops partway (a crash, a power cut): saving its settings wrote over the
+  recording the other one had just started.
+- Volumes, mutes, the region, the webcam and the other choices made in the docks are saved
+  within a second, not only when obs-lite closes: signing out or shutting down Windows with
+  obs-lite open (in the tray, say) ends it without closing it, and they were lost.
 
 ## [0.6.0] - 2026-10-29
 

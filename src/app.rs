@@ -116,6 +116,9 @@ pub struct App {
     camera: Option<Camera>,
     camera_texture: Option<TextureHandle>,
     camera_seq: Option<u64>,
+    /// The settings as last saved, and when they were last compared with them.
+    saved_settings: String,
+    settings_checked: Instant,
     /// The camera stopping by itself has been dealt with (see `camera_ended`).
     camera_ended_shown: bool,
     meters: [f32; 3],
@@ -182,6 +185,8 @@ impl App {
             camera: None,
             camera_texture: None,
             camera_seq: None,
+            saved_settings: serde_json::to_string(&config).unwrap_or_default(),
+            settings_checked: Instant::now(),
             camera_ended_shown: false,
             config,
             sources: Vec::new(),
@@ -944,11 +949,12 @@ impl App {
             self.refresh_source_list();
             self.config.source_label = self.selected_source().map(|s| s.label.clone());
         }
-        // OK also tries again a device that failed (unplugged, then plugged back in).
-        if system_changed || input_failed(&self.system) {
+        // OK also tries again a device that failed, when no session reads it.
+        let active = self.is_session_active();
+        if restart_on_ok(system_changed, input_failed(&self.system), active) {
             self.restart_input(InputKind::System);
         }
-        if mic_changed || input_failed(&self.mic) {
+        if restart_on_ok(mic_changed, input_failed(&self.mic), active) {
             self.restart_input(InputKind::Microphone);
         }
         if let Some(mic) = &self.mic {
@@ -956,6 +962,20 @@ impl App {
         }
         self.apply_capture_visibility();
         self.config.save();
+    }
+
+    /// Saves the settings once a second when they changed (a volume, a mute, the region…):
+    /// signing out or shutting down Windows ends obs-lite without its exit, which saved them.
+    fn save_changed_settings(&mut self) {
+        if self.settings_checked.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        self.settings_checked = Instant::now();
+        let Ok(now) = serde_json::to_string(&self.config) else { return };
+        if now != self.saved_settings {
+            self.config.save();
+            self.saved_settings = serde_json::to_string(&self.config).unwrap_or(now);
+        }
     }
 
     /// Registers the configured hotkeys, reporting the ones another application already uses.
@@ -1729,6 +1749,7 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll(ctx);
+        self.save_changed_settings();
         let hidden = preview_hidden(ctx.input(|i| i.viewport().visible()), self.last_drawn.elapsed());
         if let Some(session) = self.active_session().or(self.preview.as_ref()) {
             session.shared.preview_hidden.store(hidden, Ordering::Relaxed);
@@ -2189,6 +2210,14 @@ fn input_failed(input: &Option<Input>) -> bool {
     input.as_ref().is_some_and(|i| i.shared.error().is_some())
 }
 
+/// Whether OK in Settings restarts an audio input: its device changed, or it failed (unplugged,
+/// then plugged back in). Not while recording: the mixer reads the inputs it started with, so a
+/// new one would move the meter while the recording stayed silent. Starting the next session
+/// tries a failed input again.
+fn restart_on_ok(changed: bool, failed: bool, session_active: bool) -> bool {
+    !session_active && (changed || failed)
+}
+
 /// Whether the application's audio has to be captured again: the process captured is not the
 /// one running now (the application started, restarted or exited since), or its capture failed.
 fn app_audio_stale(captured: Option<u32>, running: Option<u32>, failed: bool) -> bool {
@@ -2255,6 +2284,8 @@ mod tests {
             camera: None,
             camera_texture: None,
             camera_seq: None,
+            saved_settings: String::new(),
+            settings_checked: Instant::now(),
             camera_ended_shown: false,
             meters: [0.0; 3],
             ctx: egui::Context::default(),
@@ -2309,6 +2340,30 @@ mod tests {
         assert_eq!(finish_on_exit(RecState::Saving(rx)), Some(PathBuf::from("rec.mp4")));
         assert!(saved.load(Ordering::SeqCst), "exited before the recording was finalized");
         saver.join().unwrap();
+    }
+
+    #[test]
+    fn a_volume_or_mute_change_is_saved_without_waiting_for_exit() {
+        let mut app = test_app();
+        app.saved_settings = serde_json::to_string(&app.config).unwrap();
+        // Signing out or shutting down Windows ends obs-lite without its exit, which saved them.
+        app.config.mic_muted = true;
+        app.config.system_volume = 0.25;
+        app.settings_checked -= Duration::from_secs(2);
+        app.save_changed_settings();
+        let saved = Config::load();
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("obs-lite-test-{}", std::process::id())));
+        assert!(saved.mic_muted && saved.system_volume == 0.25, "not saved");
+    }
+
+    #[test]
+    fn ok_in_settings_does_not_swap_an_input_the_recording_reads() {
+        // The mixer reads the inputs it was started with: a new one would move the meter while
+        // the recording stays silent. The device is tried again when the next session starts.
+        assert!(!restart_on_ok(false, true, true));
+        assert!(restart_on_ok(false, true, false), "an input that failed is tried again");
+        assert!(restart_on_ok(true, false, false));
+        assert!(!restart_on_ok(false, false, false));
     }
 
     #[test]

@@ -170,6 +170,9 @@ pub struct Config {
     pub replay_seconds: u32,
     /// The last recording started, repaired at start-up in case obs-lite stopped while writing it.
     pub last_recording: Option<PathBuf>,
+    /// `last_recording` as this obs-lite last read or wrote it (see `save_to`).
+    #[serde(skip)]
+    last_recording_on_disk: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -203,17 +206,28 @@ impl Default for Config {
             hotkeys: Hotkeys::default(),
             replay_seconds: 20,
             last_recording: None,
+            last_recording_on_disk: None,
         }
     }
 }
 
 fn path() -> Option<PathBuf> {
+    // Tests never touch the user's settings.
+    if cfg!(test) {
+        return Some(std::env::temp_dir().join(format!("obs-lite-test-{}", std::process::id())).join("settings.json"));
+    }
     Some(dirs::config_dir()?.join("obs-lite").join("settings.json"))
 }
 
 impl Config {
     pub fn load() -> Self {
-        path().and_then(|p| fs::read_to_string(p).ok()).and_then(|s| Self::parse(&s)).unwrap_or_default()
+        path().map_or_else(Self::default, |p| Self::load_from(&p))
+    }
+
+    fn load_from(path: &Path) -> Self {
+        let mut config: Self = fs::read_to_string(path).ok().and_then(|s| Self::parse(&s)).unwrap_or_default();
+        config.last_recording_on_disk = config.last_recording.clone();
+        config
     }
 
     /// Editors such as Windows PowerShell save UTF-8 with a BOM, which serde_json rejects;
@@ -222,11 +236,26 @@ impl Config {
         serde_json::from_str(json.trim_start_matches('\u{feff}')).ok()
     }
 
-    pub fn save(&self) {
-        let Some(p) = path() else { return };
-        if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = write_replacing(&p, json.as_bytes());
+    pub fn save(&mut self) {
+        if let Some(p) = path() {
+            self.save_to(&p);
         }
+    }
+
+    /// Another obs-lite may run with the same settings and have started a recording since this
+    /// one read them: its `last_recording` is kept, unless this one started a recording since
+    /// (the newer one), or cleared the very recording still saved there.
+    fn save_to(&mut self, path: &Path) {
+        let on_disk = Self::load_from(path).last_recording;
+        let changed = self.last_recording != self.last_recording_on_disk;
+        let ours = changed && (self.last_recording.is_some() || on_disk == self.last_recording_on_disk);
+        if !ours {
+            self.last_recording = on_disk;
+        }
+        if let Ok(json) = serde_json::to_string_pretty(self) {
+            let _ = write_replacing(path, json.as_bytes());
+        }
+        self.last_recording_on_disk = self.last_recording.clone();
     }
 }
 
@@ -267,6 +296,49 @@ fn try_lock(path: &Path) -> Option<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn another_instance_does_not_lose_the_recording_to_repair() {
+        let dir = std::env::temp_dir().join(format!("obs-lite-two-{}", std::process::id()));
+        let file = dir.join("settings.json");
+        Config::default().save_to(&file);
+        let (mut first, mut second) = (Config::load_from(&file), Config::load_from(&file));
+        // The second instance records; the first one is then closed, saving its settings.
+        second.last_recording = Some(PathBuf::from("rec.mp4"));
+        second.save_to(&file);
+        first.mic_volume = 0.5;
+        first.save_to(&file);
+        let saved = Config::load_from(&file);
+        std::fs::remove_dir_all(&dir).unwrap();
+        // If the second one now stops partway, its recording must still be repaired.
+        assert_eq!(saved.last_recording, Some(PathBuf::from("rec.mp4")));
+        assert_eq!(saved.mic_volume, 0.5);
+    }
+
+    #[test]
+    fn the_newest_recording_and_a_repair_are_saved() {
+        let dir = std::env::temp_dir().join(format!("obs-lite-repair-{}", std::process::id()));
+        let file = dir.join("settings.json");
+        let mut config = Config { last_recording: Some(PathBuf::from("cut.mp4")), ..Config::default() };
+        config.save_to(&file);
+        // The first obs-lite repairs the recording cut short; another one records meanwhile.
+        let (mut first, mut second) = (Config::load_from(&file), Config::load_from(&file));
+        first.last_recording = None;
+        second.last_recording = Some(PathBuf::from("new.mp4"));
+        second.save_to(&file);
+        first.save_to(&file);
+        assert_eq!(Config::load_from(&file).last_recording, Some(PathBuf::from("new.mp4")), "the repair cleared the new one");
+        // With nobody else, the repair is saved; and a recording started here is saved over another's.
+        let mut alone = Config::load_from(&file);
+        alone.last_recording = None;
+        alone.save_to(&file);
+        assert_eq!(Config::load_from(&file).last_recording, None);
+        first.last_recording = Some(PathBuf::from("mine.mp4"));
+        first.save_to(&file);
+        let saved = Config::load_from(&file).last_recording;
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(saved, Some(PathBuf::from("mine.mp4")));
+    }
 
     #[test]
     fn only_one_process_holds_the_instance_lock() {
