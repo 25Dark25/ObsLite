@@ -551,7 +551,7 @@ fn to_packet(sample: &gst::Sample) -> Option<Packet> {
     let time = segment.to_running_time(buffer.pts()?)?;
     let map = buffer.map_readable().ok()?;
     Some(Packet {
-        data: map.as_slice().to_vec(),
+        data: map.as_slice().into(),
         time: (time.nseconds() / NS_PER_TICK) as i64,
         duration: buffer.duration().map_or(0, |d| (d.nseconds() / NS_PER_TICK) as i64),
         key: !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT),
@@ -824,6 +824,8 @@ pub struct Mp4 {
     start: i64,
     /// Why the pipeline failed, once it has: it will not reach end-of-stream.
     failed: Mutex<Option<String>>,
+    /// Locked while the file is written (see `mp4::repair`).
+    _lock: std::fs::File,
 }
 
 impl Muxer for Mp4 {
@@ -858,8 +860,12 @@ impl Muxer for Mp4 {
         // filesink takes text: a path that is not valid UTF-8 would be written somewhere else.
         let location = path.to_str().ok_or_else(|| tr!("la ruta de grabación no es UTF-8 válido", "the recording path is not valid UTF-8").to_owned())?;
         by_name::<gst::Element>(&pipeline, "file")?.set_property("location", location);
+        // filesink takes no lock: this one, held until the file is finished, keeps another
+        // obs-lite from taking it for a recording cut short and repairing it while it is written.
+        let lock = std::fs::File::create(path).map_err(|e| e.to_string())?;
+        let _ = lock.try_lock();
         play(&pipeline)?;
-        Ok(Self { pipeline, path: path.to_owned(), video: video_src, audio: audio_src, start, failed: Mutex::new(None) })
+        Ok(Self { pipeline, path: path.to_owned(), video: video_src, audio: audio_src, start, failed: Mutex::new(None), _lock: lock })
     }
 
     fn write(&self, video: bool, packet: &Packet) -> Result<(), String> {
@@ -974,7 +980,7 @@ mod tests {
         let sample = gst::Sample::builder().buffer(&buffer).segment(&segment).build();
         let packet = to_packet(&sample).unwrap();
         assert_eq!(packet.time, 5_000_000, "0.5 s in 100 ns units");
-        assert_eq!(packet.data, [1, 2, 3]);
+        assert_eq!(*packet.data, [1, 2, 3]);
         assert!(packet.key, "a buffer without DELTA_UNIT is a keyframe");
     }
 

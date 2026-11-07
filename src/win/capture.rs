@@ -103,7 +103,7 @@ pub struct Shared {
     /// nothing would draw the preview, so no preview pictures are made.
     pub preview_hidden: AtomicBool,
     pub frames: AtomicU64,
-    /// Drives video and audio timestamps; pausing it pauses the recording.
+    /// Drives video and audio timestamps. A pause leaves it running: only the file leaves it out.
     pub clock: Arc<Clock>,
     /// Set once the encoder is pulling samples and the clock has started.
     pub encoder_ready: Arc<AtomicBool>,
@@ -349,7 +349,7 @@ fn start_with_border(
     let cursor = if opts.cursor { CursorCaptureSettings::WithCursor } else { CursorCaptureSettings::WithoutCursor };
     // Asking for fewer frames saves work, but only Windows 11 24H2 and later can: elsewhere the
     // capture would not start at all.
-    let interval = if GraphicsCaptureApi::is_minimum_update_interval_supported().unwrap_or(false) {
+    let interval = if min_interval_supported() {
         MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / opts.fps.max(1) as f64))
     } else {
         MinimumUpdateIntervalSettings::Default
@@ -409,8 +409,19 @@ fn children(window: &Window) -> Vec<Child> {
     out
 }
 
+/// Whether the capture can be asked for fewer frames (Windows 11 24H2 and later).
+fn min_interval_supported() -> bool {
+    super::sys::init_com();
+    GraphicsCaptureApi::is_minimum_update_interval_supported().unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+    use std::thread;
+
+    use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
+
     use super::*;
 
     #[test]
@@ -422,5 +433,29 @@ mod tests {
         // A frame whose app is not shown (suspended) has nothing to capture.
         assert_eq!(app_process(10, "ApplicationFrameHost.exe".into(), &children[..1]), None);
         assert_eq!(app_process(30, "spotify.exe".into(), &[]), Some((30, "spotify.exe".into())));
+    }
+
+    #[test]
+    fn asking_windows_survives_another_thread_leaving_com() {
+        // Another thread keeps COM running for a while (Media Foundation, audio). Asked from a
+        // thread that had not started COM itself, the answer came through that thread's COM;
+        // once it ended, Windows unloaded the code behind the cached answer, and asking again
+        // ran into unloaded code and crashed the process.
+        let (up, is_up) = mpsc::channel();
+        let (down, is_down) = mpsc::channel::<()>();
+        let keeper = thread::spawn(move || unsafe {
+            CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap();
+            up.send(()).unwrap();
+            is_down.recv().unwrap();
+            CoUninitialize();
+        });
+        is_up.recv().unwrap();
+        let asked = thread::spawn(move || {
+            let first = min_interval_supported();
+            down.send(()).unwrap();
+            keeper.join().unwrap();
+            assert_eq!(min_interval_supported(), first);
+        });
+        asked.join().unwrap();
     }
 }
