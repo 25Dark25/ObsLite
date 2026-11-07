@@ -2238,7 +2238,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = test_app();
         app.config.camera = Some(CameraConfig { device: "cam".into(), name: "Cam".into(), corner: Corner::BottomRight, size: CameraSize::Small });
-        app.camera = Some(Camera::start_with(|_, _| Err("unplugged".into()), None));
+        app.camera = Some(Camera::start_with(|_, _| Err("unplugged".into()), true, None));
         let start = Instant::now();
         while !app.camera.as_ref().unwrap().shared.ended() && start.elapsed() < Duration::from_secs(1) {
             thread::sleep(Duration::from_millis(5));

@@ -88,6 +88,9 @@ unsafe fn picture_format(reader: &IMFSourceReader, stream: u32) -> windows::core
     }
 }
 
+/// Opening never waits for the user.
+pub const OPENING_ASKS_USER: bool = false;
+
 /// Captures from `device` until asked to stop, handing every picture to `shared`.
 pub fn capture(device: &str, shared: &CameraShared, repaint: Option<&eframe::egui::Context>) -> Result<(), String> {
     with_media_foundation(|| capture_loop(device, shared, repaint)).map_err(|e| e.to_string())

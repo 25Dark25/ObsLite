@@ -143,6 +143,9 @@ pub struct CameraShared {
     pub sink: Mutex<Option<Sink>>,
     /// Set while the window is not shown: pictures are kept but do not wake it.
     pub hidden: AtomicBool,
+    /// The camera is open: stopping its thread takes a moment. Before (on Linux, while the user
+    /// is asked for access) it could take any time.
+    opened: AtomicBool,
     stop: AtomicBool,
 }
 
@@ -153,12 +156,14 @@ pub struct Camera {
 
 impl Camera {
     pub fn start(device: String, repaint: Option<eframe::egui::Context>) -> Self {
-        Self::start_with(move |shared, repaint| crate::platform::camera::capture(&device, shared, repaint), repaint)
+        let opened = !crate::platform::camera::OPENING_ASKS_USER;
+        Self::start_with(move |shared, repaint| crate::platform::camera::capture(&device, shared, repaint), opened, repaint)
     }
 
     /// Runs `capture` on a thread of its own: it delivers pictures until it is stopped.
     pub(crate) fn start_with(
         capture: impl FnOnce(&CameraShared, Option<&eframe::egui::Context>) -> Result<(), String> + Send + 'static,
+        opened: bool,
         repaint: Option<eframe::egui::Context>,
     ) -> Self {
         let shared = Arc::new(CameraShared {
@@ -167,6 +172,7 @@ impl Camera {
             error: Mutex::new(None),
             sink: Mutex::new(None),
             hidden: AtomicBool::new(false),
+            opened: AtomicBool::new(opened),
             stop: AtomicBool::new(false),
         });
         let thread = thread::Builder::new()
@@ -191,6 +197,12 @@ impl CameraShared {
     /// Whether the capture thread should stop.
     pub(crate) fn stopped(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
+    }
+
+    /// Called by the capture once the camera is open (the user has answered).
+    #[cfg_attr(windows, allow(dead_code))]
+    pub(crate) fn set_opened(&self) {
+        self.opened.store(true, Ordering::Relaxed);
     }
 
     /// The camera stopped by itself; `error` says why.
@@ -223,7 +235,11 @@ impl CameraShared {
 impl Drop for Camera {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Relaxed);
-        if let Some(t) = self.thread.take() {
+        // A camera still waiting for the user's answer is left to end by itself once it comes:
+        // waiting here froze the window until the user answered.
+        if let Some(t) = self.thread.take()
+            && self.shared.opened.load(Ordering::Relaxed)
+        {
             let _ = t.join();
         }
     }
@@ -263,9 +279,38 @@ mod tests {
     }
 
     #[test]
+    fn removing_a_camera_still_asking_for_access_does_not_wait_for_the_answer() {
+        // Linux asks the user for the cameras: the answer may take any time.
+        let (answer, answered) = std::sync::mpsc::channel::<()>();
+        let camera = Camera::start_with(
+            move |shared, _| {
+                let _ = answered.recv_timeout(Duration::from_secs(2));
+                shared.set_opened();
+                Ok(())
+            },
+            false,
+            None,
+        );
+        let removed = Instant::now();
+        drop(camera);
+        assert!(removed.elapsed() < Duration::from_millis(500), "the window froze for {:?}", removed.elapsed());
+        drop(answer);
+    }
+
+    #[test]
     fn a_hidden_window_is_not_woken_for_every_camera_picture() {
         for hidden in [false, true] {
-            let camera = Camera::start_with(|_, _| Ok(()), None);
+            // A camera that runs until it is removed.
+            let camera = Camera::start_with(
+                |shared, _| {
+                    while !shared.stopped() {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    Ok(())
+                },
+                true,
+                None,
+            );
             camera.shared.hidden.store(hidden, Ordering::Relaxed);
             let ctx = eframe::egui::Context::default();
             let woken = Arc::new(AtomicU64::new(0));
@@ -291,6 +336,7 @@ mod tests {
                     shared.deliver(picture(), repaint);
                     result
                 },
+                true,
                 None,
             );
             wait_for(|| camera.shared.ended());
