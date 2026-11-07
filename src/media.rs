@@ -822,6 +822,7 @@ mod tests {
         outputs.set_file_paused(false);
         feed(&mut outputs, &written, 8, 10);
         assert_eq!(outputs.recorded(), frames(120));
+        outputs.take_file().unwrap().finish().unwrap();
         let step = TICKS_PER_SECOND / 30;
         let video: Vec<i64> = written.lock().unwrap().iter().filter(|(v, _)| *v).map(|(_, t)| *t).collect();
         assert_eq!(video, (0..120).map(|n| n * step).collect::<Vec<_>>());
