@@ -151,6 +151,14 @@ pub struct Camera {
 
 impl Camera {
     pub fn start(device: String, repaint: Option<eframe::egui::Context>) -> Self {
+        Self::start_with(move |shared, repaint| crate::platform::camera::capture(&device, shared, repaint), repaint)
+    }
+
+    /// Runs `capture` on a thread of its own: it delivers pictures until it is stopped.
+    pub(crate) fn start_with(
+        capture: impl FnOnce(&CameraShared, Option<&eframe::egui::Context>) -> Result<(), String> + Send + 'static,
+        repaint: Option<eframe::egui::Context>,
+    ) -> Self {
         let shared = Arc::new(CameraShared {
             latest: Mutex::new(None),
             seq: AtomicU64::new(0),
@@ -163,8 +171,11 @@ impl Camera {
             .spawn({
                 let shared = shared.clone();
                 move || {
-                    if let Err(e) = crate::platform::camera::capture(&device, &shared, repaint.as_ref()) {
-                        *shared.error.lock().unwrap() = Some(e);
+                    let result = capture(&shared, repaint.as_ref());
+                    if !shared.stopped() {
+                        // Unplugged, access taken away, or the stream ended: no picture to keep.
+                        let why = result.err().unwrap_or_else(|| tr!("la cámara dejó de enviar imágenes", "the camera stopped sending pictures").to_owned());
+                        shared.end(why, repaint.as_ref());
                     }
                 }
             })
@@ -177,6 +188,20 @@ impl CameraShared {
     /// Whether the capture thread should stop.
     pub(crate) fn stopped(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
+    }
+
+    /// The camera stopped by itself; `error` says why.
+    pub fn ended(&self) -> bool {
+        self.error.lock().unwrap().is_some()
+    }
+
+    fn end(&self, why: String, repaint: Option<&eframe::egui::Context>) {
+        *self.error.lock().unwrap() = Some(why);
+        *self.latest.lock().unwrap() = None;
+        self.seq.fetch_add(1, Ordering::Relaxed);
+        if let Some(ctx) = repaint {
+            ctx.request_repaint();
+        }
     }
 
     /// A captured picture: to the recording (if any), then to the preview.
@@ -218,7 +243,39 @@ pub(crate) fn best_mode(modes: impl IntoIterator<Item = (u32, u32, f64)>) -> Opt
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
+
+    fn picture() -> CameraFrame {
+        CameraFrame { width: 2, height: 2, bgra: vec![9; 16] }
+    }
+
+    /// Waits up to a second for `done`.
+    fn wait_for(done: impl Fn() -> bool) {
+        let start = Instant::now();
+        while !done() && start.elapsed() < Duration::from_secs(1) {
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn a_camera_that_stops_leaves_no_frozen_picture() {
+        // Unplugged (an error), or its stream ended (no error).
+        for result in [Err("unplugged".to_owned()), Ok(())] {
+            let camera = Camera::start_with(
+                move |shared, repaint| {
+                    shared.deliver(picture(), repaint);
+                    result
+                },
+                None,
+            );
+            wait_for(|| camera.shared.ended());
+            assert!(camera.shared.latest.lock().unwrap().is_none(), "its last picture would stay on screen and in recordings");
+            assert!(camera.shared.error.lock().unwrap().is_some(), "the user is not told");
+            assert_eq!(camera.shared.seq.load(Ordering::Relaxed), 2, "the preview is not told");
+        }
+    }
 
     #[test]
     fn a_camera_mode_fast_enough_wins_over_a_slow_one() {

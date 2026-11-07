@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A webcam that stops (unplugged, access taken away, its stream ended) no longer leaves its last
+  picture frozen in the preview, screenshots and recordings. The status bar says so, a recording
+  going on stops showing it, and the camera is tried again when the next recording or replay
+  buffer starts.
+
 ## [0.6.0] - 2026-10-29
 
 ### Changed
