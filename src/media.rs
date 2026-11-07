@@ -38,20 +38,46 @@ pub trait Muxer: Sized + Send {
 /// The encoding clock: video and audio times are taken from it. It never pauses: pausing the
 /// recording takes the time out of the file only (`Outputs::set_file_paused`), so the replay
 /// buffer goes on.
-pub struct Clock(Mutex<Instant>);
+pub struct Clock(Mutex<ClockState>);
+
+struct ClockState {
+    start: Instant,
+    /// The time last read.
+    last: Duration,
+}
+
+/// A jump of the clock at least this long is the computer having slept, and is left out: the
+/// encoder and the mixer read the clock every few milliseconds while it is awake. Windows' clock
+/// counts the time asleep, and making up for it filled the recording with hours of silence and
+/// allocated them at once; Linux's clock already stops.
+const SLEEP_GAP: Duration = Duration::from_secs(5);
 
 impl Clock {
     pub fn new() -> Self {
-        Self(Mutex::new(Instant::now()))
+        Self(Mutex::new(ClockState { start: Instant::now(), last: Duration::ZERO }))
     }
 
     pub fn restart(&self) {
-        *self.0.lock().unwrap() = Instant::now();
+        *self.0.lock().unwrap() = ClockState { start: Instant::now(), last: Duration::ZERO };
     }
 
-    /// Time since the last restart.
+    /// Time since the last restart, sleeps of the computer left out.
     pub fn elapsed(&self) -> Duration {
-        self.0.lock().unwrap().elapsed()
+        let mut clock = self.0.lock().unwrap();
+        let now = clock.start.elapsed();
+        if now >= clock.last + SLEEP_GAP {
+            let asleep = now - clock.last;
+            clock.start += asleep;
+        } else {
+            clock.last = clock.last.max(now);
+        }
+        clock.last
+    }
+
+    /// Moves the clock on by `by`, as time passing (or the computer sleeping) would.
+    #[cfg(test)]
+    pub fn backdate(&self, by: Duration) {
+        self.0.lock().unwrap().start -= by;
     }
 }
 
@@ -394,6 +420,19 @@ mod tests {
             }
             ring.push_video(packet(time, n % 60 == 0));
         }
+    }
+
+    #[test]
+    fn the_clock_leaves_out_a_sleep_of_the_computer() {
+        let clock = Clock::new();
+        let _ = clock.elapsed();
+        // Windows' clock counts the time asleep: it jumps by it on waking up.
+        clock.backdate(Duration::from_secs(600));
+        assert!(clock.elapsed() < Duration::from_secs(1), "{:?}", clock.elapsed());
+        // Time goes on from there.
+        clock.backdate(Duration::from_millis(500));
+        let after = clock.elapsed();
+        assert!(after >= Duration::from_millis(500) && after < Duration::from_secs(1), "{after:?}");
     }
 
     #[test]

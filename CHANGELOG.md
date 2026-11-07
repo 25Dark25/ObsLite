@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows: a computer that slept while recording no longer fills the recording with the time
+  asleep. obs-lite made up for it at once on waking: all that silence was allocated (gigabytes
+  after a night, enough to crash it), encoded and written. The time asleep is now left out of
+  the recording, as on Linux.
+
 ## [0.6.0] - 2026-10-29
 
 ### Changed
