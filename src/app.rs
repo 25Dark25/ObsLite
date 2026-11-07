@@ -116,6 +116,8 @@ pub struct App {
     camera: Option<Camera>,
     camera_texture: Option<TextureHandle>,
     camera_seq: Option<u64>,
+    /// The camera stopping by itself has been dealt with (see `camera_ended`).
+    camera_ended_shown: bool,
     meters: [f32; 3],
     /// For audio inputs to wake the UI when they start to make sound.
     ctx: egui::Context,
@@ -180,6 +182,7 @@ impl App {
             camera: None,
             camera_texture: None,
             camera_seq: None,
+            camera_ended_shown: false,
             config,
             sources: Vec::new(),
             selected: None,
@@ -401,7 +404,7 @@ impl App {
     }
 
     fn restart_camera(&mut self, ctx: &egui::Context) {
-        (self.camera, self.camera_texture, self.camera_seq) = (None, None, None);
+        (self.camera, self.camera_texture, self.camera_seq, self.camera_ended_shown) = (None, None, None, false);
         if let Some(c) = &self.config.camera {
             self.camera = Some(Camera::start(c.device.clone(), Some(ctx.clone())));
         }
@@ -409,7 +412,25 @@ impl App {
 
     /// The camera overlay, when a camera is configured and running.
     fn overlay(&self) -> Option<(Corner, CameraSize)> {
-        self.camera.as_ref().and(self.config.camera.as_ref()).map(|c| (c.corner, c.size))
+        self.camera.as_ref().filter(|c| !c.shared.ended()).and(self.config.camera.as_ref()).map(|c| (c.corner, c.size))
+    }
+
+    /// A camera that stopped by itself (unplugged, say): its picture leaves a recording going on,
+    /// and the user is told once.
+    fn camera_ended(&mut self) {
+        let Some(camera) = &self.camera else { return };
+        if !camera.shared.ended() || self.camera_ended_shown {
+            return;
+        }
+        self.camera_ended_shown = true;
+        *camera.shared.sink.lock().unwrap() = None;
+        let error = camera.shared.error.lock().unwrap().clone().unwrap_or_default();
+        if let Some(session) = self.active_session()
+            && let Some(encoder) = session.shared.encoder.lock().unwrap().as_ref()
+        {
+            encoder.clear_overlay();
+        }
+        self.set_status(tr!("La cámara se detuvo: {}", "The camera stopped: {}", error), None, true);
     }
 
     fn restart_preview(&mut self, ctx: &egui::Context) {
@@ -578,6 +599,10 @@ impl App {
         }
         if input_failed(&self.mic) {
             self.restart_input(InputKind::Microphone);
+        }
+        // A camera that stopped (unplugged, say) may be back.
+        if self.camera.as_ref().is_some_and(|c| c.shared.ended()) {
+            self.restart_camera(ctx);
         }
         let inputs: Vec<_> =
             [&self.system, &self.mic, &self.app_audio].into_iter().flatten().map(|i| i.shared.clone()).collect();
@@ -859,6 +884,7 @@ impl App {
                 None => tr!("La fuente ya no está disponible. Añade otra con el botón +.", "The source is no longer available. Add another one with the + button.").into(),
             });
         }
+        self.camera_ended();
         self.cpu.update();
     }
 
@@ -868,8 +894,12 @@ impl App {
         if self.camera_seq == Some(seq) {
             return;
         }
-        let Some(frame) = camera.shared.latest.lock().unwrap().clone() else { return };
         self.camera_seq = Some(seq);
+        let Some(frame) = camera.shared.latest.lock().unwrap().clone() else {
+            // The camera stopped: its last picture goes.
+            self.camera_texture = None;
+            return;
+        };
         let rgba: Vec<u8> = frame.bgra.as_chunks::<4>().0.iter().flat_map(|&[b, g, r, a]| [r, g, b, a]).collect();
         let image = egui::ColorImage::from_rgba_unmultiplied([frame.width as usize, frame.height as usize], &rgba);
         match &mut self.camera_texture {
@@ -1703,6 +1733,9 @@ impl eframe::App for App {
         if let Some(session) = self.active_session().or(self.preview.as_ref()) {
             session.shared.preview_hidden.store(hidden, Ordering::Relaxed);
         }
+        if let Some(camera) = &self.camera {
+            camera.shared.hidden.store(hidden, Ordering::Relaxed);
+        }
         // The meters fall only while drawn: hidden, they would keep the window waking 15 times a
         // second. They start again from silence when it shows.
         if hidden {
@@ -2222,6 +2255,7 @@ mod tests {
             camera: None,
             camera_texture: None,
             camera_seq: None,
+            camera_ended_shown: false,
             meters: [0.0; 3],
             ctx: egui::Context::default(),
             last_drawn: Instant::now(),
@@ -2275,6 +2309,23 @@ mod tests {
         assert_eq!(finish_on_exit(RecState::Saving(rx)), Some(PathBuf::from("rec.mp4")));
         assert!(saved.load(Ordering::SeqCst), "exited before the recording was finalized");
         saver.join().unwrap();
+    }
+
+    #[test]
+    fn a_camera_that_stopped_is_left_out_and_the_user_told() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        app.config.camera = Some(CameraConfig { device: "cam".into(), name: "Cam".into(), corner: Corner::BottomRight, size: CameraSize::Small });
+        app.camera = Some(Camera::start_with(|_, _| Err("unplugged".into()), true, None));
+        let start = Instant::now();
+        while !app.camera.as_ref().unwrap().shared.ended() && start.elapsed() < Duration::from_secs(1) {
+            thread::sleep(Duration::from_millis(5));
+        }
+        app.poll(&ctx);
+        assert!(app.overlay().is_none(), "screenshots and new recordings would still get the camera");
+        let status = app.status.as_ref().expect("a status");
+        assert!(status.text.contains("unplugged"), "status: {}", status.text);
     }
 
     #[test]

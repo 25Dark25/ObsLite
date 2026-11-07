@@ -342,6 +342,17 @@ impl Encoder {
         self.overlay.map(|(corner, size)| camera::overlay_rect(self.inner.input, camera, corner, size))
     }
 
+    /// The camera stopped: its last picture is no longer put on the recording.
+    pub fn clear_overlay(&self) {
+        if let Some(camera) = &self.camera {
+            set_alpha(&camera.pad, 0.0);
+            // Shown again, at its place, by the next picture.
+            *camera.placed.lock().unwrap() = None;
+            return;
+        }
+        *self.inner.overlay.lock().unwrap() = None;
+    }
+
     /// Takes a webcam picture already scaled to `rect` (see `overlay_rect`).
     pub fn push_overlay(&self, rect: PixelRect, pixels: &[u8]) {
         if let Some(camera) = &self.camera {
@@ -353,6 +364,7 @@ impl Encoder {
                 camera.pad.set_property("ypos", y as i32);
                 camera.pad.set_property("width", w as i32);
                 camera.pad.set_property("height", h as i32);
+                set_alpha(&camera.pad, 1.0);
                 *placed = Some(rect);
             }
             // The compositor takes no picture under 16 pixels a side: a larger copy goes in its place.
@@ -703,6 +715,13 @@ fn crop(frame: (u32, u32), origin: (u32, u32), input: (u32, u32)) -> Crop {
         (_, _, 0, _) | (_, _, _, 0) => Crop::Nothing,
         rect if rect == (0, 0, frame.0, frame.1) => Crop::Whole,
         rect => Crop::Part(rect),
+    }
+}
+
+/// Shows (1) or hides (0) the webcam's input of the compositor, where its pads can.
+fn set_alpha(pad: &gst::Pad, alpha: f64) {
+    if pad.has_property_with_type("alpha", f64::static_type()) {
+        pad.set_property("alpha", alpha);
     }
 }
 

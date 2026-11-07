@@ -59,6 +59,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows: Application Audio Capture lists Store apps (Calculator, Media Player…) by their own
   names and records them. They were all one entry, "ApplicationFrameHost.exe", which recorded
   silence.
+- A webcam that stops (unplugged, access taken away, its stream ended) no longer leaves its last
+  picture frozen in the preview, screenshots and recordings. The status bar says so, a recording
+  going on stops showing it, and the camera is tried again when the next recording or replay
+  buffer starts.
+- A webcam no longer wakes obs-lite for every picture (about 30 times a second) while the window
+  is minimized or in the tray, as the screen preview already did not.
+- Linux: removing or changing the webcam, or closing obs-lite, while the desktop is still asking
+  whether obs-lite may use the cameras no longer freezes the window until that is answered.
 
 ## [0.6.0] - 2026-10-29
 
