@@ -39,20 +39,69 @@ pub trait Muxer: Sized + Send {
 /// The encoding clock: video and audio times are taken from it. It never pauses: pausing the
 /// recording takes the time out of the file only (`Outputs::set_file_paused`), so the replay
 /// buffer goes on.
-pub struct Clock(Mutex<Instant>);
+pub struct Clock(Mutex<ClockState>);
+
+struct ClockState {
+    start: Instant,
+    /// The time last read, and the time the computer slept since the start.
+    last: Duration,
+    asleep: Duration,
+    /// How far tests moved the clock on: an `Instant` can't go back before the computer started.
+    #[cfg(test)]
+    ahead: Duration,
+}
+
+impl ClockState {
+    fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            last: Duration::ZERO,
+            asleep: Duration::ZERO,
+            #[cfg(test)]
+            ahead: Duration::ZERO,
+        }
+    }
+
+    fn now(&self) -> Duration {
+        let now = self.start.elapsed();
+        #[cfg(test)]
+        let now = now + self.ahead;
+        now.saturating_sub(self.asleep)
+    }
+}
+
+/// A jump of the clock at least this long is the computer having slept, and is left out: the
+/// encoder and the mixer read the clock every few milliseconds while it is awake. Windows' clock
+/// counts the time asleep, and making up for it filled the recording with hours of silence and
+/// allocated them at once; Linux's clock already stops.
+const SLEEP_GAP: Duration = Duration::from_secs(5);
 
 impl Clock {
     pub fn new() -> Self {
-        Self(Mutex::new(Instant::now()))
+        Self(Mutex::new(ClockState::new()))
     }
 
     pub fn restart(&self) {
-        *self.0.lock().unwrap() = Instant::now();
+        *self.0.lock().unwrap() = ClockState::new();
     }
 
-    /// Time since the last restart.
+    /// Time since the last restart, sleeps of the computer left out.
     pub fn elapsed(&self) -> Duration {
-        self.0.lock().unwrap().elapsed()
+        let mut clock = self.0.lock().unwrap();
+        let now = clock.now();
+        if now >= clock.last + SLEEP_GAP {
+            let asleep = now - clock.last;
+            clock.asleep += asleep;
+        } else {
+            clock.last = clock.last.max(now);
+        }
+        clock.last
+    }
+
+    /// Moves the clock on by `by`, as time passing (or the computer sleeping) would.
+    #[cfg(test)]
+    pub fn move_on(&self, by: Duration) {
+        self.0.lock().unwrap().ahead += by;
     }
 }
 
@@ -61,7 +110,7 @@ impl Clock {
 pub struct Outputs<M: Muxer> {
     /// The recording asked for, and its file once a keyframe has arrived.
     path: Option<PathBuf>,
-    file: Option<M>,
+    file: Option<Paced<M>>,
     /// Audio not yet in the file: from the last second, or since the recording was asked for.
     pending_audio: VecDeque<Packet>,
     replay: Option<Ring>,
@@ -201,7 +250,7 @@ impl<M: Muxer> Outputs<M> {
         if let (Some(path), None, None, true, false, Some(video)) =
             (&self.path, &self.file, &self.error, packet.key, self.paused, &self.video_format)
         {
-            match M::create(path, video, self.audio_format.as_ref(), packet.time) {
+            match Paced::create(path, video, self.audio_format.as_ref(), packet.time) {
                 Ok(file) => {
                     for audio in self.pending_audio.drain(..) {
                         let _ = file.write(false, &audio);
@@ -283,10 +332,44 @@ impl<M: Muxer> Outputs<M> {
     }
 }
 
+/// A muxer whose video packets last until the next one, as a frame stays on screen until the next
+/// is shown. Frames are skipped when the machine falls behind; with their own fixed durations
+/// that time was lost (Media Foundation's fragments keep no start times) and the video ran ahead
+/// of the audio. So each video packet is held until the next one comes.
+struct Paced<M: Muxer> {
+    muxer: M,
+    held: Mutex<Option<Packet>>,
+}
+
+impl<M: Muxer> Paced<M> {
+    fn create(path: &Path, video: &M::Format, audio: Option<&M::Format>, start: i64) -> Result<Self, String> {
+        Ok(Self { muxer: M::create(path, video, audio, start)?, held: Mutex::new(None) })
+    }
+
+    fn write(&self, video: bool, packet: &Packet) -> Result<(), String> {
+        if !video {
+            return self.muxer.write(false, packet);
+        }
+        let Some(previous) = self.held.lock().unwrap().replace(packet.clone()) else { return Ok(()) };
+        let gap = packet.time - previous.time;
+        let duration = if gap > 0 { gap } else { previous.duration };
+        self.muxer.write(true, &Packet { duration, ..previous })
+    }
+
+    /// Writes the last video packet, with its own duration (unless writing has failed already),
+    /// and finishes the file.
+    fn finish(self, failed: bool) -> Result<(), String> {
+        let last = self.held.into_inner().unwrap().filter(|_| !failed);
+        let written = last.map_or(Ok(()), |last| self.muxer.write(true, &last));
+        let finished = self.muxer.finish();
+        written.and(finished)
+    }
+}
+
 /// A recording that was stopped, still to be written out.
 pub struct PendingFile<M: Muxer> {
     path: PathBuf,
-    file: Option<M>,
+    file: Option<Paced<M>>,
     error: Option<String>,
 }
 
@@ -294,7 +377,8 @@ impl<M: Muxer> PendingFile<M> {
     /// Finishes the file. After an error the file is finished too, so it keeps what was
     /// recorded until then, and the error says where it is.
     pub fn finish(self) -> Result<PathBuf, String> {
-        let finished = self.file.map(M::finish);
+        let failed = self.error.is_some();
+        let finished = self.file.map(|file| file.finish(failed));
         match (self.error, finished) {
             (None, Some(result)) => result.map(|()| self.path),
             (None, None) => Err(tr!("no se codificó ningún fotograma", "no frame was encoded").to_owned()),
@@ -364,8 +448,15 @@ pub struct Replay<M: Muxer> {
 }
 
 impl<M: Muxer> Replay<M> {
-    pub fn save(self, path: PathBuf) -> Result<PathBuf, String> {
+    pub fn save(mut self, path: PathBuf) -> Result<PathBuf, String> {
         let start = self.video[0].time;
+        // Each frame lasts until the next, as `Paced` does for a recording.
+        for i in 1..self.video.len() {
+            let gap = self.video[i].time - self.video[i - 1].time;
+            if gap > 0 {
+                self.video[i - 1].duration = gap;
+            }
+        }
         let file = M::create(&path, &self.video_format, self.audio_format.as_ref(), start)?;
         // Interleaved by time, the order a player reads them in.
         let (mut audio, mut video) = (self.audio.iter().peekable(), self.video.iter().peekable());
@@ -410,6 +501,68 @@ mod tests {
             }
             ring.push_video(packet(time, n % 60 == 0));
         }
+    }
+
+    /// Records the video packets written, as (time, duration).
+    struct Timing(Arc<Mutex<Vec<(i64, i64)>>>);
+
+    impl Muxer for Timing {
+        type Format = Arc<Mutex<Vec<(i64, i64)>>>;
+
+        fn create(_: &Path, video: &Self::Format, _: Option<&Self::Format>, _: i64) -> Result<Self, String> {
+            Ok(Self(video.clone()))
+        }
+
+        fn write(&self, video: bool, packet: &Packet) -> Result<(), String> {
+            if video {
+                self.0.lock().unwrap().push((packet.time, packet.duration));
+            }
+            Ok(())
+        }
+
+        fn finish(self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_frame_lasts_until_the_next_one_when_frames_were_skipped() {
+        // 30 fps, but the machine fell behind and frames 3 and 4 were never made: frame 2 is on
+        // screen until frame 5. With 1/30 s each, the video lost that time and ran ahead of the audio.
+        let step = TICKS_PER_SECOND / 30;
+        let frames = [0, 1, 2, 5, 6];
+        let expected = vec![(0, step), (step, step), (2 * step, 3 * step), (5 * step, step), (6 * step, step)];
+        let video = |outputs: &mut Outputs<Timing>, written: &Arc<Mutex<Vec<(i64, i64)>>>| {
+            for n in frames {
+                outputs.video(Packet { duration: step, ..packet(n * step, n == 0) }, || Ok(written.clone()));
+            }
+        };
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let mut outputs = Outputs::<Timing>::default();
+        outputs.start_file(PathBuf::from("rec.mp4"));
+        video(&mut outputs, &written);
+        outputs.take_file().unwrap().finish().unwrap();
+        assert_eq!(*written.lock().unwrap(), expected, "recording");
+
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let mut outputs = Outputs::<Timing>::default();
+        outputs.set_replay(Some(20));
+        video(&mut outputs, &written);
+        outputs.replay().unwrap().save(PathBuf::from("replay.mp4")).unwrap();
+        assert_eq!(*written.lock().unwrap(), expected, "replay");
+    }
+
+    #[test]
+    fn the_clock_leaves_out_a_sleep_of_the_computer() {
+        let clock = Clock::new();
+        let _ = clock.elapsed();
+        // Windows' clock counts the time asleep: it jumps by it on waking up.
+        clock.move_on(Duration::from_secs(600));
+        assert!(clock.elapsed() < Duration::from_secs(1), "{:?}", clock.elapsed());
+        // Time goes on from there.
+        clock.move_on(Duration::from_millis(500));
+        let after = clock.elapsed();
+        assert!(after >= Duration::from_millis(500) && after < Duration::from_secs(1), "{after:?}");
     }
 
     #[test]
@@ -557,11 +710,11 @@ mod tests {
         outputs.video(packet(10, false), || unreachable!());
         outputs.video(packet(20, true), || unreachable!());
         outputs.audio(vec![packet(25, true)]);
-        // Nothing before the keyframe at 20 reaches the file (the audio at 5 and 15 is older);
-        // the rest is written relative to it.
-        assert_eq!(*written.lock().unwrap(), vec![(true, 0), (false, 5)]);
         let file = outputs.take_file().expect("a recording was started");
         assert_eq!(file.finish().unwrap(), PathBuf::from("rec.mp4"));
+        // Nothing before the keyframe at 20 reaches the file (the audio at 5 and 15 is older);
+        // the rest is written relative to it (the frame once the next one, or the end, comes).
+        assert_eq!(*written.lock().unwrap(), vec![(false, 5), (true, 0)]);
     }
 
     #[test]
@@ -633,6 +786,7 @@ mod tests {
         outputs.set_file_paused(false);
         feed(&mut outputs, &written, 5, 7);
         assert_eq!(outputs.recorded(), frames(120));
+        outputs.take_file().unwrap().finish().unwrap();
         let written = written.lock().unwrap();
         let video: Vec<i64> = written.iter().filter(|(v, _)| *v).map(|(_, t)| *t).collect();
         let audio: Vec<i64> = written.iter().filter(|(v, _)| !*v).map(|(_, t)| *t).collect();
@@ -691,6 +845,7 @@ mod tests {
         outputs.set_file_paused(false);
         feed(&mut outputs, &written, 8, 10);
         assert_eq!(outputs.recorded(), frames(120));
+        outputs.take_file().unwrap().finish().unwrap();
         let step = TICKS_PER_SECOND / 30;
         let video: Vec<i64> = written.lock().unwrap().iter().filter(|(v, _)| *v).map(|(_, t)| *t).collect();
         assert_eq!(video, (0..120).map(|n| n * step).collect::<Vec<_>>());

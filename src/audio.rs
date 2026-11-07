@@ -378,6 +378,24 @@ mod tests {
     }
 
     #[test]
+    fn a_sleep_of_the_computer_is_not_mixed_as_one_block() {
+        let clock = Arc::new(Clock::new());
+        let blocks = Arc::new(Mutex::new(Vec::new()));
+        let mixer = Mixer::start(vec![input_with(&[], 1.0)], Arc::new(AtomicBool::new(true)), clock.clone(), {
+            let blocks = blocks.clone();
+            move |pcm| blocks.lock().unwrap().push(pcm.len())
+        });
+        thread::sleep(Duration::from_millis(50));
+        // Ten minutes asleep: they were allocated, encoded and written at once (and an
+        // overnight sleep ran out of memory).
+        clock.move_on(Duration::from_secs(600));
+        thread::sleep(Duration::from_millis(100));
+        drop(mixer);
+        let largest = blocks.lock().unwrap().iter().copied().max().unwrap();
+        assert!(largest <= SAMPLE_RATE as usize * CHANNELS * 2, "a block of {largest} bytes");
+    }
+
+    #[test]
     fn mixes_with_gain_and_pads_silence() {
         let a = input_with(&[0.5, 0.5], 1.0);
         let b = input_with(&[0.2, 0.2, 0.2, 0.2], 0.5);
