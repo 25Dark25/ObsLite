@@ -291,6 +291,12 @@ impl Encoder {
         self.overlay.map(|(corner, size)| camera::overlay_rect(self.input, camera, corner, size))
     }
 
+    /// The camera stopped: its last picture is no longer drawn on the screen's frames (it goes
+    /// with the next one).
+    pub fn clear_overlay(&self) {
+        *self.overlay_texture.lock().unwrap() = None;
+    }
+
     /// Takes a webcam picture already scaled to `rect` (see `overlay_rect`) and draws it onto
     /// the canvas right away, so the camera keeps moving while the screen does not.
     pub fn push_overlay(&self, rect: PixelRect, pixels: &[u8]) {

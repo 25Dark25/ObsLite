@@ -570,7 +570,7 @@ fn to_packet(sample: &IMFSample) -> Result<Packet> {
         let mut data = std::ptr::null_mut();
         let mut len = 0;
         buffer.Lock(&mut data, None, Some(&mut len))?;
-        let bytes = std::slice::from_raw_parts(data, len as usize).to_vec();
+        let bytes = std::slice::from_raw_parts(data, len as usize).into();
         buffer.Unlock()?;
         Ok(Packet {
             data: bytes,
