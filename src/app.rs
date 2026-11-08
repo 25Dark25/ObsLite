@@ -248,14 +248,14 @@ impl App {
         if let Some(e) = hotkey_error {
             app.set_status(tr!("Atajos globales no disponibles: {}", "Global hotkeys unavailable: {}", e), None, true);
         }
-        // Another obs-lite may still be writing that recording.
+        // Another Obs Lite may still be writing that recording.
         if crate::config::first_instance() {
             app.recover_last_recording();
         }
         app
     }
 
-    /// A recording obs-lite was writing when it stopped (a crash, a power cut) is still a
+    /// A recording Obs Lite was writing when it stopped (a crash, a power cut) is still a
     /// fragmented MP4: make it a regular one. A finished recording is left as it is.
     fn recover_last_recording(&mut self) {
         let Some(path) = self.config.last_recording.take() else { return };
@@ -264,14 +264,14 @@ impl App {
                 let shown = crate::platform::sys::display_path(&path);
                 self.set_status(tr!("Se recuperó la grabación interrumpida '{}'", "Recovered the interrupted recording '{}'", shown.display()), Some(path), false);
             }
-            // Another obs-lite is still writing it: kept, in case that one stops before finishing it.
+            // Another Obs Lite is still writing it: kept, in case that one stops before finishing it.
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => self.config.last_recording = Some(path),
             _ => {}
         }
     }
 
     /// `path` was finished whole: there is nothing to repair at the next start. Saved with the
-    /// settings on exit; if obs-lite stops before that, the repair finds a regular file.
+    /// settings on exit; if Obs Lite stops before that, the repair finds a regular file.
     fn recording_finished(&mut self, path: &Path) {
         if self.config.last_recording.as_deref() == Some(path) {
             self.config.last_recording = None;
@@ -515,7 +515,7 @@ impl App {
         session.shared.outputs.lock().unwrap().start_file(path.clone());
         *recording = Some(Recording);
         self.status = None;
-        // Saved now, so the next start can repair the file if obs-lite stops while writing it.
+        // Saved now, so the next start can repair the file if Obs Lite stops while writing it.
         self.config.last_recording = Some(path);
         self.config.save();
     }
@@ -533,8 +533,8 @@ impl App {
     fn output_dir_problem(&self) -> Option<String> {
         crate::platform::sys::volatile(&self.config.output_dir).then(|| {
             tr!(
-                "La ruta de grabación no está compartida con obs-lite: lo que se guardara ahí se perdería al cerrarlo. Elige la carpeta con Examinar.",
-                "The recording path is not shared with obs-lite: anything saved there would be lost when it closes. Choose the folder with Browse."
+                "La ruta de grabación no está compartida con Obs Lite: lo que se guardara ahí se perdería al cerrarlo. Elige la carpeta con Examinar.",
+                "The recording path is not shared with Obs Lite: anything saved there would be lost when it closes. Choose the folder with Browse."
             )
             .to_owned()
         })
@@ -967,7 +967,7 @@ impl App {
     }
 
     /// Saves the settings once a second when they changed (a volume, a mute, the region…):
-    /// signing out or shutting down Windows ends obs-lite without its exit, which saved them.
+    /// signing out or shutting down Windows ends Obs Lite without its exit, which saved them.
     fn save_changed_settings(&mut self) {
         if self.settings_checked.elapsed() < Duration::from_secs(1) {
             return;
@@ -1577,8 +1577,8 @@ impl App {
                 ui.heading(tr!("Nueva versión disponible", "New version available"));
                 ui.add_space(8.0);
                 ui.label(tr!(
-                    "Ya está disponible obs-lite {}. Tienes la {}.",
-                    "obs-lite {} is available. You have {}.",
+                    "Ya está disponible Obs Lite {}. Tienes la {}.",
+                    "Obs Lite {} is available. You have {}.",
                     release.version,
                     env!("CARGO_PKG_VERSION")
                 ));
@@ -1644,7 +1644,7 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
                     ui.checkbox(&mut c.check_updates, tr!("Buscar versiones nuevas al iniciar", "Check for new versions at startup"));
                     ui.end_row();
                     ui.label(tr!("Captura", "Capture"));
-                    ui.checkbox(&mut c.hide_from_capture, tr!("Ocultar obs-lite de la captura de pantalla", "Hide obs-lite from screen capture"));
+                    ui.checkbox(&mut c.hide_from_capture, tr!("Ocultar Obs Lite de la captura de pantalla", "Hide Obs Lite from screen capture"));
                     ui.end_row();
                 }
             });
@@ -1740,12 +1740,12 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
                 }
             });
             ui.add_space(6.0);
-            ui.label(RichText::new(tr!("Funcionan aunque obs-lite esté minimizado o en segundo plano.", "They work even when obs-lite is minimized or in the background.")).small().color(TEXT_MUTED));
+            ui.label(RichText::new(tr!("Funcionan aunque Obs Lite esté minimizado o en segundo plano.", "They work even when Obs Lite is minimized or in the background.")).small().color(TEXT_MUTED));
             #[cfg(target_os = "linux")]
             ui.label(
                 RichText::new(tr!(
-                    "El escritorio guarda los atajos: obs-lite le propone estos, y se pueden cambiar en la configuración del sistema.",
-                    "The desktop keeps the shortcuts: obs-lite proposes these, and they can be changed in the system settings."
+                    "El escritorio guarda los atajos: Obs Lite le propone estos, y se pueden cambiar en la configuración del sistema.",
+                    "The desktop keeps the shortcuts: Obs Lite proposes these, and they can be changed in the system settings."
                 ))
                 .small()
                 .color(TEXT_MUTED),
@@ -1878,7 +1878,7 @@ fn unused_name(dir: &Path, stem: &str, ext: &str, named: &mut HashSet<PathBuf>) 
     path
 }
 
-/// A typed recording path that is empty or relative would put recordings wherever obs-lite was
+/// A typed recording path that is empty or relative would put recordings wherever Obs Lite was
 /// started from: the previous folder is kept instead.
 fn typed_output_dir(typed: PathBuf, previous: &Path) -> PathBuf {
     if typed.is_absolute() { typed } else { previous.to_owned() }
@@ -2125,7 +2125,7 @@ fn device_combo(ui: &mut egui::Ui, id: &str, enabled: &mut bool, device: &mut Op
 
 /// Sets the interface language and the fonts it needs. The bundled fonts have no Chinese or
 /// Japanese characters, so those take the system's; without one the text would be empty boxes,
-/// so obs-lite shows in English and says why.
+/// so Obs Lite shows in English and says why.
 fn apply_language(
     ctx: &egui::Context,
     choice: Option<Language>,
@@ -2143,7 +2143,7 @@ fn apply_language(
     }
     ctx.set_fonts(fonts);
     i18n::set(if found { language } else { Language::English });
-    (!found).then(|| format!("No font with {} characters was found, so obs-lite shows in English.", language.english_name()))
+    (!found).then(|| format!("No font with {} characters was found, so Obs Lite shows in English.", language.english_name()))
 }
 
 fn apply_theme(ctx: &egui::Context) {
@@ -2377,7 +2377,7 @@ mod tests {
     fn a_volume_or_mute_change_is_saved_without_waiting_for_exit() {
         let mut app = test_app();
         app.saved_settings = serde_json::to_string(&app.config).unwrap();
-        // Signing out or shutting down Windows ends obs-lite without its exit, which saved them.
+        // Signing out or shutting down Windows ends Obs Lite without its exit, which saved them.
         app.config.mic_muted = true;
         app.config.system_volume = 0.25;
         app.settings_checked -= Duration::from_secs(2);

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The window, the tray and the messages call the app Obs Lite, as the Start menu and the
+  applications menu already did. File names and the settings folder stay `obs-lite`.
+- Linux: the applications menu shows the description in the new languages too.
+
 ## [0.7.0] - 2026-11-08
 
 ### Added

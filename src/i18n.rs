@@ -55,7 +55,7 @@ impl Language {
         Self::ChineseTraditional,
     ];
 
-    /// The system display language; English when obs-lite does not have it.
+    /// The system display language; English when Obs Lite does not have it.
     pub fn system() -> Self {
         crate::platform::sys::system_language()
     }
@@ -124,7 +124,7 @@ impl Language {
         }
     }
 
-    /// Whether its text needs a font with Chinese characters, which obs-lite does not bundle.
+    /// Whether its text needs a font with Chinese characters, which Obs Lite does not bundle.
     pub fn needs_cjk_font(self) -> bool {
         matches!(self, Self::Japanese | Self::ChineseSimplified | Self::ChineseTraditional)
     }

@@ -116,13 +116,13 @@ impl Tray {
         self.save_replay.set_text(tr!("Guardar repetición", "Save Replay"));
         self.save_replay.set_enabled(state.replay);
         self.screenshot.set_text(tr!("Hacer captura de pantalla", "Take Screenshot"));
-        self.show.set_text(tr!("Mostrar obs-lite", "Show obs-lite"));
+        self.show.set_text(tr!("Mostrar Obs Lite", "Show Obs Lite"));
         self.exit.set_text(tr!("Salir", "Exit"));
         let tooltip = match (state.recording, state.paused, state.replay) {
-            (true, true, _) => tr!("obs-lite · En pausa", "obs-lite · Paused"),
-            (true, false, _) => tr!("obs-lite · Grabando", "obs-lite · Recording"),
-            (false, _, true) => tr!("obs-lite · Búfer de repetición", "obs-lite · Replay Buffer"),
-            _ => "obs-lite",
+            (true, true, _) => tr!("Obs Lite · En pausa", "Obs Lite · Paused"),
+            (true, false, _) => tr!("Obs Lite · Grabando", "Obs Lite · Recording"),
+            (false, _, true) => tr!("Obs Lite · Búfer de repetición", "Obs Lite · Replay Buffer"),
+            _ => "Obs Lite",
         };
         let _ = self.icon.set_tooltip(Some(tooltip));
         let icon = if state.recording || state.replay { &self.recording_icon } else { &self.idle_icon };

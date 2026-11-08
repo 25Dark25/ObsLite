@@ -44,7 +44,7 @@ fn main() -> eframe::Result {
 
     let icon = eframe::egui::IconData { rgba: ICON_RGBA.to_vec(), width: 64, height: 64 };
     let viewport = eframe::egui::ViewportBuilder::default()
-        .with_title("obs-lite")
+        .with_title("Obs Lite")
         .with_icon(icon)
         .with_inner_size([1180.0, 800.0])
         .with_min_inner_size([900.0, 620.0]);
