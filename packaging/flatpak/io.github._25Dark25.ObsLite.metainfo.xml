@@ -19,7 +19,8 @@
       <li>H.264 and AAC in MP4, on the GPU when it has an encoder</li>
     </ul>
     <p>
-      The interface is in Spanish or English, following the system language.
+      The interface follows the system language: English, Spanish, German, French, Italian,
+      Polish, Russian, Japanese or Chinese.
     </p>
   </description>
   <launchable type="desktop-id">io.github._25Dark25.ObsLite.desktop</launchable>

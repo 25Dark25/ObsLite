@@ -34,7 +34,7 @@ pub struct TrayState {
     pub recording: bool,
     pub paused: bool,
     pub replay: bool,
-    pub english: bool,
+    pub language: crate::i18n::Language,
 }
 
 pub struct Tray {

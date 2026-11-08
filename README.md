@@ -47,7 +47,7 @@ obs-lite does one thing, record, and leaves out what it would need a much larger
 | Streaming | — | ✓ |
 | Plugins, browser source | — | ✓ |
 | Formats | H.264 + AAC in MP4 | H.264, HEVC, AV1… in MP4, MKV, MOV… |
-| Interface languages | English, Spanish | many |
+| Interface languages | 10 | many |
 
 The sizes are OBS Studio 33.0 from Flathub and obs-lite 0.5.0, both on the same runtime
 (`org.freedesktop.Platform` 26.08), measured with `flatpak info` on 2026-10-27. Memory and CPU were
@@ -92,8 +92,8 @@ every 2 s and no B-frames. Recording, OBS takes a little less CPU; obs-lite less
 
 ## Interface
 
-Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spanish or English
-(it follows the system's language, on Linux its locale; change it in Settings › General):
+Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording
+(in the system's language, on Linux its locale; change it in Settings › General):
 
 - **Preview** on top and, below it, the **Sources**, **Audio Mixer** and **Controls** docks.
   Right-click the preview to take a screenshot.
@@ -150,7 +150,11 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording in Spa
 - **Hidden from capture**: like OBS's option, the obs-lite window never appears in recordings or
   in its own preview.
 - **System tray icon**, with an option to minimize to the tray.
-- **Spanish and English** interface.
+- **Interface in English, Spanish, German, French, Italian, Polish, Russian, Japanese and Chinese**
+  (Simplified and Traditional). All but English and Spanish are machine translations, so
+  corrections are welcome: each language is one file in [src/i18n/](src/i18n/). Japanese and Chinese
+  use the system's font for those characters (on Linux, found with fontconfig); without one, obs-lite
+  shows in English and says why.
 - **Update notice**: at start-up it asks GitHub for the latest release and, if there is a newer
   one, says so in a dialog with a link to it (and in the status bar). "Don't remind me of this
   version" stops the dialog until the next release. Nothing is downloaded; Settings › General

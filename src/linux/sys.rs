@@ -37,6 +37,29 @@ pub fn system_language() -> Language {
     Language::from_locale(&messages_locale(var("LC_ALL"), var("LC_MESSAGES"), var("LANG"), var("LANGUAGE")))
 }
 
+/// A system font with the characters of Chinese or Japanese, as the file and the face in it.
+pub fn cjk_font(language: Language) -> Option<(Vec<u8>, u32)> {
+    let lang = match language {
+        Language::Japanese => "ja",
+        Language::ChineseSimplified => "zh-cn",
+        Language::ChineseTraditional => "zh-tw",
+        _ => return None,
+    };
+    let out = std::process::Command::new("fc-match")
+        .arg("--format=%{file}\n%{index}\n%{lang}")
+        .arg(format!(":lang={lang}"))
+        .output()
+        .ok()?;
+    let out = String::from_utf8(out.stdout).ok()?;
+    let mut lines = out.lines();
+    let (file, index, langs) = (lines.next()?, lines.next()?.parse().ok()?, lines.next()?);
+    // fontconfig always answers with some font; only one that covers the language helps.
+    if !langs.split('|').any(|l| l == lang) {
+        return None;
+    }
+    Some((std::fs::read(file).ok()?, index))
+}
+
 /// As gettext does: the first of LC_ALL, LC_MESSAGES and LANG that is set, unless LANGUAGE (a
 /// list of preferences, which desktops set) names one; it is ignored for the plain C locale.
 fn messages_locale(lc_all: Option<String>, lc_messages: Option<String>, lang: Option<String>, language: Option<String>) -> String {
