@@ -49,6 +49,11 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.7.0" date="2026-11-08">
+      <description>
+        <p>The interface is also in German, French, Italian, Polish, Russian, Japanese and Chinese (Simplified and Traditional).</p>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-11-07">
       <description>
         <p>Recording with VA-API (Intel, AMD) keeps the frames on the GPU: about a quarter of the CPU it took, and half with a region and the webcam. Pausing no longer pauses the replay buffer, and many fixes: recordings that cannot be written, a computer that sleeps while recording, the video drifting from the audio when frames are skipped, a webcam unplugged while recording.</p>
