@@ -171,6 +171,8 @@ mod tests {
 
     #[test]
     fn denied_access_says_how_to_allow_it() {
+        // Other tests change the language.
+        let _language = crate::i18n::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let message = access_error(ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled));
         assert!(message.contains("privacy") || message.contains("privacidad"), "{message}");
     }

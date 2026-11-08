@@ -54,6 +54,19 @@ pub fn system_language() -> Language {
     Language::from_lang_id(unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() })
 }
 
+/// A system font with the characters of Chinese or Japanese, as the file and the face in it.
+pub fn cjk_font(language: Language) -> Option<(Vec<u8>, u32)> {
+    // Each language's own UI font first: the same characters are drawn differently in each.
+    let files: &[&str] = match language {
+        Language::Japanese => &["YuGothR.ttc", "meiryo.ttc", "msgothic.ttc"],
+        Language::ChineseSimplified => &["msyh.ttc", "simsun.ttc"],
+        Language::ChineseTraditional => &["msjh.ttc", "mingliu.ttc"],
+        _ => return None,
+    };
+    let fonts = PathBuf::from(std::env::var_os("WINDIR")?).join("Fonts");
+    files.iter().find_map(|file| std::fs::read(fonts.join(file)).ok()).map(|bytes| (bytes, 0))
+}
+
 /// Release builds use the GUI subsystem; reattach to the parent console for selftest output.
 pub fn attach_console() {
     #[link(name = "kernel32")]

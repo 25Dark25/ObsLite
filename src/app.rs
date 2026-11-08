@@ -159,7 +159,7 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         apply_theme(&cc.egui_ctx);
         let config = Config::load();
-        i18n::set(config.language.unwrap_or_else(Language::system));
+        let font_warning = apply_language(&cc.egui_ctx, config.language, crate::platform::sys::cjk_font);
         let actions = Arc::new(Mutex::new(Vec::new()));
         let bound_actions: Arc<Mutex<Vec<Action>>> = Arc::default();
         let on_press = {
@@ -203,7 +203,7 @@ impl App {
             texture_seq: None,
             picking_region: false,
             region_drag: None,
-            status: None,
+            status: font_warning.map(|text| Status { text, file: None, error: true }),
             settings: None,
             cpu: CpuMeter { last: None, percent: 0.0 },
             actions,
@@ -822,7 +822,7 @@ impl App {
             recording: self.is_recording(),
             paused: self.is_paused(),
             replay: self.is_replaying(),
-            english: i18n::english(),
+            language: i18n::current(),
         };
         if let Some(tray) = &mut self.tray {
             tray.update(state);
@@ -944,7 +944,9 @@ impl App {
         let system_changed = (old.system_audio, &old.system_device) != (c.system_audio, &c.system_device);
         let mic_changed = (old.mic, &old.mic_device) != (c.mic, &c.mic_device);
         if old.language != c.language {
-            i18n::set(c.language.unwrap_or_else(Language::system));
+            if let Some(warning) = apply_language(&self.ctx, c.language, crate::platform::sys::cjk_font) {
+                self.set_status(warning, None, true);
+            }
             // Source names are translated ("Pantalla 1" / "Display 1").
             self.refresh_source_list();
             self.config.source_label = self.selected_source().map(|s| s.label.clone());
@@ -1620,9 +1622,15 @@ fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Devic
             group_title(ui, "General");
             grid("general").show(ui, |ui| {
                 ui.label(tr!("Idioma", "Language"));
-                let options = [None, Some(Language::Spanish), Some(Language::English)];
-                let name = |l: Option<Language>| {
-                    l.map_or(tr!("Automático (idioma del sistema)", "Automatic (system language)"), Language::name).to_owned()
+                let options: Vec<_> = std::iter::once(None).chain(Language::ALL.map(Some)).collect();
+                // Japanese and Chinese names are boxes unless a font for them is loaded.
+                let body = egui::TextStyle::Body.resolve(ui.style());
+                let names = Language::ALL.map(|l| {
+                    if ui.ctx().fonts_mut(|f| f.has_glyphs(&body, l.name())) { l.name() } else { l.english_name() }
+                });
+                let name = |l: Option<Language>| match l {
+                    None => tr!("Automático (idioma del sistema)", "Automatic (system language)").to_owned(),
+                    Some(l) => names[Language::ALL.iter().position(|&a| a == l).unwrap_or_default()].to_owned(),
                 };
                 combo(ui, "language", &mut c.language, &options, name, 260.0);
                 ui.end_row();
@@ -2115,6 +2123,29 @@ fn device_combo(ui: &mut egui::Ui, id: &str, enabled: &mut bool, device: &mut Op
     });
 }
 
+/// Sets the interface language and the fonts it needs. The bundled fonts have no Chinese or
+/// Japanese characters, so those take the system's; without one the text would be empty boxes,
+/// so obs-lite shows in English and says why.
+fn apply_language(
+    ctx: &egui::Context,
+    choice: Option<Language>,
+    cjk_font: impl FnOnce(Language) -> Option<(Vec<u8>, u32)>,
+) -> Option<String> {
+    let language = choice.unwrap_or_else(Language::system);
+    let mut fonts = egui::FontDefinitions::default();
+    let font = if language.needs_cjk_font() { cjk_font(language) } else { None };
+    let found = font.is_some() || !language.needs_cjk_font();
+    if let Some((bytes, index)) = font {
+        fonts.font_data.insert("cjk".into(), Arc::new(egui::FontData::from_blob(Arc::new(bytes), index)));
+        for family in fonts.families.values_mut() {
+            family.push("cjk".into());
+        }
+    }
+    ctx.set_fonts(fonts);
+    i18n::set(if found { language } else { Language::English });
+    (!found).then(|| format!("No font with {} characters was found, so obs-lite shows in English.", language.english_name()))
+}
+
 fn apply_theme(ctx: &egui::Context) {
     let mut v = egui::Visuals::dark();
     v.panel_fill = GREY7;
@@ -2264,7 +2295,7 @@ mod tests {
     use super::*;
 
     /// The interface language is global; tests that depend on it take this lock.
-    static LANGUAGE: Mutex<()> = Mutex::new(());
+    use crate::i18n::TEST_LOCK as LANGUAGE;
 
     fn test_app() -> App {
         App {
@@ -2476,9 +2507,9 @@ mod tests {
     }
 
     #[test]
-    fn update_dialog_buttons_stay_inside_it_in_both_languages() {
+    fn update_dialog_buttons_stay_inside_it_in_every_language() {
         let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
-        for language in [Language::English, Language::Spanish] {
+        for language in Language::ALL {
             i18n::set(language);
             let mut app = test_app();
             app.update = Some(Release { version: "10.10.10".into(), url: "https://example.com".into() });
@@ -2519,6 +2550,35 @@ mod tests {
                 .map(|r| r.min.x)
                 .fold(f32::INFINITY, f32::min);
             assert!(left >= title_pos.x - 0.5, "{language:?}: something starts at x = {left}, left of the title at {}", title_pos.x);
+        }
+        i18n::set(Language::Spanish);
+    }
+
+    #[test]
+    fn chinese_or_japanese_without_a_font_shows_in_english() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        let ctx = egui::Context::default();
+        let warning = apply_language(&ctx, Some(Language::Japanese), |_| None);
+        assert_eq!(i18n::current(), Language::English);
+        assert!(warning.is_some_and(|w| w.contains("Japanese")));
+        let warning = apply_language(&ctx, Some(Language::German), |_| panic!("German needs no extra font"));
+        assert_eq!((warning, i18n::current()), (None, Language::German));
+        i18n::set(Language::Spanish);
+    }
+
+    #[test]
+    fn the_system_font_draws_chinese_and_japanese() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        for language in [Language::Japanese, Language::ChineseSimplified, Language::ChineseTraditional] {
+            // Not every machine has one; then the test above covers what happens.
+            let Some(font) = crate::platform::sys::cjk_font(language) else { continue };
+            let ctx = egui::Context::default();
+            assert_eq!(apply_language(&ctx, Some(language), |_| Some(font)), None);
+            // Fonts change at the next pass.
+            ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+            let font_id = FontId::proportional(14.0);
+            assert!(ctx.fonts_mut(|f| f.has_glyphs(&font_id, language.name())), "{language:?}");
+            assert!(ctx.fonts_mut(|f| f.has_glyphs(&font_id, tr!("Ajustes", "Settings"))), "{language:?}");
         }
         i18n::set(Language::Spanish);
     }

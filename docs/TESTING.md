@@ -44,8 +44,12 @@ cargo test --locked
 | `app::no_preview_pictures_for_a_window_that_is_not_shown` | No preview pictures are made while the window is minimized (Windows says so) or has not been drawn for 3 s (Wayland only stops asking for frames); a shown idle window draws once a second, so it never counts as hidden. |
 | `app::a_silent_idle_window_repaints_rarely` | The window draws once a second when idle and silent, and at 15 fps while a meter moves or a recording runs. |
 | `app::exit_waits_for_the_recording_being_saved` | Closing the app while a recording is being saved waits for the MP4 to be finalized. |
-| `i18n::every_spanish_variant_is_spanish` | The UI is Spanish for every Spanish Windows locale and English otherwise. |
-| `i18n::every_spanish_locale_is_spanish` | The same for POSIX locales (`es_ES.UTF-8`, `es`…), as read on Linux. |
+| `i18n::every_language_variant_is_recognized` | Each Windows language id picks its language (every Spanish variant is Spanish; zh-TW and zh-HK are Traditional Chinese, zh-CN and zh-SG Simplified), and English for any other. |
+| `i18n::every_locale_is_recognized` | The same for POSIX locales (`es_ES.UTF-8`, `zh_TW`, `es`…), as read on Linux. |
+| `i18n::every_table_translates_every_text_with_the_same_holes` | Each translation table has every text of every `tr!` in the source, with the same `{}` holes, and nothing that is no longer used. |
+| `i18n::fill_puts_the_arguments_in_order` / `i18n::a_translated_format_fills_its_holes` | A translated text with `{}` and `{:.1}` holes gets its values in order. |
+| `app::chinese_or_japanese_without_a_font_shows_in_english` | With no system font for Japanese or Chinese, obs-lite shows in English and says why; other languages need no extra font. |
+| `app::the_system_font_draws_chinese_and_japanese` | Where the system has the font, the language names and texts can be drawn (skipped for a language whose font is missing). |
 | `linux::encoder::a_region_is_copied_and_what_is_missing_is_black` | Linux only: a region (or a shrunk window) is copied into the canvas, padded with black. |
 | `linux::encoder::the_webcam_is_pasted_in_place` | Linux only: the webcam picture lands in its rectangle. |
 | `linux::encoder::packet_times_discount_the_encoders_offset` | Linux only: packet times ignore the 1000-hour offset GStreamer video encoders add, so audio is not dropped from files. |
@@ -86,7 +90,7 @@ cargo test --locked
 | `app::saved_message_survives_a_source_that_is_gone` | When the recorded window is closed, the "saved" message and file link stay, and the source is deselected. |
 | `app::desktop_audio_leaves_out_the_application_captured_on_its_own` | With an application captured on its own, desktop audio leaves it out; not with no application, nor with a chosen output device. |
 | `app::a_new_release_opens_the_dialog_unless_skipped` | A newer release opens the update dialog unless the user chose not to be reminded of that version; the status-bar link shows either way. |
-| `app::update_dialog_buttons_stay_inside_it_in_both_languages` | In Spanish and English, nothing in the update dialog starts left of its title: the buttons fit. |
+| `app::update_dialog_buttons_stay_inside_it_in_every_language` | In every language, nothing in the update dialog starts left of its title: the buttons fit. |
 
 ## Results
 

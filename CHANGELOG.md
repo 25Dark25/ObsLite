@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- The interface is also in German, French, Italian, Polish, Russian, Japanese and Chinese
+  (Simplified and Traditional), following the system language or chosen in Settings › General.
+  These are machine translations; corrections are welcome. Japanese and Chinese use the system's
+  font for those characters; without one, obs-lite shows in English and says why.
+
 ## [0.6.0] - 2026-11-07
 
 ### Changed
