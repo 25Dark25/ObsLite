@@ -1,8 +1,11 @@
 # Obs Lite
 
-Lightweight screen recorder for Windows and Linux: on Windows a single ~7 MB `.exe`, on Linux a
-~4 MB Flatpak, with no bundled browser. The interface follows OBS Studio, so OBS users find
-everything where they expect it.
+Lightweight screen recorder for Windows and Linux, a small alternative to OBS Studio for recording:
+on Windows a single ~7 MB `.exe`, on Linux a ~4 MB Flatpak, with no bundled browser. The interface
+follows OBS Studio, so OBS users find everything where they expect it.
+
+> **Obs Lite is an independent project.** It is not affiliated with, endorsed by or sponsored by
+> the OBS Project or OBS Studio. "OBS" and "OBS Studio" are trademarks of their respective owners.
 
 ![Obs Lite recording: the preview, the Sources, Audio Mixer and Controls docks, and the timer](docs/images/main-window.png)
 
@@ -28,7 +31,7 @@ every process in the Flatpak's sandbox. With VA-API (Intel, AMD) each frame stay
 Windows. With NVENC or a software encoder it is still copied and converted on the CPU, which costs
 more.
 
-## Obs Lite and OBS Studio
+## Obs Lite vs OBS Studio
 
 Obs Lite does one thing, record, and leaves out what it would need a much larger program for.
 
