@@ -578,3 +578,13 @@ the interface lost about 70 % of its frames and was green, with nothing in it. T
 NV12 on the GPU (`VideoProcessorBlt`) had its error ignored, so frames it did not write went to
 the encoder empty; now that error stops the recording and says so. Not yet known: whether
 VirtualBox's driver reports the error or writes nothing without one.
+
+2026-11-08, the new languages (#87), Windows 11 (the release build of that branch):
+
+| Step | Result |
+|---|---|
+| Every language in Settings › General | The interface switches at once and looked right in each, Japanese and Chinese included (drawn with the Windows fonts) |
+| Automated tests and clippy | 101 passed (two ignored) on Windows; clippy clean on 1.95 and stable; CI green on Windows and Linux |
+
+Not verified for this release: the Japanese and Chinese font lookup on Linux (fontconfig inside
+the Flatpak), and whether the translations read naturally (they are machine translations).
