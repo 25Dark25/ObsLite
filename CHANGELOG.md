@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   applications menu already did. File names and the settings folder stay `obs-lite`.
 - Linux: the applications menu shows the description in the new languages too.
 
+### Fixed
+
+- A setting that cannot be read (a value from a newer version after going back, a hand edit of
+  the wrong type) only loses itself. Every setting was reset, and the file overwritten on exit,
+  the recording to repair included.
+
 ## [0.7.0] - 2026-11-08
 
 ### Added
