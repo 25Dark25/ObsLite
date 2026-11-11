@@ -103,6 +103,8 @@ struct Inner {
     video: gst::Pipeline,
     /// The H.264 encoder element, to ask it for keyframes.
     h264: gst::Element,
+    /// The video pipeline failed, and its error was taken: it will not reach end-of-stream.
+    video_failed: AtomicBool,
     output: Arc<Mutex<Outputs>>,
 }
 
@@ -124,6 +126,8 @@ pub struct Encoder {
     camera: Option<Camera>,
     audio: Option<(gst::Pipeline, gst_app::AppSrc)>,
     audio_frames: Mutex<u64>,
+    /// As `Inner::video_failed`, for the audio pipeline.
+    audio_failed: AtomicBool,
     overlay: Option<(Corner, CameraSize)>,
     name: String,
 }
@@ -214,6 +218,7 @@ impl Encoder {
             video_src,
             video: video.clone(),
             h264: h264_element,
+            video_failed: AtomicBool::new(false),
             output: outputs,
         });
 
@@ -298,7 +303,18 @@ impl Encoder {
                 move || produce_frames(&inner)
             })
             .map_err(|e| e.to_string())?;
-        Ok(Self { inner, producer: Some(producer), video, frames, camera, audio, audio_frames: Mutex::new(0), overlay: s.overlay, name })
+        Ok(Self {
+            inner,
+            producer: Some(producer),
+            video,
+            frames,
+            camera,
+            audio,
+            audio_frames: Mutex::new(0),
+            audio_failed: AtomicBool::new(false),
+            overlay: s.overlay,
+            name,
+        })
     }
 
     pub fn name(&self) -> &str {
@@ -392,6 +408,7 @@ impl Encoder {
     pub fn push_audio(&self, pcm: Vec<u8>) {
         let Some((pipeline, src)) = &self.audio else { return };
         if let Some(e) = posted_error(pipeline) {
+            self.audio_failed.store(true, Ordering::Release);
             self.inner.output.lock().unwrap().record_error(e);
         }
         let frames = (pcm.len() / (CHANNELS * 2)) as u64;
@@ -430,11 +447,12 @@ impl Encoder {
         if let Some((_, src)) = &self.audio {
             let _ = src.end_of_stream();
         }
-        for pipeline in std::iter::once(&self.video).chain(self.audio.as_ref().map(|(p, _)| p)) {
-            if let Some(e) = wait_for_eos(pipeline) {
+        let video = (&self.video, self.inner.video_failed.load(Ordering::Acquire));
+        let audio = self.audio.as_ref().map(|(p, _)| (p, self.audio_failed.load(Ordering::Acquire)));
+        for (pipeline, failed) in std::iter::once(video).chain(audio) {
+            if let Some(e) = end_pipeline(pipeline, failed) {
                 self.inner.output.lock().unwrap().record_error(e);
             }
-            let _ = pipeline.set_state(gst::State::Null);
         }
     }
 }
@@ -496,6 +514,7 @@ fn produce_frames(inner: &Inner) {
             break;
         }
         if let Some(e) = posted_error(&inner.video) {
+            inner.video_failed.store(true, Ordering::Release);
             inner.output.lock().unwrap().record_error(e);
             break;
         }
@@ -830,6 +849,15 @@ pub(super) fn posted_error(pipeline: &gst::Pipeline) -> Option<String> {
         gst::MessageView::Error(e) => Some(e.error().to_string()),
         _ => None,
     }
+}
+
+/// Ends `pipeline` once its sources sent end-of-stream: waits for it to drain, unless it `failed`
+/// before (its error was taken then, and a failed pipeline never reaches end-of-stream); the
+/// error if it fails now.
+fn end_pipeline(pipeline: &gst::Pipeline, failed: bool) -> Option<String> {
+    let error = if failed { None } else { wait_for_eos(pipeline) };
+    let _ = pipeline.set_state(gst::State::Null);
+    error
 }
 
 /// Waits (at most 10 s) for a pipeline to drain after end-of-stream; the error if it failed.
@@ -1259,5 +1287,32 @@ mod tests {
         let finishing = std::time::Instant::now();
         assert!(mp4.finish().is_err());
         assert!(finishing.elapsed() < Duration::from_secs(5), "a failed muxer does not wait for its end of stream");
+    }
+
+    #[test]
+    fn a_pipeline_that_failed_is_not_waited_for_at_the_end() {
+        gst::init().unwrap();
+        // Pictures the next element refuses: the pipeline fails at the first, as an encoder's
+        // does when its driver fails. Recording takes its error as it comes.
+        let pipeline = launch(
+            "appsrc name=src format=time caps=video/x-raw,format=BGRA,width=4,height=4,framerate=30/1 \
+             ! capsfilter caps=video/x-raw,format=RGB ! fakesink",
+        )
+        .unwrap();
+        let src = by_name::<gst_app::AppSrc>(&pipeline, "src").unwrap();
+        play(&pipeline).unwrap();
+        let _ = src.push_buffer(gst::Buffer::from_slice(vec![0u8; 4 * 4 * 4]));
+        let start = std::time::Instant::now();
+        let mut error = None;
+        while error.is_none() && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+            error = posted_error(&pipeline);
+        }
+        assert!(error.is_some(), "no error posted");
+        // Stopping the recording then waited the whole 10 s for an end of stream that never comes.
+        let _ = src.end_of_stream();
+        let ending = std::time::Instant::now();
+        assert_eq!(end_pipeline(&pipeline, true), None);
+        assert!(ending.elapsed() < Duration::from_secs(2), "waited {:?}", ending.elapsed());
     }
 }
