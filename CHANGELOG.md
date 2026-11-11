@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   applications menu already did. File names and the settings folder stay `obs-lite`.
 - Linux: the applications menu shows the description in the new languages too.
 
+### Fixed
+
+- A recording whose final index was cut short (Obs Lite stopped, or the disk filled, while the
+  file was being finished) is repaired at the next start; it stayed unrepaired for good.
+
 ## [0.7.0] - 2026-11-08
 
 ### Added

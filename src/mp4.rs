@@ -480,21 +480,38 @@ fn pad(file: &mut impl Storage, boxes: &[Header], init: Option<&Header>) -> io::
 }
 
 fn convert(file: &mut impl Storage, cut_short: bool) -> io::Result<bool> {
-    let len = file.seek(SeekFrom::End(0))?;
-    let mut top = Vec::new();
+    let mut len = file.seek(SeekFrom::End(0))?;
+    let mut top: Vec<Header> = Vec::new();
     let mut end = 0;
     while end < len {
         match Header::read(file, end, len) {
+            // A moov after the fragments that does not parse is an index whose writing stopped
+            // partway (a full disk): what follows is left over from the old one.
+            Ok(header)
+                if cut_short
+                    && &header.kind == b"moov"
+                    && top.iter().any(|h| &h.kind == b"moof")
+                    && header.read_body(file).ok().is_none_or(|b| parse(&b).is_err()) =>
+            {
+                break;
+            }
             Ok(header) => {
                 end += header.size;
                 top.push(header);
             }
-            Err(e) if cut_short && e.kind() == io::ErrorKind::UnexpectedEof => break,
+            // The unfinished last box; or what was left over after an index whose writing
+            // stopped before the file was cut after it, which may start like no box at all.
+            Err(e) if cut_short && !top.is_empty() && matches!(e.kind(), io::ErrorKind::UnexpectedEof | io::ErrorKind::InvalidData) => break,
             Err(e) => return Err(e),
         }
     }
     if !top.iter().any(|h| &h.kind == b"moof") {
         return Ok(false);
+    }
+    // Nothing past the last whole box is kept: it would stay after a new index shorter than it.
+    if cut_short && end < len {
+        file.truncate(end)?;
+        len = end;
     }
     // The initial moov comes before the fragments; a moov after them is a full index.
     let first_moof = top.iter().position(|h| &h.kind == b"moof").expect("checked above");
@@ -872,6 +889,26 @@ pub(crate) mod tests {
     fn a_fragmented_file_becomes_a_regular_one_with_every_sample_in_place() {
         let (original, video, audio) = fragmented();
         assert_regular(&converted(original, false).unwrap(), &video, &audio);
+    }
+
+    #[test]
+    fn a_repair_finishes_an_index_whose_writing_was_cut_short() {
+        // A fragment index big enough for the full index to fit over it, as a long recording's is.
+        let (mut original, video, audio) = fragmented();
+        original.truncate(original.len() - 32);
+        original.extend(bx(b"mfra", &[0, 0, 0, 3].repeat(1000)));
+        let at = top_level(&original).into_iter().find(|(_, k)| k == b"mfra").map(|(at, _)| at as usize).unwrap();
+        let index = converted(original.clone(), false).unwrap()[at..].to_vec();
+        // Stopped (a crash, a full disk) with half the index written over the old one: a moov
+        // that does not parse, with the old index's bytes after it. And stopped between writing
+        // the index and cutting the file after it: the whole index, with those bytes after it.
+        // Either left the recording unrepaired for good.
+        for written in [index.len() / 2, index.len()] {
+            let mut file = original.clone();
+            file[at..at + written].copy_from_slice(&index[..written]);
+            let repaired = converted(file, true).unwrap_or_else(|e| panic!("{written} of {} bytes written: {e}", index.len()));
+            assert_regular(&repaired, &video, &audio);
+        }
     }
 
     #[test]
