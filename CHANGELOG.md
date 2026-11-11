@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A recording whose final index was cut short (Obs Lite stopped, or the disk filled, while the
+  file was being finished) is repaired at the next start; it stayed unrepaired for good.
 - A setting that cannot be read (a value from a newer version after going back, a hand edit of
   the wrong type) only loses itself. Every setting was reset, and the file overwritten on exit,
   the recording to repair included.
