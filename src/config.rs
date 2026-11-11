@@ -230,10 +230,18 @@ impl Config {
         config
     }
 
-    /// Editors such as Windows PowerShell save UTF-8 with a BOM, which serde_json rejects;
-    /// without this the app would start with defaults and overwrite the file on exit.
+    /// Editors such as Windows PowerShell save UTF-8 with a BOM, which serde_json rejects; and a
+    /// setting that cannot be read (a value from a newer version, a hand edit of the wrong type)
+    /// only loses itself. Otherwise the app would start with defaults and overwrite the file on
+    /// exit, the recording to repair included.
     fn parse(json: &str) -> Option<Self> {
-        serde_json::from_str(json.trim_start_matches('\u{feff}')).ok()
+        let serde_json::Value::Object(fields) = serde_json::from_str(json.trim_start_matches('\u{feff}')).ok()? else { return None };
+        let reads = |key: &String, value: &serde_json::Value| {
+            let alone = serde_json::Map::from_iter([(key.clone(), value.clone())]);
+            serde_json::from_value::<Self>(serde_json::Value::Object(alone)).is_ok()
+        };
+        let readable = fields.into_iter().filter(|(key, value)| reads(key, value));
+        serde_json::from_value(serde_json::Value::Object(readable.collect())).ok()
     }
 
     pub fn save(&mut self) {
@@ -403,5 +411,15 @@ mod tests {
     fn settings_saved_with_a_utf8_bom_still_load() {
         let c = Config::parse("\u{feff}{\"fps\": 30}").expect("settings with a BOM are rejected");
         assert_eq!(c.fps, 30);
+    }
+
+    #[test]
+    fn a_setting_that_cannot_be_read_only_loses_itself() {
+        // A value from a newer version, after going back to this one, and a hand edit of the
+        // wrong type: every other setting stays.
+        let json = r#"{"fps": 30, "resolution": "P2160", "cursor": "yes", "last_recording": "cut.mp4"}"#;
+        let c = Config::parse(json).expect("every setting was lost");
+        assert_eq!((c.fps, c.resolution, c.cursor), (30, Resolution::Native, true));
+        assert_eq!(c.last_recording, Some(PathBuf::from("cut.mp4")), "the recording to repair");
     }
 }

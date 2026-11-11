@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A recording whose final index was cut short (Obs Lite stopped, or the disk filled, while the
   file was being finished) is repaired at the next start; it stayed unrepaired for good.
+- A setting that cannot be read (a value from a newer version after going back, a hand edit of
+  the wrong type) only loses itself. Every setting was reset, and the file overwritten on exit,
+  the recording to repair included.
+- A mis-click while choosing a region to record keeps the region there was; it was silently
+  dropped, and the next recording took the whole source.
+- Exit waits for a screenshot still being written; closing right after taking one could leave
+  a PNG cut short.
 
 ## [0.7.0] - 2026-11-08
 
