@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   applications menu already did. File names and the settings folder stay `obs-lite`.
 - Linux: the applications menu shows the description in the new languages too.
 
+### Fixed
+
+- Starting a recording no longer holds up the window, the audio and the webcam while the encoder
+  is made: on Linux, trying the installed H.264 encoders out can take seconds, during which the
+  window stopped drawing.
+
 ## [0.7.0] - 2026-11-08
 
 ### Added
