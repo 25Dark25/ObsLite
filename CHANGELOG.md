@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Starting a recording no longer holds up the window, the audio and the webcam while the encoder
+  is made: on Linux, trying the installed H.264 encoders out can take seconds, during which the
+  window stopped drawing.
+- Linux: the webcam works with PipeWire before 1.2 (Ubuntu 24.04, Debian 12). Asking its
+  GStreamer source for a setting it did not have yet kept the camera from starting.
+- Linux: closing Settings left a thread of the global shortcuts waiting until the next shortcut
+  press, one more each time; the replaced listener now ends at once.
+- Linux: stopping after the encoder failed during the recording no longer waits 10 s (and 10 s
+  more if the audio encoder failed too) for an end of stream that cannot come.
+- Linux: a recording whose file writer cannot start leaves no empty `.mp4` behind.
 - A recording whose final index was cut short (Obs Lite stopped, or the disk filled, while the
   file was being finished) is repaired at the next start; it stayed unrepaired for good.
 - A setting that cannot be read (a value from a newer version after going back, a hand edit of

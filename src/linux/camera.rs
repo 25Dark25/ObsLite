@@ -104,15 +104,17 @@ pub fn capture(device: &str, shared: &CameraShared, repaint: Option<&eframe::egu
         return Ok(());
     }
     let pipeline = gst::parse::launch(&format!(
-        // An unplugged camera ends the stream (otherwise the last picture would stay, frozen).
-        "pipewiresrc name=src fd={fd} on-disconnect=error ! videoconvert ! video/x-raw,format=BGRA ! appsink name=sink max-buffers=1 drop=true sync=false",
+        "pipewiresrc name=src fd={fd} ! videoconvert ! video/x-raw,format=BGRA ! appsink name=sink max-buffers=1 drop=true sync=false",
         fd = fd.as_raw_fd()
     ))
     .map_err(|e| e.to_string())?
     .downcast::<gst::Pipeline>()
     .map_err(|_| "not a pipeline".to_owned())?;
-    if let (Some(src), false) = (pipeline.by_name("src"), device.is_empty()) {
-        src.set_property("target-object", device);
+    if let Some(src) = pipeline.by_name("src") {
+        if !device.is_empty() {
+            src.set_property("target-object", device);
+        }
+        end_on_disconnect(&src);
     }
     let sink = pipeline.by_name("sink").and_then(|e| e.downcast::<gst_app::AppSink>().ok()).ok_or("no sink")?;
     super::encoder::play(&pipeline)?;
@@ -133,6 +135,15 @@ pub fn capture(device: &str, shared: &CameraShared, repaint: Option<&eframe::egu
     // Releases the camera (its light goes off).
     let _ = pipeline.set_state(gst::State::Null);
     result
+}
+
+/// Has an unplugged camera end the stream (otherwise its last picture stays, frozen), where
+/// pipewiresrc can say so (PipeWire 1.2 and later): asking an older one would keep the camera
+/// from starting at all.
+fn end_on_disconnect(src: &gst::Element) {
+    if src.has_property("on-disconnect") {
+        src.set_property_from_str("on-disconnect", "error");
+    }
 }
 
 /// A BGRA sample as a tightly packed camera picture.
@@ -175,6 +186,15 @@ mod tests {
         let _language = crate::i18n::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let message = access_error(ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled));
         assert!(message.contains("privacy") || message.contains("privacidad"), "{message}");
+    }
+
+    #[test]
+    fn an_older_pipewiresrc_without_on_disconnect_still_starts() {
+        gst::init().unwrap();
+        // PipeWire before 1.2 (Ubuntu 24.04 has 1.0) has no such property; any element without
+        // it stands in for its pipewiresrc. Asking for it anyway failed to make the pipeline.
+        let old = gst::ElementFactory::make("identity").build().unwrap();
+        end_on_disconnect(&old);
     }
 
     #[test]

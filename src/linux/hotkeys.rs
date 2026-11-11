@@ -2,14 +2,18 @@
 //! presses, so it owns the shortcuts: obs-lite proposes its combinations and the desktop may
 //! ask the user to confirm or change them.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 use std::thread;
 
 use ashpd::desktop::{CreateSessionOptions, Session};
 use ashpd::desktop::global_shortcuts::{GlobalShortcuts as Portal, NewShortcut};
 use eframe::egui::Key;
 use futures_util::StreamExt;
+use futures_util::future::{Either, select};
 
 use crate::hotkeys::Binding;
 
@@ -78,6 +82,39 @@ struct State {
     session: Mutex<Option<Arc<Session<Portal>>>>,
     /// Why the newest binding failed, for the UI to show once.
     error: Mutex<Option<String>>,
+    /// Wakes the listener of the newest binding when a newer one replaces it.
+    waker: Mutex<Option<Waker>>,
+}
+
+impl State {
+    /// Replaces the listeners of earlier bindings; the number of the new one.
+    fn supersede(&self) -> u64 {
+        let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        if let Some(waker) = self.waker.lock().unwrap().take() {
+            waker.wake();
+        }
+        generation
+    }
+}
+
+/// Resolves once a newer binding replaced the listener of `generation`.
+struct Superseded<'a> {
+    state: &'a State,
+    generation: u64,
+}
+
+impl Future for Superseded<'_> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let superseded = || self.state.generation.load(Ordering::Acquire) != self.generation;
+        if superseded() {
+            return Poll::Ready(());
+        }
+        *self.state.waker.lock().unwrap() = Some(cx.waker().clone());
+        // Replaced between the check and keeping the waker: that wake-up went unseen.
+        if superseded() { Poll::Ready(()) } else { Poll::Pending }
+    }
 }
 
 pub struct GlobalHotkeys {
@@ -97,6 +134,7 @@ impl GlobalHotkeys {
                 on_press: Box::new(on_press),
                 session: Mutex::new(None),
                 error: Mutex::new(None),
+                waker: Mutex::new(None),
             }),
         })
     }
@@ -104,7 +142,7 @@ impl GlobalHotkeys {
     /// Proposes the shortcuts to the desktop; returns those that cannot be expressed. The
     /// desktop's answer (and any dialog it shows) comes later, off the UI thread.
     pub fn bind(&mut self, bindings: &[Binding]) -> Vec<String> {
-        let generation = self.state.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let generation = self.state.supersede();
         let mut failed = Vec::new();
         let mut shortcuts = Vec::new();
         for binding in bindings {
@@ -157,11 +195,10 @@ async fn listen(state: &State, generation: u64, shortcuts: Vec<NewShortcut>) -> 
     *state.session.lock().unwrap() = Some(session.clone());
     let mut activated = portal.receive_activated().await?;
     portal.bind_shortcuts(&session, &shortcuts, None, Default::default()).await?.response()?;
-    while let Some(event) = activated.next().await {
-        // A newer binding replaced this one (and closed its session).
-        if state.generation.load(Ordering::Acquire) != generation {
-            break;
-        }
+    loop {
+        // Until a newer binding replaces this one (and closes its session): waiting for the next
+        // activation alone kept the thread, and the stream, until the next shortcut press.
+        let Either::Left((Some(event), _)) = select(activated.next(), Superseded { state, generation }).await else { break };
         if !state.enabled.load(Ordering::Acquire) {
             continue;
         }
@@ -185,5 +222,34 @@ mod tests {
         assert_eq!(trigger("Alt+PageUp").as_deref(), Some("ALT+Page_Up"));
         assert_eq!(trigger("Hyper+R"), None);
         assert_eq!(trigger(""), None);
+    }
+
+    #[test]
+    fn a_replaced_listener_is_woken_at_once() {
+        struct Woken(AtomicBool);
+        impl std::task::Wake for Woken {
+            fn wake(self: Arc<Self>) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let state = State {
+            generation: AtomicU64::new(1),
+            enabled: AtomicBool::new(true),
+            ids: Mutex::new(Vec::new()),
+            on_press: Box::new(|_| {}),
+            session: Mutex::new(None),
+            error: Mutex::new(None),
+            waker: Mutex::new(None),
+        };
+        let woken = Arc::new(Woken(AtomicBool::new(false)));
+        let waker = Waker::from(woken.clone());
+        let mut cx = Context::from_waker(&waker);
+        let mut listener = Superseded { state: &state, generation: 1 };
+        assert_eq!(Pin::new(&mut listener).poll(&mut cx), Poll::Pending);
+        // Settings closed again: a newer binding. Each one left the last listener's thread (and
+        // its stream of activations) waiting until the next shortcut press.
+        assert_eq!(state.supersede(), 2);
+        assert!(woken.0.load(Ordering::SeqCst), "the replaced listener is not woken");
+        assert_eq!(Pin::new(&mut listener).poll(&mut cx), Poll::Ready(()));
     }
 }

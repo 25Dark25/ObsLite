@@ -129,10 +129,8 @@ impl Handler {
         shared.frames.fetch_add(1, Ordering::Relaxed);
         *shared.last_frame.lock().unwrap() = Some(sample.clone());
         if on_gpu {
-            let mut encoder = shared.encoder.lock().unwrap();
-            if encoder.is_none() {
-                *encoder = Some(self.new_encoder(sample, size)?);
-            }
+            self.ensure_encoder(sample, size)?;
+            let encoder = shared.encoder.lock().unwrap();
             let Some(enc) = encoder.as_ref() else { return Ok(()) };
             enc.push_gpu_frame(sample);
             if let Some(to) = self.preview_due(size)
@@ -147,11 +145,8 @@ impl Handler {
         let frame = FrameRef { data: map.as_slice(), size, stride: map.size() / size.1.max(1) as usize };
 
         if self.record.is_some() {
-            let mut encoder = shared.encoder.lock().unwrap();
-            if encoder.is_none() {
-                *encoder = Some(self.new_encoder(sample, size)?);
-            }
-            if let Some(enc) = encoder.as_ref() {
+            self.ensure_encoder(sample, size)?;
+            if let Some(enc) = shared.encoder.lock().unwrap().as_ref() {
                 enc.push_frame(&frame);
             }
         }
@@ -165,6 +160,18 @@ impl Handler {
             }
             show_preview(&shared, (pw, ph), rgba);
         }
+        Ok(())
+    }
+
+    /// Makes the encoder, if there is none yet, for frames like `sample` (`size`). Not under
+    /// `shared.encoder`'s lock: the window, the mixer and the webcam take it every frame, and
+    /// making the encoder tries the installed encoders out, which can take seconds.
+    fn ensure_encoder(&mut self, sample: &gst::Sample, size: Size) -> Result<(), String> {
+        if self.shared.encoder.lock().unwrap().is_some() {
+            return Ok(());
+        }
+        let encoder = self.new_encoder(sample, size)?;
+        *self.shared.encoder.lock().unwrap() = Some(encoder);
         Ok(())
     }
 

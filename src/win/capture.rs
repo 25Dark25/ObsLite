@@ -145,8 +145,9 @@ impl GraphicsCaptureApiHandler for Handler {
         let _ = keep_last_frame(&shared, frame);
 
         if let Some(rec) = &self.flags.record {
-            let mut encoder = shared.encoder.lock().unwrap();
-            if encoder.is_none() {
+            // Made outside the lock: the window, the mixer and the webcam take it every frame,
+            // and starting the hardware encoder can take a moment.
+            if shared.encoder.lock().unwrap().is_none() {
                 let full = (frame.width(), frame.height());
                 let input = match rec.region.and_then(|r| r.fit(full)) {
                     Some(r) => {
@@ -171,10 +172,10 @@ impl GraphicsCaptureApiHandler for Handler {
                     shared.encoder_ready.clone(),
                     shared.outputs.clone(),
                 )?;
-                *encoder = Some(created);
+                *shared.encoder.lock().unwrap() = Some(created);
                 *shared.sizes.lock().unwrap() = Some((input, output));
             }
-            if let Some(enc) = encoder.as_ref() {
+            if let Some(enc) = shared.encoder.lock().unwrap().as_ref() {
                 enc.push_frame(frame, self.region);
             }
         }
