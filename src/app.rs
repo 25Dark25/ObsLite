@@ -1118,7 +1118,7 @@ impl App {
                 let selection = Rect::from_two_pos(start, end).intersect(canvas);
                 outline_region(painter, canvas, selection);
                 if response.drag_stopped() {
-                    self.config.region = region_from_rect(selection, canvas, source);
+                    self.config.region = picked_region(self.config.region, selection, canvas, source);
                     (self.picking_region, self.region_drag) = (false, None);
                 }
             }
@@ -1906,6 +1906,12 @@ fn region_rect(region: Region, canvas: Rect, source: (u32, u32)) -> Rect {
     Rect::from_min_size(min, vec2(region.width as f32, region.height as f32) * scale)
 }
 
+/// The region a drag over the preview picked; one too short for a region (a mis-click) leaves
+/// `previous` as it was.
+fn picked_region(previous: Option<Region>, selection: Rect, canvas: Rect, source: (u32, u32)) -> Option<Region> {
+    region_from_rect(selection, canvas, source).or(previous)
+}
+
 /// The source region under `selection` on the preview `canvas`.
 fn region_from_rect(selection: Rect, canvas: Rect, source: (u32, u32)) -> Option<Region> {
     let scale = vec2(source.0 as f32 / canvas.width(), source.1 as f32 / canvas.height());
@@ -2354,6 +2360,17 @@ mod tests {
         // A click without a drag selects nothing.
         let click = Rect::from_min_max(pos2(150.0, 75.0), pos2(150.5, 75.5));
         assert_eq!(region_from_rect(click, canvas, (1920, 960)), None);
+    }
+
+    #[test]
+    fn a_drag_too_short_for_a_region_keeps_the_one_there_was() {
+        let canvas = Rect::from_min_size(pos2(100.0, 50.0), vec2(200.0, 100.0));
+        let previous = Some(Region { x: 0, y: 0, width: 800, height: 600 });
+        // A mis-click while choosing another region lost it, and nothing said so.
+        let click = Rect::from_min_max(pos2(150.0, 75.0), pos2(150.5, 75.5));
+        assert_eq!(picked_region(previous, click, canvas, (1920, 960)), previous);
+        let drag = Rect::from_min_max(pos2(150.0, 75.0), pos2(250.0, 125.0));
+        assert_eq!(picked_region(previous, drag, canvas, (1920, 960)), Some(Region { x: 480, y: 240, width: 960, height: 480 }));
     }
 
     #[test]
