@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window stopped drawing.
 - Linux: the webcam works with PipeWire before 1.2 (Ubuntu 24.04, Debian 12). Asking its
   GStreamer source for a setting it did not have yet kept the camera from starting.
+- Linux: closing Settings left a thread of the global shortcuts waiting until the next shortcut
+  press, one more each time; the replaced listener now ends at once.
 
 ## [0.7.0] - 2026-11-08
 
