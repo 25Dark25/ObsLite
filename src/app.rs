@@ -105,8 +105,6 @@ pub struct App {
     mic_devices: Vec<Device>,
     preview: Option<Session>,
     rec: RecState,
-    /// A screenshot being written to disk.
-    screenshot: Option<Receiver<Result<PathBuf, String>>>,
     system: Option<Input>,
     mic: Option<Input>,
     /// Application Audio Capture, when its application is running.
@@ -195,7 +193,6 @@ impl App {
             mic_devices: Vec::new(),
             preview: None,
             rec: RecState::Idle,
-            screenshot: None,
             meters: [0.0; 3],
             ctx: cc.egui_ctx.clone(),
             last_drawn: Instant::now(),
@@ -760,19 +757,20 @@ impl App {
         {
             paste_camera(&mut rgba, width, height, &frame, corner, size);
         }
+        self.save_screenshot(ctx, width, height, rgba);
+    }
+
+    /// Writes the picture as a PNG in the recordings folder. PNG encoding of a large frame takes
+    /// a moment, so it happens on another thread; exit waits for it, or the file would be left
+    /// cut short.
+    fn save_screenshot(&mut self, ctx: &egui::Context, width: u32, height: u32, rgba: Vec<u8>) {
         let path = new_output(&self.config.output_dir, Some(tr!("Captura", "Screenshot")), "png", &mut self.named);
-        let (tx, rx) = mpsc::channel();
-        let ctx = ctx.clone();
-        // PNG encoding of a large frame takes a moment; keep the UI responsive.
-        thread::spawn(move || {
-            let result = std::fs::create_dir_all(path.parent().unwrap_or(&path))
-                .map_err(|e| e.to_string())
-                .and_then(|()| capture::write_png(&path, width, height, &rgba))
-                .map(|()| path);
-            let _ = tx.send(result);
-            ctx.request_repaint();
+        self.spawn_job(ctx, move || {
+            match std::fs::create_dir_all(path.parent().unwrap_or(&path)).map_err(|e| e.to_string()).and_then(|()| capture::write_png(&path, width, height, &rgba)) {
+                Ok(()) => saved(tr!("Captura guardada en '{}'", "Screenshot saved to '{}'", crate::platform::sys::display_path(&path).display()), path),
+                Err(e) => failed(tr!("No se pudo guardar la captura: {}", "Could not save the screenshot: {}", e)),
+            }
         });
-        self.screenshot = Some(rx);
     }
 
     /// Background bookkeeping; runs even while the window is minimized.
@@ -840,16 +838,6 @@ impl App {
                     self.set_status(tr!("Grabación guardada en '{}'", "Recording saved to '{}'", crate::platform::sys::display_path(&path).display()), Some(path), false)
                 }
                 Err(e) => self.set_status(tr!("Error al guardar la grabación: {}", "Error saving the recording: {}", e), None, true),
-            }
-        }
-
-        if let Some(rx) = &self.screenshot
-            && let Ok(result) = rx.try_recv()
-        {
-            self.screenshot = None;
-            match result {
-                Ok(path) => self.set_status(tr!("Captura guardada en '{}'", "Screenshot saved to '{}'", crate::platform::sys::display_path(&path).display()), Some(path), false),
-                Err(e) => self.set_status(tr!("No se pudo guardar la captura: {}", "Could not save the screenshot: {}", e), None, true),
             }
         }
 
@@ -2312,7 +2300,6 @@ mod tests {
             mic_devices: Vec::new(),
             preview: None,
             rec: RecState::Idle,
-            screenshot: None,
             system: None,
             mic: None,
             app_audio: None,
@@ -2371,6 +2358,24 @@ mod tests {
         assert_eq!(picked_region(previous, click, canvas, (1920, 960)), previous);
         let drag = Rect::from_min_max(pos2(150.0, 75.0), pos2(250.0, 125.0));
         assert_eq!(picked_region(previous, drag, canvas, (1920, 960)), Some(Region { x: 480, y: 240, width: 960, height: 480 }));
+    }
+
+    #[test]
+    fn exit_waits_for_the_screenshot_being_written() {
+        let dir = std::env::temp_dir().join(format!("obs-lite-shot-{}", std::process::id()));
+        let mut app = test_app();
+        app.config.output_dir = dir.clone();
+        app.save_screenshot(&egui::Context::default(), 2, 2, vec![255; 2 * 2 * 4]);
+        // Exiting right after taking a screenshot left a PNG cut short: the thread writing it
+        // was not one exit waits for.
+        assert_eq!(app.jobs.len(), 1, "not a job exit waits for");
+        let status = app.jobs.pop().unwrap().join().unwrap();
+        let png = std::fs::read_dir(&dir).unwrap().next().expect("a screenshot").unwrap().path();
+        let decoded = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&png).unwrap())).read_info();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(!status.error, "{}", status.text);
+        assert_eq!(status.file.as_deref(), Some(png.as_path()));
+        assert_eq!(decoded.unwrap().info().width, 2);
     }
 
     #[test]

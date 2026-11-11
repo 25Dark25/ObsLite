@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the recording to repair included.
 - A mis-click while choosing a region to record keeps the region there was; it was silently
   dropped, and the next recording took the whole source.
+- Exit waits for a screenshot still being written; closing right after taking one could leave
+  a PNG cut short.
 
 ## [0.7.0] - 2026-11-08
 
