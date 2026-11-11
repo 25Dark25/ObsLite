@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Starting a recording no longer holds up the window, the audio and the webcam while the encoder
   is made: on Linux, trying the installed H.264 encoders out can take seconds, during which the
   window stopped drawing.
+- Linux: the webcam works with PipeWire before 1.2 (Ubuntu 24.04, Debian 12). Asking its
+  GStreamer source for a setting it did not have yet kept the camera from starting.
 
 ## [0.7.0] - 2026-11-08
 
