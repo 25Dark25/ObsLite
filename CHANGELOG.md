@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   press, one more each time; the replaced listener now ends at once.
 - Linux: stopping after the encoder failed during the recording no longer waits 10 s (and 10 s
   more if the audio encoder failed too) for an end of stream that cannot come.
+- Linux: a recording whose file writer cannot start leaves no empty `.mp4` behind.
 
 ## [0.7.0] - 2026-11-08
 

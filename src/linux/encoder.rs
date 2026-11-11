@@ -915,11 +915,7 @@ impl Muxer for Mp4 {
         // filesink takes text: a path that is not valid UTF-8 would be written somewhere else.
         let location = path.to_str().ok_or_else(|| tr!("la ruta de grabación no es UTF-8 válido", "the recording path is not valid UTF-8").to_owned())?;
         by_name::<gst::Element>(&pipeline, "file")?.set_property("location", location);
-        // filesink takes no lock: this one, held until the file is finished, keeps another
-        // obs-lite from taking it for a recording cut short and repairing it while it is written.
-        let lock = std::fs::File::create(path).map_err(|e| e.to_string())?;
-        let _ = lock.try_lock();
-        play(&pipeline)?;
+        let lock = start_writing(&pipeline, path)?;
         Ok(Self { pipeline, path: path.to_owned(), video: video_src, audio: audio_src, start, failed: Mutex::new(None), _lock: lock })
     }
 
@@ -971,6 +967,21 @@ impl Muxer for Mp4 {
             _ => Err(tr!("el archivo MP4 no terminó de escribirse", "the MP4 file did not finish writing").to_owned()),
         }
     }
+}
+
+/// Creates the recording file and starts `pipeline` writing it. filesink takes no lock: the file
+/// is held open until it is finished, which keeps another obs-lite from taking it for a
+/// recording cut short and repairing it while it is written. A pipeline that cannot start leaves
+/// no empty file behind.
+fn start_writing(pipeline: &gst::Pipeline, path: &Path) -> Result<std::fs::File, String> {
+    let lock = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let _ = lock.try_lock();
+    if let Err(e) = play(pipeline) {
+        drop(lock);
+        let _ = std::fs::remove_file(path);
+        return Err(e);
+    }
+    Ok(lock)
 }
 
 #[cfg(test)]
@@ -1314,5 +1325,20 @@ mod tests {
         let ending = std::time::Instant::now();
         assert_eq!(end_pipeline(&pipeline, true), None);
         assert!(ending.elapsed() < Duration::from_secs(2), "waited {:?}", ending.elapsed());
+    }
+
+    #[test]
+    fn a_muxer_that_cannot_start_leaves_no_empty_file() {
+        gst::init().unwrap();
+        let dir = std::env::temp_dir().join(format!("obs-lite-nostart-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // filesink cannot open its file (its folder is missing): the pipeline does not start, as
+        // the muxer's cannot where the file cannot be written.
+        let pipeline = launch(&format!("fakesrc ! filesink location={}", dir.join("missing").join("x").display())).unwrap();
+        let path = dir.join("rec.mp4");
+        assert!(start_writing(&pipeline, &path).is_err());
+        let left = path.exists();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(!left, "a 0-byte recording was left behind");
     }
 }
