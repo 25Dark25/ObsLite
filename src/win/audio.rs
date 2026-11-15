@@ -21,7 +21,7 @@ fn direction(kind: InputKind) -> Direction {
 pub fn list_devices(kind: InputKind) -> Vec<Device> {
     let list = move || -> Result<Vec<Device>, Box<dyn Error>> {
         wasapi::initialize_mta().ok()?;
-        let collection = DeviceEnumerator::new()?.get_device_collection(&direction(kind))?;
+        let collection = DeviceEnumerator::new()?.get_device_collection(direction(kind))?;
         let mut out = Vec::new();
         for device in &collection {
             let device = device?;
@@ -62,7 +62,7 @@ pub fn capture(kind: InputKind, device_id: Option<&str>, shared: &InputShared) -
 
 /// One stream, until asked to stop or, when following the default device, until that changes.
 fn stream(kind: InputKind, device_id: Option<&str>, shared: &InputShared, follows_default: bool, opened: &mut bool) -> Result<(), Box<dyn Error>> {
-    let format = WaveFormat::new(32, 32, &SampleType::Float, SAMPLE_RATE as usize, CHANNELS, None);
+    let format = WaveFormat::new(32, 32, SampleType::Float, SAMPLE_RATE as usize, CHANNELS, None);
     let enumerator = DeviceEnumerator::new()?;
     let mut device_in_use = None;
     let (mut client, mode) = match kind {
@@ -75,13 +75,13 @@ fn stream(kind: InputKind, device_id: Option<&str>, shared: &InputShared, follow
         _ => {
             let device = match device_id {
                 Some(id) => enumerator.get_device(id)?,
-                None => enumerator.get_default_device(&direction(kind))?,
+                None => enumerator.get_default_device(direction(kind))?,
             };
             device_in_use = Some(device.get_id()?);
             (device.get_iaudioclient()?, StreamMode::PollingShared { autoconvert: true, buffer_duration_hns: 1_000_000 })
         }
     };
-    client.initialize_client(&format, &Direction::Capture, &mode)?;
+    client.initialize_client(&format, Direction::Capture, mode, None)?;
     let event = match mode {
         StreamMode::EventsShared { .. } => Some(client.set_get_eventhandle()?),
         _ => None,
@@ -118,7 +118,7 @@ fn stream(kind: InputKind, device_id: Option<&str>, shared: &InputShared, follow
         }
         if follows_default && checked.elapsed() >= Duration::from_secs(1) {
             checked = Instant::now();
-            let default = enumerator.get_default_device(&direction(kind)).and_then(|d| d.get_id());
+            let default = enumerator.get_default_device(direction(kind)).and_then(|d| d.get_id());
             if default.ok() != device_in_use {
                 break;
             }
