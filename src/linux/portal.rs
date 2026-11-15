@@ -83,7 +83,7 @@ pub fn start(cursor: bool) -> Result<Cast, String> {
 /// The `Closed` signal of `session`, on the connection the portal sends it to.
 async fn closed_signal(connection: &zbus::Connection, session: &Session<Screencast>) -> Result<MessageStream, ashpd::Error> {
     // ashpd does not give out the session's path, only its D-Bus encoding.
-    let context = wire::serialized::Context::new_dbus(wire::LE, 0);
+    let context = wire::serialized::Context::new(wire::LE, 0);
     let path: OwnedObjectPath = wire::to_bytes(context, session)?.deserialize()?.0;
     let rule = MatchRule::builder()
         .msg_type(message::Type::Signal)
