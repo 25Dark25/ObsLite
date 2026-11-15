@@ -15,8 +15,10 @@ $root = Split-Path $PSScriptRoot
 if (-not $Version) {
     $Version = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
 }
-# build.rs writes the icon it embeds in the executable next to its other outputs.
-$icon = Get-ChildItem (Join-Path $root 'target\release\build\obs-lite-*\out\icon.ico') |
+# build.rs writes the icon it embeds in the executable next to its other outputs: in
+# build\obs-lite\<hash>\out since Rust 1.100, in build\obs-lite-<hash>\out before.
+$icon = @('obs-lite\*\out\icon.ico', 'obs-lite-*\out\icon.ico') |
+    ForEach-Object { Get-ChildItem (Join-Path $root "target\release\build\$_") -ErrorAction SilentlyContinue } |
     Sort-Object LastWriteTime | Select-Object -Last 1
 if (-not $icon) { throw 'icon.ico not found: run cargo build --release first' }
 
