@@ -2,6 +2,7 @@
 //! PipeWire stream of just that. The choice is remembered (a restore token) until the user
 //! picks again, so later sessions start without the dialog.
 
+use std::num::NonZeroUsize;
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 
@@ -9,8 +10,8 @@ use ashpd::desktop::screencast::{
     CursorMode, OpenPipeWireRemoteOptions, Screencast, SelectSourcesOptions, SourceType, StartCastOptions,
 };
 use ashpd::desktop::{CreateSessionOptions, PersistMode, Session};
+use ashpd::wire::{self, OwnedObjectPath};
 use ashpd::zbus::{self, MatchRule, MessageStream, message};
-use ashpd::zvariant::{self, OwnedObjectPath};
 use futures_util::{FutureExt, StreamExt};
 
 use crate::i18n::tr;
@@ -50,10 +51,10 @@ pub fn start(cursor: bool) -> Result<Cast, String> {
         let proxy = Screencast::new().await?;
         let session = proxy.create_session(CreateSessionOptions::default()).await?;
         let closed = closed_signal(proxy.connection(), &session).await?;
-        let cursor = if cursor { CursorMode::Embedded } else { CursorMode::Hidden };
+        let cursor = if cursor { CursorMode::EMBEDDED } else { CursorMode::HIDDEN };
         let options = SelectSourcesOptions::default()
             .set_cursor_mode(cursor)
-            .set_sources(SourceType::Monitor | SourceType::Window)
+            .set_sources(SourceType::MONITOR | SourceType::WINDOW)
             .set_multiple(false)
             .set_restore_token(token.as_deref())
             .set_persist_mode(PersistMode::ExplicitlyRevoked);
@@ -82,15 +83,15 @@ pub fn start(cursor: bool) -> Result<Cast, String> {
 /// The `Closed` signal of `session`, on the connection the portal sends it to.
 async fn closed_signal(connection: &zbus::Connection, session: &Session<Screencast>) -> Result<MessageStream, ashpd::Error> {
     // ashpd does not give out the session's path, only its D-Bus encoding.
-    let context = zvariant::serialized::Context::new_dbus(zvariant::LE, 0);
-    let path: OwnedObjectPath = zvariant::to_bytes(context, session)?.deserialize()?.0;
+    let context = wire::serialized::Context::new(wire::LE, 0);
+    let path: OwnedObjectPath = wire::to_bytes(context, session)?.deserialize()?.0;
     let rule = MatchRule::builder()
         .msg_type(message::Type::Signal)
-        .interface("org.freedesktop.portal.Session")?
-        .member("Closed")?
-        .path(path)?
-        .build();
-    Ok(MessageStream::for_match_rule(rule, connection, Some(1)).await?)
+        .interface("org.freedesktop.portal.Session")
+        .member("Closed")
+        .path(path)
+        .build()?;
+    Ok(MessageStream::for_match_rule(rule, connection, NonZeroUsize::new(1)).await?)
 }
 
 /// Forgets the remembered choice, so the next session asks again.
