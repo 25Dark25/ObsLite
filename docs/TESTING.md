@@ -55,6 +55,8 @@ cargo test --locked
 | `app::mute_silences_regardless_of_volume` | Mute wins over any volume. |
 | `app::volume_uses_a_squared_curve` | The volume slider maps to gain as `volume²`. |
 | `app::files_are_named_after_the_local_time` | Recordings, replays and screenshots are named after the local time as `2026-01-02 03-04-05`, with zero-padded fields; the system's local time reads as a real date and time. |
+| `app::the_webcam_is_pasted_on_a_screenshot_of_any_size` | The webcam is drawn on screenshots of any size, cut to the picture when it is 1 pixel wide or high (that crashed Obs Lite). |
+| `win::camera::rows_outside_the_buffer_are_not_read` | Windows only: a webcam picture is read only if every row, top-down or bottom-up, lies in the buffer, also when the size from the media type is larger than the buffer. |
 | `app::no_preview_pictures_for_a_window_that_is_not_shown` | No preview pictures are made while the window is minimized (Windows says so) or has not been drawn for 3 s (Wayland only stops asking for frames); a shown idle window draws once a second, so it never counts as hidden. |
 | `app::a_silent_idle_window_repaints_rarely` | The window draws once a second when idle and silent, and at 15 fps while a meter moves or a recording runs. |
 | `app::exit_waits_for_the_recording_being_saved` | Closing the app while a recording is being saved waits for the MP4 to be finalized. |
@@ -641,6 +643,8 @@ out of memory).
 2026-11-22, stopping a camera or a capture that does not answer, Windows 11 (same PC as release
 
 2026-11-22, settings that survive hand edits and unplugged devices, Windows 11 (same PC as release
+
+2026-11-22, guards against reading or writing outside a buffer, Windows 11 (same PC as release
 0.8.0):
 
 | Step | Result |
@@ -663,3 +667,8 @@ file); plugging a device in while Obs Lite runs and pressing OK in Settings.
 
 Not verified: opening by hand a folder whose name has a comma, and the update link (no newer
 release exists to offer).
+
+| Automated tests and clippy | 124 passed (two ignored) on Windows; clippy clean on stable. The screenshot test fails on the old code (index out of range) |
+
+Not verified: a real webcam with the new buffer check (the self-test's webcam is a made-up
+picture); a packet of 4 GiB, which nothing produces.
