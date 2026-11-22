@@ -18,13 +18,13 @@ use std::time::Duration;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_QUERY_DESC, D3D11_QUERY_EVENT,
-    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11DeviceContext, ID3D11Query,
-    ID3D11RenderTargetView, ID3D11Texture2D,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
+    ID3D11Query, ID3D11RenderTargetView, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Media::MediaFoundation::IMFMediaType;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
-use windows::core::BOOL;
+use windows::core::{BOOL, Interface};
 use windows_capture::frame::Frame;
 
 use crate::camera::{self, CameraSize, Corner, PixelRect};
@@ -406,6 +406,10 @@ fn create_canvas(device: &ID3D11Device, (w, h): (u32, u32), output: (u32, u32)) 
     let mut target = None;
     let mut converted = None;
     unsafe {
+        // Capture, the frame producer, the encoder and the window all use this device's immediate
+        // context: safe only with its own lock on. Turned on here, not left to the screenshot copy
+        // that also needs it, whose failure is ignored.
+        let _ = device.GetImmediateContext()?.cast::<ID3D11Multithread>()?.SetMultithreadProtected(true);
         device.CreateTexture2D(&desc, None, Some(&mut texture))?;
         let texture = texture.as_ref().expect("CreateTexture2D returned no texture");
         device.CreateRenderTargetView(texture, None, Some(&mut target))?;
@@ -585,6 +589,29 @@ mod tests {
 
     fn rect(r: RECT) -> (i32, i32, i32, i32) {
         (r.left, r.top, r.right, r.bottom)
+    }
+
+    #[test]
+    fn the_canvas_turns_on_the_device_lock_itself() {
+        use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
+        use windows::Win32::Graphics::Direct3D11::{D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice};
+        unsafe {
+            let mut device = None;
+            let flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+            if D3D11CreateDevice(None, D3D_DRIVER_TYPE_HARDWARE, Default::default(), flags, None, D3D11_SDK_VERSION, Some(&mut device), None, None)
+                .is_err()
+            {
+                return eprintln!("skipped, no GPU");
+            }
+            let device = device.unwrap();
+            let lock = device.GetImmediateContext().unwrap().cast::<ID3D11Multithread>().unwrap();
+            // As when the screenshot copy, which used to be the only one to turn it on, failed.
+            assert!(!lock.GetMultithreadProtected().as_bool());
+            if let Err(e) = create_canvas(&device, (320, 180), (320, 180)) {
+                return eprintln!("skipped, no GPU video processor: {e}");
+            }
+            assert!(lock.GetMultithreadProtected().as_bool());
+        }
     }
 
     #[test]
