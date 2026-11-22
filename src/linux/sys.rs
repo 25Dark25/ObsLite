@@ -31,6 +31,15 @@ pub fn process_cpu_time() -> Option<u64> {
     Some((micros(usage.ru_utime) + micros(usage.ru_stime)) * 10)
 }
 
+/// The local date and time: year, month, day, hour, minute, second.
+pub fn local_time() -> [u32; 6] {
+    use gstreamer::glib::DateTime;
+    // GLib finds the time zone as other applications do (TZ, then /etc/localtime); UTC if it
+    // cannot, rather than no name for the file.
+    let Ok(t) = DateTime::now_local().or_else(|_| DateTime::now_utc()) else { return [1970, 1, 1, 0, 0, 0] };
+    [t.year(), t.month(), t.day_of_month(), t.hour(), t.minute(), t.second()].map(|v| v as u32)
+}
+
 /// The language of the user's messages, as other applications choose it.
 pub fn system_language() -> Language {
     let var = |name| std::env::var(name).ok();

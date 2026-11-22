@@ -1851,9 +1851,15 @@ fn repaint_interval(active: bool, meters: &[f32]) -> Duration {
 /// named before this run, since two saves can come in the same second and files are written
 /// in the background.
 fn new_output(dir: &Path, prefix: Option<&str>, ext: &str, named: &mut HashSet<PathBuf>) -> PathBuf {
-    let time = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
-    let stem = prefix.map_or_else(|| time.to_string(), |p| format!("{p} {time}"));
+    let time = time_stamp(crate::platform::sys::local_time());
+    let stem = prefix.map_or_else(|| time.clone(), |p| format!("{p} {time}"));
     unused_name(dir, &stem, ext, named)
+}
+
+/// A local time (year, month, day, hour, minute, second) as file names show it:
+/// `2026-10-18 17-43-13`.
+fn time_stamp([year, month, day, hour, minute, second]: [u32; 6]) -> String {
+    format!("{year:04}-{month:02}-{day:02} {hour:02}-{minute:02}-{second:02}")
 }
 
 /// `dir/stem.ext`, or `dir/stem (2).ext` and so on if that is taken.
@@ -2740,5 +2746,15 @@ mod tests {
         assert_eq!(channel_gain(1.0, false), 1.0);
         assert_eq!(channel_gain(0.5, false), 0.25);
         assert_eq!(channel_gain(0.0, false), 0.0);
+    }
+
+    #[test]
+    fn files_are_named_after_the_local_time() {
+        assert_eq!(time_stamp([2026, 1, 2, 3, 4, 5]), "2026-01-02 03-04-05");
+        assert_eq!(time_stamp([2026, 12, 31, 23, 59, 59]), "2026-12-31 23-59-59");
+        let [year, month, day, hour, minute, second] = crate::platform::sys::local_time();
+        assert!(year >= 2026, "{year}");
+        assert!((1..=12).contains(&month) && (1..=31).contains(&day), "{month}-{day}");
+        assert!(hour < 24 && minute < 60 && second <= 60, "{hour}:{minute}:{second}");
     }
 }
