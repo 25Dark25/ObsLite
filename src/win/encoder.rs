@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D11::{
@@ -39,6 +39,9 @@ const FRAME_TEXTURES: usize = 12;
 /// Frames kept out of reuse after the encoder takes them: it reads them on another GPU engine
 /// and does not report when it is done.
 const IN_FLIGHT: usize = 4;
+/// How long stopping waits for the encoding threads: draining the encoder takes well under a
+/// second.
+const STOP_WAIT: Duration = Duration::from_secs(10);
 
 pub struct EncoderSettings {
     pub input: (u32, u32),
@@ -203,26 +206,41 @@ impl Encoder {
             output: outputs,
         });
 
-        let spawn = |name: &str, work: Box<dyn FnOnce() + Send>| {
-            thread::Builder::new().name(name.into()).spawn(work).map_err(|e| e.to_string())
+        let mut threads: Vec<JoinHandle<()>> = Vec::new();
+        // A thread that cannot be started stops those already running, which would otherwise
+        // hold the hardware encoder and the GPU device for good.
+        let spawn = |threads: &mut Vec<JoinHandle<()>>, name: &str, work: Box<dyn FnOnce() + Send>| {
+            match thread::Builder::new().name(name.into()).spawn(work) {
+                Ok(t) => {
+                    threads.push(t);
+                    Ok(())
+                }
+                Err(e) => {
+                    inner.stop.store(true, Ordering::Release);
+                    inner.queued.notify_all();
+                    for t in threads.drain(..) {
+                        let _ = t.join();
+                    }
+                    Err(e.to_string())
+                }
+            }
         };
-        let mut threads = Vec::new();
         let h264 = Com(h264);
-        threads.push(spawn("video-encoder", Box::new({
+        spawn(&mut threads, "video-encoder", Box::new({
             let inner = inner.clone();
             move || encode_video(&inner, h264)
-        }))?);
-        threads.push(spawn("video-frames", Box::new({
+        }))?;
+        spawn(&mut threads, "video-frames", Box::new({
             let inner = inner.clone();
             move || produce_frames(&inner)
-        }))?);
+        }))?;
         let (audio_tx, audio_rx) = mpsc::channel();
         if let Some(aac) = aac {
             let aac = Com(aac);
-            threads.push(spawn("audio-encoder", Box::new({
+            spawn(&mut threads, "audio-encoder", Box::new({
                 let inner = inner.clone();
                 move || encode_audio(&inner, aac, audio_rx)
-            }))?);
+            }))?;
         }
 
         Ok(Self {
@@ -303,8 +321,9 @@ impl Encoder {
         let (x, y, w, h) = rect;
         let canvas = &self.inner.canvas;
         let ctx = &canvas.context.0;
-        let mut overlay = self.overlay_texture.lock().unwrap();
+        // In the same order as `push_frame`, which runs on another thread.
         let _gpu = canvas.lock.lock().unwrap();
+        let mut overlay = self.overlay_texture.lock().unwrap();
         unsafe {
             if overlay.as_ref().is_none_or(|(_, r)| *r != rect) {
                 let desc = D3D11_TEXTURE2D_DESC {
@@ -357,7 +376,14 @@ impl Encoder {
         self.audio_tx = None;
         self.inner.stop.store(true, Ordering::Release);
         self.inner.queued.notify_all();
-        for t in self.threads.drain(..) {
+        // A hardware encoder that stops answering (a hung driver) would keep its thread waiting
+        // for good, and with it the end of the recording and Obs Lite's exit. After a while it is
+        // left behind, and the file is finished with what was written.
+        let deadline = Instant::now() + STOP_WAIT;
+        while self.threads.iter().any(|t| !t.is_finished()) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        for t in self.threads.drain(..).filter(JoinHandle::is_finished) {
             let _ = t.join();
         }
     }

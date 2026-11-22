@@ -735,8 +735,11 @@ impl Mp4 {
 
     pub fn finish(self) -> Result<()> {
         unsafe { self.writer.Finalize() }?;
-        // If this fails the file stays fragmented, which still plays.
-        let _ = crate::mp4::defragment(&self.path);
+        // The writer lets the file go before it is opened again to be converted. If converting
+        // fails the file stays fragmented, which still plays.
+        let path = self.path.clone();
+        drop(self);
+        let _ = crate::mp4::defragment(&path);
         Ok(())
     }
 }
