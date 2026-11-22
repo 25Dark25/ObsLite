@@ -23,6 +23,7 @@ cargo test --locked
 | `media::a_recording_without_frames_is_an_error` | Stopping a recording before any frame reports an error instead of an empty file. |
 | `media::a_saved_replay_is_interleaved_by_time` | A saved replay writes video and audio in time order, relative to its first keyframe, from another thread. |
 | `win::encoder::a_resized_window_is_scaled_down_to_fit_and_centred` | Windows only: where a resized window goes on the recording: scaled down to fit, never up, centred. |
+| `win::encoder::the_canvas_turns_on_the_device_lock_itself` | Windows only, skipped without a GPU: creating the encoder's canvas turns on the lock of the capture device's immediate context, which capture, the encoder and the window share. |
 | `win::mf::hardware_encoders_give_their_memory_back` | Windows, ignored by default (needs a GPU with a hardware H.264 encoder; `cargo test --release -- --ignored`): five rounds of a new D3D device and a hardware encoder on it, 30 frames each, then everything dropped; the process's GPU memory must not grow. |
 | `mp4::a_fragmented_file_becomes_a_regular_one_with_every_sample_in_place` | A fragmented MP4, with fragments laid out as Media Foundation and as GStreamer write them, becomes a regular one in place: one full index at the end, no fragment boxes left, and every sample's bytes, duration, keyframe flag and composition offset read back through the new index. |
 | `mp4::a_file_cut_short_is_repaired_up_to_its_last_whole_fragment` | A file whose writing stopped inside its last fragment's data, or inside that fragment's own index, is refused as a finished file, and repaired into a regular MP4 with the whole fragments before it. |
@@ -620,3 +621,13 @@ and validated there).
 | Self-test 6 s 1080p60, release build | 353 frames, 0 lagged; converted to a regular MP4 (index last, no fragment boxes left), 5 s in Explorer |
 
 Not verified: a real power cut, or a recording damaged on disk; these were built in the tests.
+
+2026-11-22, the encoder turning on the device lock itself, Windows 11 (same PC as release 0.8.0):
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 116 passed (two ignored) on Windows; clippy clean on stable. The new test fails without the change |
+| Self-test 6 s 1080p60 with `replay preview shot`, release build | Quick Sync; 355 frames, 0 lagged; 18 preview pictures |
+
+Not verified: the case the change is for, a screenshot copy that fails (it needs the GPU to run
+out of memory).

@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer make the repaired recording unplayable; a recording damaged before its end is left as
   it was instead of being cut at the damage; a damaged file no longer crashes Obs Lite at every
   start; and on Windows a recording that another Obs Lite is still writing is left alone.
+- Windows: recording no longer depends on the screenshot copy to make the capture device safe to
+  use from several threads. If that copy failed (for example with the GPU's memory full), the
+  recording could get corrupted pictures or stop.
 
 ## [0.8.0] - 2026-11-22
 
