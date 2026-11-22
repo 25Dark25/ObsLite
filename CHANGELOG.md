@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows: recording no longer depends on the screenshot copy to make the capture device safe to
   use from several threads. If that copy failed (for example with the GPU's memory full), the
   recording could get corrupted pictures or stop.
+- Removing or switching the webcam, or quitting, no longer freezes the window for good when the
+  camera stops sending pictures without an error: it is waited for 2 seconds at most.
+- Linux: recording, or quitting, while the screen-sharing dialog is open no longer freezes the
+  window until the dialog is answered.
 
 ## [0.8.0] - 2026-11-22
 

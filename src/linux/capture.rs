@@ -253,6 +253,8 @@ pub struct Session {
     /// does not run on the UI thread.
     thread: Option<JoinHandle<()>>,
     stop: Arc<AtomicBool>,
+    /// The thread is waiting for the portal, which may be the user's answer to its dialog.
+    asking: Arc<AtomicBool>,
 }
 
 impl Session {
@@ -264,12 +266,13 @@ impl Session {
         gst::init().map_err(|e| e.to_string())?;
         let shared = Arc::new(Shared::new(repaint));
         let stop = Arc::new(AtomicBool::new(false));
+        let asking = Arc::new(AtomicBool::new(false));
         let thread = thread::Builder::new()
             .name("capture".into())
             .spawn({
-                let (shared, stop) = (shared.clone(), stop.clone());
+                let (shared, stop, asking) = (shared.clone(), stop.clone(), asking.clone());
                 move || {
-                    if let Err(e) = run(opts, &shared, &stop) {
+                    if let Err(e) = run(opts, &shared, &stop, &asking) {
                         *shared.error.lock().unwrap() = Some(e);
                     }
                     shared.finished.store(true, Ordering::Release);
@@ -279,7 +282,7 @@ impl Session {
                 }
             })
             .map_err(|e| e.to_string())?;
-        Ok(Self { shared, thread: Some(thread), stop })
+        Ok(Self { shared, thread: Some(thread), stop, asking })
     }
 
     /// The capture ended: the source went away, sharing was stopped, or the portal failed.
@@ -319,9 +322,14 @@ impl Session {
         (self.shared.encoder.lock().unwrap().take(), error)
     }
 
+    /// Waits for the capture thread, unless it is waiting for the portal: the user may take any
+    /// time to answer its dialog, and waiting froze the window until then. That thread ends by
+    /// itself once the portal answers.
     fn halt(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        if let Some(t) = self.thread.take() {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take()
+            && !self.asking.load(Ordering::SeqCst)
+        {
             let _ = t.join();
         }
     }
@@ -336,10 +344,18 @@ impl Drop for Session {
 /// Portal, then pipeline, until asked to stop or the stream ends. A portal that crashes ends the
 /// stream without closing the session (COSMIC's did, every few seconds to minutes): then a new
 /// session is started, from the remembered choice so without the dialog, and capture goes on.
-fn run(opts: SessionOptions, shared: &Arc<Shared>, stop: &AtomicBool) -> Result<(), String> {
+fn run(opts: SessionOptions, shared: &Arc<Shared>, stop: &AtomicBool, asking: &AtomicBool) -> Result<(), String> {
     let handler = Arc::new(Mutex::new(Handler::new(shared.clone(), opts.record, opts.fps, opts.preview_fps)));
     loop {
-        let mut cast = portal::start(opts.cursor)?;
+        // Set before looking at `stop`, which `halt` sets before looking at this: either this
+        // sees the stop, or `halt` sees the portal is being asked and does not wait for it.
+        asking.store(true, Ordering::SeqCst);
+        if stop.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let cast = portal::start(opts.cursor);
+        asking.store(false, Ordering::SeqCst);
+        let mut cast = cast?;
         if stop.load(Ordering::Acquire) {
             return Ok(());
         }
