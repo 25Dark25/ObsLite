@@ -2,6 +2,8 @@
 //! it off. Nothing is downloaded or installed: the user is only told, with a link.
 
 const LATEST: &str = "https://api.github.com/repos/25Dark25/ObsLite/releases/latest";
+/// Where every release page is: the link is opened as it comes only if it is one of them.
+const RELEASES: &str = "https://github.com/25Dark25/ObsLite/releases/";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Release {
@@ -21,7 +23,7 @@ pub fn newer_release() -> Result<Option<Release>, String> {
 fn parse(json: &str) -> Option<Release> {
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
     let tag = value.get("tag_name")?.as_str()?;
-    let url = value.get("html_url")?.as_str()?;
+    let url = value.get("html_url")?.as_str().filter(|url| url.starts_with(RELEASES))?;
     Some(Release { version: tag.trim_start_matches('v').to_owned(), url: url.to_owned() })
 }
 
@@ -54,5 +56,14 @@ mod tests {
         assert_eq!(release.version, "0.3.0");
         assert_eq!(release.url, "https://github.com/25Dark25/ObsLite/releases/tag/v0.3.0");
         assert_eq!(parse(r#"{"message": "Not Found"}"#), None);
+    }
+
+    #[test]
+    fn only_a_link_to_a_release_page_is_taken() {
+        // The link is opened with Explorer, which would run a program or open any folder.
+        for url in ["file:///C:/Windows/System32/calc.exe", r"\\server\share\setup.exe", "https://example.com/ObsLite/releases/", "http://github.com/25Dark25/ObsLite/releases/tag/v0.3.0"] {
+            let json = serde_json::json!({"tag_name": "v0.3.0", "html_url": url}).to_string();
+            assert_eq!(parse(&json), None, "{url}");
+        }
     }
 }
