@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   camera stops sending pictures without an error: it is waited for 2 seconds at most.
 - Linux: recording, or quitting, while the screen-sharing dialog is open no longer freezes the
   window until the dialog is answered.
+- A settings file that can no longer be read (for example after a hand edit) is kept as
+  `settings.json.bad` instead of being overwritten with the defaults. Values edited by hand are
+  kept within limits (a replay buffer of hours filled the memory; a relative folder
+  put recordings wherever Obs Lite was started from).
+- A chosen audio device that is unplugged when Obs Lite starts stays chosen: the default device
+  is used until it is back, instead of the choice being forgotten.
+- Two Obs Lite windows saving their settings at the same moment can no longer leave an unreadable
+  settings file.
 
 ## [0.8.0] - 2026-11-22
 

@@ -138,6 +138,8 @@ impl InputShared {
 
 pub struct Input {
     pub kind: InputKind,
+    /// The device it was started on; `None` follows the default one.
+    pub device: Option<String>,
     pub shared: Arc<InputShared>,
     thread: Option<JoinHandle<()>>,
 }
@@ -151,6 +153,7 @@ impl Input {
             .name(format!("audio-{kind:?}"))
             .spawn({
                 let shared = shared.clone();
+                let device_id = device_id.clone();
                 move || {
                     if let Err(e) = crate::platform::audio::capture(kind, device_id.as_deref(), &shared) {
                         *shared.error.lock().unwrap() = Some(e.to_string());
@@ -159,7 +162,7 @@ impl Input {
                 }
             })
             .expect("spawn audio thread");
-        Self { kind, shared, thread: Some(thread) }
+        Self { kind, device: device_id, shared, thread: Some(thread) }
     }
 }
 
