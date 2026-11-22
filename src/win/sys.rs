@@ -49,6 +49,12 @@ pub fn process_cpu_time() -> Option<u64> {
     Some(ticks(kernel) + ticks(user))
 }
 
+/// The local date and time: year, month, day, hour, minute, second.
+pub fn local_time() -> [u32; 6] {
+    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    [t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond].map(u32::from)
+}
+
 /// The Windows display language.
 pub fn system_language() -> Language {
     Language::from_lang_id(unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() })

@@ -41,6 +41,7 @@ cargo test --locked
 | `config::settings_saved_with_a_utf8_bom_still_load` | A `settings.json` saved with a UTF-8 BOM (e.g. by Windows PowerShell) still loads. |
 | `app::mute_silences_regardless_of_volume` | Mute wins over any volume. |
 | `app::volume_uses_a_squared_curve` | The volume slider maps to gain as `volume²`. |
+| `app::files_are_named_after_the_local_time` | Recordings, replays and screenshots are named after the local time as `2026-01-02 03-04-05`, with zero-padded fields; the system's local time reads as a real date and time. |
 | `app::no_preview_pictures_for_a_window_that_is_not_shown` | No preview pictures are made while the window is minimized (Windows says so) or has not been drawn for 3 s (Wayland only stops asking for frames); a shown idle window draws once a second, so it never counts as hidden. |
 | `app::a_silent_idle_window_repaints_rarely` | The window draws once a second when idle and silent, and at 15 fps while a meter moves or a recording runs. |
 | `app::exit_waits_for_the_recording_being_saved` | Closing the app while a recording is being saved waits for the MP4 to be finalized. |
