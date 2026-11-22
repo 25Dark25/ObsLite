@@ -25,11 +25,20 @@ cargo test --locked
 | `win::encoder::a_resized_window_is_scaled_down_to_fit_and_centred` | Windows only: where a resized window goes on the recording: scaled down to fit, never up, centred. |
 | `win::mf::hardware_encoders_give_their_memory_back` | Windows, ignored by default (needs a GPU with a hardware H.264 encoder; `cargo test --release -- --ignored`): five rounds of a new D3D device and a hardware encoder on it, 30 frames each, then everything dropped; the process's GPU memory must not grow. |
 | `mp4::a_fragmented_file_becomes_a_regular_one_with_every_sample_in_place` | A fragmented MP4, with fragments laid out as Media Foundation and as GStreamer write them, becomes a regular one in place: one full index at the end, no fragment boxes left, and every sample's bytes, duration, keyframe flag and composition offset read back through the new index. |
-| `mp4::a_file_cut_short_is_repaired_up_to_its_last_whole_fragment` | A file whose writing stopped inside its last fragment's data is refused as a finished file, and repaired into a regular MP4 with the whole fragments before it. |
+| `mp4::a_file_cut_short_is_repaired_up_to_its_last_whole_fragment` | A file whose writing stopped inside its last fragment's data, or inside that fragment's own index, is refused as a finished file, and repaired into a regular MP4 with the whole fragments before it. |
 | `app::a_recording_cut_short_is_repaired_at_start_up` | At start-up the last recording, if it was cut short, becomes a regular MP4 and the status bar says so with a link; a finished or missing one is left alone without a message. |
 | `mp4::a_regular_file_is_left_alone` | A file that is not fragmented is not touched. |
 | `mp4::data_past_4_gib_is_indexed_with_64_bit_offsets` | Data past 4 GiB gets 64-bit chunk offsets (`co64`). |
 | `mp4::a_duration_too_long_for_32_bits_moves_the_box_to_version_1` | A track longer than 32 bits of its timescale allows gets a version 1 header, keeping its other fields. |
+| `mp4::a_tail_of_zeros_left_by_a_power_cut_is_cut_off` | Zeros after the last whole box (a file system that kept the new length but not the data) are cut off: the new index is not hidden inside what reads as a box "to the end of the file". |
+| `mp4::a_damaged_last_fragment_is_dropped` | A last fragment whose index reached the disk as zeros is left out; the fragments before it are repaired. |
+| `mp4::damage_before_the_end_leaves_the_file_as_it_was` | A damaged box, or a fragment whose data is placed past the end, with more of the recording after it: the repair fails and the file is not changed, instead of being cut at the damage. |
+| `mp4::a_box_size_that_wraps_around_ends_the_scan` | A 64-bit box size that wraps past 2^64 is taken as a box past the end, not as a jump back to the start of the file. |
+| `mp4::a_damaged_index_is_refused_without_crashing` | An initial index with an empty `mvhd` or `tkhd`, an `mdhd` with no duration, or containers nested 100 000 deep makes the repair fail instead of crashing obs-lite. |
+| `mp4::a_damaged_sample_count_is_refused_before_reading_the_samples` | A fragment claiming four billion samples with no data of their own is refused before any is read. |
+| `mp4::an_index_written_with_64_bit_sizes_is_read` | An index box written with a 64-bit size field is read from after its 16-byte header. |
+| `mp4::a_fragment_index_before_other_fragments_is_not_written_over` | The new index goes where the fragment index was only if that is the last box; otherwise at the end, so no fragment is written over. |
+| `mp4::a_recording_open_for_writing_elsewhere_is_not_repaired` | Windows only: a recording open for writing in another program (Media Foundation takes no lock) is reported as busy and not changed. |
 | `mf::software_encoder_encodes_the_canvas` | Without a hardware encoder, the canvas still goes through the GPU colour conversion and the Windows software H.264 encoder (one packet per frame, keyframe first). Skipped where there is no GPU video processor, such as CI. |
 | `audio::mixes_with_gain_and_pads_silence` | Inputs are mixed with their gain; a short input is padded with silence. |
 | `audio::inputs_adding_up_past_full_scale_are_limited_not_clipped` | Two inputs that add up to 1.4 are brought within full scale with one steady gain, so the wave keeps its shape (a 50 Hz tone: the gain must not wobble from cycle to cycle). |
@@ -602,3 +611,12 @@ laptop above, encoding on its Intel GPU (Quick Sync):
 
 Not verified for this release: the interface by hand, and Linux outside CI (the Flatpak is built
 and validated there).
+
+2026-11-22, repairing damaged recordings more safely, Windows 11 (same PC as release 0.8.0):
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 115 passed (two ignored) on Windows; clippy clean on stable. Each new MP4 test fails on the code before the change, except the cut inside the last fragment's index, which it already handled and which checks that the new check for damage before the end does not refuse it |
+| Self-test 6 s 1080p60, release build | 353 frames, 0 lagged; converted to a regular MP4 (index last, no fragment boxes left), 5 s in Explorer |
+
+Not verified: a real power cut, or a recording damaged on disk; these were built in the tests.

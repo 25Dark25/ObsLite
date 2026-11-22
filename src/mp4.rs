@@ -16,9 +16,18 @@ pub fn defragment(path: &Path) -> io::Result<()> {
 
 /// Converts a recording whose writing stopped partway (a crash, a power cut), keeping every whole
 /// fragment. Returns whether it was fragmented: a finished recording is already regular. Fails
-/// with `WouldBlock` while another obs-lite still writes it (it holds a lock on it until then).
+/// with `WouldBlock` while another obs-lite still writes it: on Linux it holds a lock on the file
+/// until then; on Windows the file cannot be opened without sharing it while it is open for
+/// writing elsewhere.
 pub fn repair(path: &Path) -> io::Result<bool> {
-    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(windows)]
+    std::os::windows::fs::OpenOptionsExt::share_mode(&mut options, 1); // FILE_SHARE_READ
+    let mut file = options.open(path).map_err(|e| {
+        // ERROR_SHARING_VIOLATION and ERROR_LOCK_VIOLATION.
+        if cfg!(windows) && matches!(e.raw_os_error(), Some(32 | 33)) { io::ErrorKind::WouldBlock.into() } else { e }
+    })?;
     file.try_lock()?;
     convert(&mut file, true)
 }
@@ -50,8 +59,14 @@ fn invalid(what: &str) -> io::Error {
 struct Header {
     start: u64,
     size: u64,
+    /// 8, or 16 with a 64-bit size.
+    head: u64,
     kind: [u8; 4],
 }
+
+/// The most read of an index box (`moov`, `moof`): far more than a day of recording needs, and
+/// a damaged size does not make obs-lite ask for all the memory there is.
+const MAX_INDEX: u64 = 1 << 30;
 
 impl Header {
     fn read(r: &mut (impl Read + Seek), start: u64, end: u64) -> io::Result<Self> {
@@ -59,31 +74,64 @@ impl Header {
         let mut head = [0u8; 8];
         r.read_exact(&mut head)?;
         let kind = [head[4], head[5], head[6], head[7]];
-        let size = match u32::from_be_bytes([head[0], head[1], head[2], head[3]]) {
-            0 => end - start,
+        let (size, len) = match u32::from_be_bytes([head[0], head[1], head[2], head[3]]) {
+            // "To the end of the file": obs-lite's recordings have none. What a power cut can
+            // leave at the end reads as one (zeros), and an index written after it would be
+            // inside it, where no player looks.
+            0 => return Err(invalid("box of unknown size")),
             1 => {
                 let mut large = [0u8; 8];
                 r.read_exact(&mut large)?;
-                u64::from_be_bytes(large)
+                (u64::from_be_bytes(large), 16)
             }
-            n => u64::from(n),
+            n => (u64::from(n), 8),
         };
-        if size < 8 {
+        if size < len {
             return Err(invalid("bad box size"));
         }
-        if start + size > end {
+        if start.checked_add(size).is_none_or(|box_end| box_end > end) {
             return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "box past the end of the file"));
         }
-        Ok(Self { start, size, kind })
+        Ok(Self { start, size, head: len, kind })
     }
 
     fn read_body(&self, r: &mut (impl Read + Seek)) -> io::Result<Vec<u8>> {
-        let header = if self.size > u64::from(u32::MAX) { 16 } else { 8 };
-        r.seek(SeekFrom::Start(self.start + header))?;
-        let mut body = vec![0; (self.size - header) as usize];
+        let len = self.size - self.head;
+        if len > MAX_INDEX {
+            return Err(invalid("index too big"));
+        }
+        r.seek(SeekFrom::Start(self.start + self.head))?;
+        let mut body = vec![0; len as usize];
         r.read_exact(&mut body)?;
         Ok(body)
     }
+}
+
+/// Whether a fragment (`moof` with its `mfhd` first) starts after the box at `from`, before `to`:
+/// then that box is not the unfinished last one but a damaged one with the rest of the
+/// recording after it.
+fn fragment_after(r: &mut (impl Read + Seek), from: u64, to: u64) -> io::Result<bool> {
+    // Past the type of the box at `from`, which may be the last fragment cut short.
+    let from = from + 8;
+    if from >= to {
+        return Ok(false);
+    }
+    r.seek(SeekFrom::Start(from))?;
+    let mut left = to - from;
+    let mut window = Vec::new();
+    let mut chunk = vec![0; 1 << 16];
+    while left > 0 {
+        let n = chunk.len().min(usize::try_from(left).unwrap_or(usize::MAX));
+        r.read_exact(&mut chunk[..n])?;
+        left -= n as u64;
+        window.extend_from_slice(&chunk[..n]);
+        if window.windows(12).any(|w| &w[..4] == b"moof" && &w[8..] == b"mfhd") {
+            return Ok(true);
+        }
+        // What may be the start of one cut by the end of this chunk.
+        window.drain(..window.len().saturating_sub(11));
+    }
+    Ok(false)
 }
 
 /// A box of the index, kept as bytes except for the containers that are rebuilt.
@@ -94,7 +142,13 @@ enum Node {
 
 const CONTAINERS: [&[u8; 4]; 5] = [b"moov", b"trak", b"mdia", b"minf", b"stbl"];
 
-fn parse(mut data: &[u8]) -> io::Result<Vec<Node>> {
+fn parse(data: &[u8]) -> io::Result<Vec<Node>> {
+    parse_within(data, CONTAINERS.len())
+}
+
+/// `depth`: how many containers deep it may still go (a real index nests them no deeper than
+/// `CONTAINERS` lists them; a damaged one could nest them until the stack runs out).
+fn parse_within(mut data: &[u8], depth: usize) -> io::Result<Vec<Node>> {
     let mut nodes = Vec::new();
     while data.len() >= 8 {
         let size = u32::from_be_bytes(data[..4].try_into().unwrap()) as usize;
@@ -103,7 +157,12 @@ fn parse(mut data: &[u8]) -> io::Result<Vec<Node>> {
         }
         let kind: [u8; 4] = data[4..8].try_into().unwrap();
         let body = &data[8..size];
-        nodes.push(if CONTAINERS.contains(&&kind) { Node::Container(kind, parse(body)?) } else { Node::Leaf(kind, body.to_vec()) });
+        nodes.push(if CONTAINERS.contains(&&kind) {
+            let depth = depth.checked_sub(1).ok_or_else(|| invalid("index nested too deep"))?;
+            Node::Container(kind, parse_within(body, depth)?)
+        } else {
+            Node::Leaf(kind, body.to_vec())
+        });
         data = &data[size..];
     }
     Ok(nodes)
@@ -156,19 +215,28 @@ fn u64_at(data: &[u8], at: usize) -> io::Result<u64> {
 
 /// `mvhd`, `mdhd` and `tkhd` share a layout: version and flags, two dates (4 or 8 bytes each),
 /// `between` bytes (a timescale, or a track id and a reserved word), then the duration.
-fn duration_at(body: &[u8], between: usize) -> usize {
-    if body[0] == 1 { 20 + between } else { 12 + between }
+fn duration_at(body: &[u8], between: usize) -> io::Result<usize> {
+    match body.first() {
+        Some(1) => Ok(20 + between),
+        Some(_) => Ok(12 + between),
+        None => Err(invalid("short box")),
+    }
 }
 
 /// The timescale of an `mvhd` or `mdhd`.
 fn timescale(body: &[u8]) -> io::Result<u32> {
-    u32_at(body, duration_at(body, 0))
+    u32_at(body, duration_at(body, 0)?)
 }
 
 /// Sets the duration of an `mvhd`/`mdhd` (`between` 4) or `tkhd` (`between` 8), moving a
 /// version 0 box to version 1 if the duration does not fit in 32 bits.
-fn set_duration(body: &mut Vec<u8>, between: usize, duration: u64) {
-    if body[0] == 0 && duration > u64::from(u32::MAX) {
+fn set_duration(body: &mut Vec<u8>, between: usize, duration: u64) -> io::Result<()> {
+    let at = duration_at(body, between)?;
+    let wide = body[0] == 1;
+    if body.len() < at + if wide { 8 } else { 4 } {
+        return Err(invalid("short box"));
+    }
+    if !wide && duration > u64::from(u32::MAX) {
         let mut v1 = vec![1, body[1], body[2], body[3]];
         v1.extend_from_slice(&u64::from(u32::from_be_bytes(body[4..8].try_into().unwrap())).to_be_bytes());
         v1.extend_from_slice(&u64::from(u32::from_be_bytes(body[8..12].try_into().unwrap())).to_be_bytes());
@@ -177,12 +245,13 @@ fn set_duration(body: &mut Vec<u8>, between: usize, duration: u64) {
         v1.extend_from_slice(&body[16 + between..]);
         *body = v1;
     }
-    let at = duration_at(body, between);
+    let at = duration_at(body, between)?;
     if body[0] == 1 {
         body[at..at + 8].copy_from_slice(&duration.to_be_bytes());
     } else {
         body[at..at + 4].copy_from_slice(&(duration as u32).to_be_bytes());
     }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Default)]
@@ -223,8 +292,10 @@ fn is_sync(flags: u32) -> bool {
     flags & 0x1_0000 == 0
 }
 
-/// Reads one `moof` (starting at `start`) into the tracks' samples and chunks.
-fn read_fragment(moof: &[u8], start: u64, tracks: &mut [Track]) -> io::Result<()> {
+/// Reads one `moof` (starting at `start`) into the tracks' samples and chunks. Fails if a
+/// sample's data is not all before `end`.
+fn read_fragment(moof: &[u8], start: u64, end: u64, tracks: &mut [Track]) -> io::Result<()> {
+    let past_end = || invalid("samples past the end of the file");
     // Where the previous track's data ended: the default start of the next one's.
     let mut data_end = start;
     for node in parse(moof)? {
@@ -279,6 +350,19 @@ fn read_fragment(moof: &[u8], start: u64, tracks: &mut [Track]) -> io::Result<()
                 first_flags = Some(u32_at(trun, at)?);
                 at += 4;
             }
+            // Checked before reading them, so that a damaged count cannot make billions of them:
+            // samples given one by one must all be in the box, and samples all of the default
+            // size must all fit in the file.
+            let per_sample = [0x100, 0x200, 0x400, 0x800].iter().filter(|&&f| flags & f != 0).count() as u64 * 4;
+            if u64::from(count) * per_sample > (trun.len().saturating_sub(at)) as u64 {
+                return Err(invalid("short box"));
+            }
+            if flags & 0x200 == 0
+                && count > 0
+                && (defaults.size == 0 || u64::from(count) * u64::from(defaults.size) > end.saturating_sub(position))
+            {
+                return Err(past_end());
+            }
             let chunk_start = position;
             for i in 0..count {
                 let mut next = |present: bool, default: u32| -> io::Result<u32> {
@@ -296,7 +380,7 @@ fn read_fragment(moof: &[u8], start: u64, tracks: &mut [Track]) -> io::Result<()
                 let sample_flags = if i == 0 { first_flags.unwrap_or(sample_flags) } else { sample_flags };
                 let offset = if signed { i64::from(offset as i32) } else { i64::from(offset) };
                 track.samples.push(Sample { size, duration, sync: is_sync(sample_flags), offset });
-                position += u64::from(size);
+                position = position.checked_add(u64::from(size)).filter(|&p| p <= end).ok_or_else(past_end)?;
             }
             if count > 0 {
                 track.chunks.push(Chunk { position: chunk_start, samples: count, description: defaults.description.max(1) });
@@ -403,9 +487,9 @@ fn full_index(init: Vec<Node>, tracks: &[Track]) -> io::Result<Vec<u8>> {
                 let track = traks.next().ok_or_else(|| invalid("track count"))?;
                 let media_scale = u64::from(timescale(leaf(children(&trak, b"mdia")?, b"mdhd")?)?.max(1));
                 let duration: u64 = track.samples.iter().map(|s| u64::from(s.duration)).sum();
-                let in_movie = (duration * movie_scale).div_ceil(media_scale);
+                let in_movie = duration.checked_mul(movie_scale).ok_or_else(|| invalid("duration too long"))?.div_ceil(media_scale);
                 movie_duration = movie_duration.max(in_movie);
-                moov.push(Node::Container(kind, rebuild_trak(trak, track, duration, in_movie)));
+                moov.push(Node::Container(kind, rebuild_trak(trak, track, duration, in_movie)?));
             }
             other => moov.push(other),
         }
@@ -414,7 +498,7 @@ fn full_index(init: Vec<Node>, tracks: &[Track]) -> io::Result<Vec<u8>> {
         if let Node::Leaf(kind, body) = node
             && kind == b"mvhd"
         {
-            set_duration(body, 4, movie_duration);
+            set_duration(body, 4, movie_duration)?;
         }
     }
     let mut out = Vec::new();
@@ -422,22 +506,22 @@ fn full_index(init: Vec<Node>, tracks: &[Track]) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-fn rebuild_trak(trak: Vec<Node>, track: &Track, duration: u64, in_movie: u64) -> Vec<Node> {
+fn rebuild_trak(trak: Vec<Node>, track: &Track, duration: u64, in_movie: u64) -> io::Result<Vec<Node>> {
     trak.into_iter()
         .map(|node| match node {
             Node::Leaf(kind, mut body) if &kind == b"tkhd" => {
-                set_duration(&mut body, 8, in_movie);
-                Node::Leaf(kind, body)
+                set_duration(&mut body, 8, in_movie)?;
+                Ok(Node::Leaf(kind, body))
             }
-            Node::Container(kind, mdia) if &kind == b"mdia" => Node::Container(
+            Node::Container(kind, mdia) if &kind == b"mdia" => Ok(Node::Container(
                 kind,
                 mdia.into_iter()
                     .map(|node| match node {
                         Node::Leaf(kind, mut body) if &kind == b"mdhd" => {
-                            set_duration(&mut body, 4, duration);
-                            Node::Leaf(kind, body)
+                            set_duration(&mut body, 4, duration)?;
+                            Ok(Node::Leaf(kind, body))
                         }
-                        Node::Container(kind, minf) if &kind == b"minf" => Node::Container(
+                        Node::Container(kind, minf) if &kind == b"minf" => Ok(Node::Container(
                             kind,
                             minf.into_iter()
                                 .map(|node| match node {
@@ -450,19 +534,16 @@ fn rebuild_trak(trak: Vec<Node>, track: &Track, duration: u64, in_movie: u64) ->
                                     other => other,
                                 })
                                 .collect(),
-                        ),
-                        other => other,
+                        )),
+                        other => Ok(other),
                     })
-                    .collect(),
-            ),
-            other => other,
+                    .collect::<io::Result<_>>()?,
+            )),
+            other => Ok(other),
         })
         .collect()
 }
 
-/// Converts in place, returning whether the file was fragmented. With `cut_short`, a file whose
-/// writing stopped partway is accepted: its unfinished last box, and any fragment whose data it
-/// held, are dropped. `truncate` cuts the file when the new index ends before the old end.
 /// Marks the old indexes as padding: the initial `moov` first, and on the disk before the
 /// fragments' (a power cut can leave any of these small writes undone), so the full index at the
 /// end is the first `moov` from then on and repairing never takes another one for the initial.
@@ -479,8 +560,13 @@ fn pad(file: &mut impl Storage, boxes: &[Header], init: Option<&Header>) -> io::
     file.flush()
 }
 
+/// Converts in place, returning whether the file was fragmented. With `cut_short`, a file whose
+/// writing stopped partway is accepted: its unfinished last box, and its last fragment if its
+/// data is not all there, are dropped. Damage before that is refused, leaving the file as it was:
+/// what comes after it is still there for a recovery tool. Nothing is written before the file
+/// has been read through.
 fn convert(file: &mut impl Storage, cut_short: bool) -> io::Result<bool> {
-    let mut len = file.seek(SeekFrom::End(0))?;
+    let len = file.seek(SeekFrom::End(0))?;
     let mut top: Vec<Header> = Vec::new();
     let mut end = 0;
     while end < len {
@@ -508,10 +594,11 @@ fn convert(file: &mut impl Storage, cut_short: bool) -> io::Result<bool> {
     if !top.iter().any(|h| &h.kind == b"moof") {
         return Ok(false);
     }
-    // Nothing past the last whole box is kept: it would stay after a new index shorter than it.
-    if cut_short && end < len {
-        file.truncate(end)?;
-        len = end;
+    // Nothing past the last whole box is kept (the new index goes over it, and the file is cut
+    // after the index), so it must be what is left of the last box, not a damaged one followed by
+    // the rest of the recording.
+    if end < len && fragment_after(file, end, len)? {
+        return Err(invalid("damaged before its end"));
     }
     // The initial moov comes before the fragments; a moov after them is a full index.
     let first_moof = top.iter().position(|h| &h.kind == b"moof").expect("checked above");
@@ -521,6 +608,9 @@ fn convert(file: &mut impl Storage, cut_short: bool) -> io::Result<bool> {
     // rather than adding a second index made from the fragments not yet marked.
     let indexed = top[first_moof..].iter().any(|h| &h.kind == b"moov" && h.read_body(file).is_ok_and(|b| parse(&b).is_ok()));
     if indexed {
+        if end < len {
+            file.truncate(end)?;
+        }
         pad(file, &top, init_header)?;
         return Ok(true);
     }
@@ -533,7 +623,7 @@ fn convert(file: &mut impl Storage, cut_short: bool) -> io::Result<bool> {
             && kind == b"trak"
         {
             let tkhd = leaf(trak, b"tkhd")?;
-            let id_at = if tkhd[0] == 1 { 20 } else { 12 };
+            let id_at = if tkhd.first() == Some(&1) { 20 } else { 12 };
             tracks.push(Track { id: u32_at(tkhd, id_at)?, ..Track::default() });
         }
     }
@@ -550,29 +640,26 @@ fn convert(file: &mut impl Storage, cut_short: bool) -> io::Result<bool> {
             }
         }
     }
-    for header in top.iter().filter(|h| &h.kind == b"moof") {
+    let moofs: Vec<&Header> = top.iter().filter(|h| &h.kind == b"moof").collect();
+    for (n, header) in moofs.iter().enumerate() {
         let before: Vec<(usize, usize)> = tracks.iter().map(|t| (t.samples.len(), t.chunks.len())).collect();
-        read_fragment(&header.read_body(file)?, header.start, &mut tracks)?;
-        let whole = tracks.iter().zip(&before).all(|(t, &(samples, chunks))| {
-            let mut samples = t.samples[samples..].iter();
-            t.chunks[chunks..].iter().all(|c| c.position + samples.by_ref().take(c.samples as usize).map(|s| u64::from(s.size)).sum::<u64>() <= end)
-        });
-        if !whole {
-            if !cut_short {
-                return Err(invalid("samples past the end of the file"));
+        let read = header.read_body(file).and_then(|moof| read_fragment(&moof, header.start, end, &mut tracks));
+        if let Err(e) = read {
+            // Only the last fragment can have been cut short; one before it is damaged.
+            if !cut_short || n + 1 < moofs.len() {
+                return Err(e);
             }
             for (t, (samples, chunks)) in tracks.iter_mut().zip(before) {
                 t.samples.truncate(samples);
                 t.chunks.truncate(chunks);
             }
-            break;
         }
     }
     let index = full_index(init, &tracks)?;
 
-    // The new index goes where the fragment index (`mfra`) was, or at the end; the old indexes
-    // become padding last, so the file plays at every step.
-    let at = top.iter().find(|h| &h.kind == b"mfra").map_or(end, |h| h.start);
+    // The new index goes where the fragment index (`mfra`) was, if it is the last box, or at the
+    // end; the old indexes become padding last, so the file plays at every step.
+    let at = top.last().filter(|h| &h.kind == b"mfra").map_or(end, |h| h.start);
     file.seek(SeekFrom::Start(at))?;
     file.write_all(&index)?;
     let new_end = at + index.len() as u64;
@@ -712,7 +799,13 @@ pub(crate) mod tests {
 
     /// A fragmented file: three fragments, then a fragment index.
     pub(crate) fn fragmented() -> (Vec<u8>, Vec<Sample>, Vec<Sample>) {
-        let mut file = [bx(b"ftyp", b"mp42\0\0\0\0mp41isom"), init_moov()].concat();
+        fragmented_with(init_moov(), &[])
+    }
+
+    /// A fragmented file with `init` as its initial index and `after_first` after the first
+    /// fragment.
+    fn fragmented_with(init: Vec<u8>, after_first: &[u8]) -> (Vec<u8>, Vec<Sample>, Vec<Sample>) {
+        let mut file = [bx(b"ftyp", b"mp42\0\0\0\0mp41isom"), init].concat();
         let fragments = [
             (video(&[300, 20, 30], &[0, 2000, 0]), audio(2), Style::Absolute),
             (video(&[310, 25, 35], &[0, 0, 0]), audio(3), Style::Default),
@@ -722,6 +815,9 @@ pub(crate) mod tests {
         for (v, a, style) in fragments {
             let f = fragment(file.len(), &v, &a, (all_video.len(), all_audio.len()), style);
             file.extend(f);
+            if all_video.is_empty() {
+                file.extend_from_slice(after_first);
+            }
             all_video.extend(v);
             all_audio.extend(a);
         }
@@ -913,12 +1009,136 @@ pub(crate) mod tests {
 
     #[test]
     fn a_file_cut_short_is_repaired_up_to_its_last_whole_fragment() {
-        // Writing stopped inside the third fragment's data: no fragment index, and part of the
-        // last box missing. The first two fragments hold 6 video and 5 audio samples.
+        // Writing stopped inside the third fragment's data, or inside its index: no fragment
+        // index, and part of the last box missing. The first two fragments hold 6 video and 5
+        // audio samples.
+        let (original, video, audio) = fragmented();
+        let third = top_level(&original).into_iter().filter(|(_, k)| k == b"moof").nth(2).unwrap().0 as usize;
+        for cut in [original.len() - 32 - 10, third + 20] {
+            let mut file = original.clone();
+            file.truncate(cut);
+            assert!(converted(file.clone(), false).is_err(), "a finished file must be whole");
+            assert_regular(&converted(file, true).unwrap(), &video[..6], &audio[..5]);
+        }
+    }
+
+    #[test]
+    fn a_tail_of_zeros_left_by_a_power_cut_is_cut_off() {
+        // Some file systems keep a file's new length but not its last data: zeros, which read as
+        // a box "to the end of the file" that the new index would have been inside.
         let (mut file, video, audio) = fragmented();
-        file.truncate(file.len() - 32 - 10);
-        assert!(converted(file.clone(), false).is_err(), "a finished file must be whole");
+        file.truncate(file.len() - 32);
+        file.extend([0; 4096]);
+        assert_regular(&converted(file, true).unwrap(), &video, &audio);
+    }
+
+    #[test]
+    fn a_damaged_last_fragment_is_dropped() {
+        // The third fragment's index reached the disk as its size and zeros.
+        let (mut file, video, audio) = fragmented();
+        let third = top_level(&file).into_iter().filter(|(_, k)| k == b"moof").nth(2).unwrap().0 as usize;
+        file.truncate(file.len() - 32);
+        file[third + 8..].fill(0);
         assert_regular(&converted(file, true).unwrap(), &video[..6], &audio[..5]);
+    }
+
+    #[test]
+    fn damage_before_the_end_leaves_the_file_as_it_was() {
+        let (original, _, _) = fragmented();
+        let first_mdat = top_level(&original).into_iter().find(|(_, k)| k == b"mdat").unwrap().0 as usize;
+        let tfhd = original.windows(4).position(|w| w == b"tfhd").unwrap();
+        let mut damaged = Vec::new();
+        // A box whose size is gone, then the rest of the recording.
+        let mut file = original.clone();
+        file[first_mdat..first_mdat + 4].copy_from_slice(&3u32.to_be_bytes());
+        damaged.push(file);
+        // The first fragment's data placed past the end of the file.
+        let mut file = original.clone();
+        // After the type: version and flags, the track id, then the data's position.
+        file[tfhd + 12..tfhd + 20].copy_from_slice(&(1u64 << 40).to_be_bytes());
+        damaged.push(file);
+        for (n, file) in damaged.into_iter().enumerate() {
+            let mut cursor = Cursor::new(file.clone());
+            assert!(convert(&mut cursor, true).is_err(), "case {n}");
+            assert!(cursor.into_inner() == file, "case {n}: the file was changed");
+        }
+    }
+
+    #[test]
+    fn a_box_size_that_wraps_around_ends_the_scan() {
+        // A 64-bit size that, added to where the box starts, goes past 2^64 back to the start of
+        // the file: the scan went round forever, or the file was cut near its start.
+        let (mut file, video, audio) = fragmented();
+        let at = file.len() - 32;
+        file.truncate(at);
+        file.extend([&be(&[1])[..], b"mfra", &(u64::MAX - at as u64 + 1).to_be_bytes(), &[0; 16]].concat());
+        assert_regular(&converted(file, true).unwrap(), &video, &audio);
+    }
+
+    /// The initial index with one box's body changed by `change` (`path`: the containers to it).
+    fn init_with(path: &[&[u8; 4]], change: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
+        fn body_mut<'a>(nodes: &'a mut [Node], path: &[&[u8; 4]]) -> &'a mut Vec<u8> {
+            for node in nodes {
+                match node {
+                    Node::Leaf(kind, body) if path.len() == 1 && kind == path[0] => return body,
+                    Node::Container(kind, children) if path.len() > 1 && kind == path[0] => return body_mut(children, &path[1..]),
+                    _ => {}
+                }
+            }
+            panic!("no box at {path:?}");
+        }
+        let mut moov = parse(&init_moov()[8..]).unwrap();
+        change(body_mut(&mut moov, path));
+        let mut out = Vec::new();
+        serialize(&[Node::Container(*b"moov", moov)], &mut out);
+        out
+    }
+
+    #[test]
+    fn a_damaged_index_is_refused_without_crashing() {
+        // Each crashed obs-lite (and, as the repair runs at start-up, at every start).
+        let nested: Vec<u8> = (0..100_000u32).flat_map(|k| [&(8 * (100_000 - k)).to_be_bytes()[..], b"moov"].concat()).collect();
+        let inits = [
+            init_with(&[b"mvhd"], Vec::clear),
+            init_with(&[b"trak", b"tkhd"], Vec::clear),
+            // A timescale but no duration after it.
+            init_with(&[b"trak", b"mdia", b"mdhd"], |b| b.truncate(16)),
+            nested,
+        ];
+        for (n, init) in inits.into_iter().enumerate() {
+            let (file, _, _) = fragmented_with(init, &[]);
+            assert!(converted(file, true).is_err(), "case {n}");
+        }
+    }
+
+    #[test]
+    fn a_damaged_sample_count_is_refused_before_reading_the_samples() {
+        // Four billion samples with no fields of their own: about 100 GB of memory asked for.
+        let traf = bx(b"traf", &[full(b"tfhd", 0, 0x2_0000, &be(&[1])), full(b"trun", 0, 0, &be(&[u32::MAX]))].concat());
+        let moof = [full(b"mfhd", 0, 0, &be(&[1])), traf].concat();
+        for size in [0, 100] {
+            let mut tracks = [Track { id: 1, defaults: Defaults { size, ..Defaults::default() }, ..Track::default() }];
+            assert!(read_fragment(&moof, 0, 1 << 20, &mut tracks).is_err(), "default size {size}");
+            assert!(tracks[0].samples.is_empty());
+        }
+    }
+
+    #[test]
+    fn an_index_written_with_64_bit_sizes_is_read() {
+        let init = init_moov();
+        let wide = [&be(&[1])[..], &init[4..8], &(init.len() as u64 + 8).to_be_bytes(), &init[8..]].concat();
+        let (file, video, audio) = fragmented_with(wide, &[]);
+        assert_regular(&converted(file, false).unwrap(), &video, &audio);
+    }
+
+    #[test]
+    fn a_fragment_index_before_other_fragments_is_not_written_over() {
+        let (file, video, audio) = fragmented_with(init_moov(), &bx(b"mfra", &[0; 24]));
+        let mut file = converted(file, false).unwrap();
+        // Left where it is, as padding would be.
+        let (at, _) = top_level(&file).into_iter().find(|(_, k)| k == b"mfra").unwrap();
+        file[at as usize + 4..at as usize + 8].copy_from_slice(b"free");
+        assert_regular(&file, &video, &audio);
     }
 
     #[test]
@@ -959,6 +1179,22 @@ pub(crate) mod tests {
         // Another obs-lite writing it holds this lock until it finishes the file.
         let writer = File::open(&path).unwrap();
         writer.lock().unwrap();
+        let result = repair(&path);
+        drop(writer);
+        let after = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(result.map_err(|e| e.kind()), Err(io::ErrorKind::WouldBlock));
+        assert!(after == original, "the file was changed");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_recording_open_for_writing_elsewhere_is_not_repaired() {
+        // Media Foundation takes no lock on the file it writes: being open for writing is the sign.
+        let (original, _, _) = fragmented();
+        let path = std::env::temp_dir().join(format!("obs-lite-open-{}.mp4", std::process::id()));
+        std::fs::write(&path, &original).unwrap();
+        let writer = OpenOptions::new().write(true).open(&path).unwrap();
         let result = repair(&path);
         drop(writer);
         let after = std::fs::read(&path).unwrap();
@@ -1009,7 +1245,7 @@ pub(crate) mod tests {
     #[test]
     fn a_duration_too_long_for_32_bits_moves_the_box_to_version_1() {
         let mut mdhd = [be(&[0, 1, 2, 48_000, 0]), vec![0x55, 0xC4, 0, 0]].concat();
-        set_duration(&mut mdhd, 4, 5_000_000_000);
+        set_duration(&mut mdhd, 4, 5_000_000_000).unwrap();
         assert_eq!(mdhd[0], 1);
         assert_eq!((u64_at(&mdhd, 4).unwrap(), u64_at(&mdhd, 12).unwrap(), u32_at(&mdhd, 20).unwrap()), (1, 2, 48_000));
         assert_eq!(u64_at(&mdhd, 24).unwrap(), 5_000_000_000);
