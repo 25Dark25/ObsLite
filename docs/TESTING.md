@@ -672,3 +672,14 @@ release exists to offer).
 
 Not verified: a real webcam with the new buffer check (the self-test's webcam is a made-up
 picture); a packet of 4 GiB, which nothing produces.
+
+2026-11-22, stopping the Windows encoder cleanly, Windows 11 (same PC as release 0.8.0):
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 124 passed (two ignored) on Windows; clippy clean on stable |
+| Self-test 6 s 1080p60 with `webcam`, release build | 287 frames, 0 lagged; a regular MP4 (index last, no fragment boxes left) |
+| Self-test 6 s 1080p60 with `pause replay`, release build | 351 frames, 0 lagged; replay saved; a regular MP4 |
+
+Not verified: a hardware encoder that stops answering, and a thread that cannot be started;
+neither can be caused on purpose here.

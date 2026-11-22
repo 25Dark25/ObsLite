@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Obs Lite.
 - Windows: a webcam picture is read only if all of it lies in the memory the camera handed over,
   even when the camera reports a size its picture does not have.
+- Windows: stopping a recording, or quitting, no longer waits for good on a hardware encoder
+  that stops answering: after 10 seconds the file is finished with what was written.
 - Windows: recording no longer depends on the screenshot copy to make the capture device safe to
   use from several threads. If that copy failed (for example with the GPU's memory full), the
   recording could get corrupted pictures or stop.
