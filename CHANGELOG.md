@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer make the repaired recording unplayable; a recording damaged before its end is left as
   it was instead of being cut at the damage; a damaged file no longer crashes Obs Lite at every
   start; and on Windows a recording that another Obs Lite is still writing is left alone.
+- The replay buffer no longer grows without end with an encoder that makes keyframes further
+  apart than asked: once it holds twice its length, it asks for one.
 - A screenshot with the webcam overlay of a source 1 pixel wide or high no longer crashes
   Obs Lite.
 - Windows: a webcam picture is read only if all of it lies in the memory the camera handed over,

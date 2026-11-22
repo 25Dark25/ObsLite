@@ -19,6 +19,7 @@ cargo test --locked
 | `media::replay_keeps_the_last_seconds_from_a_keyframe` | The replay buffer keeps at least its length, from a keyframe, at most one keyframe interval more, and audio from the first frame on. |
 | `media::replay_shorter_than_its_length_keeps_everything` | A replay buffer that has run less than its length keeps every packet. |
 | `media::replay_starts_at_the_first_keyframe` | Packets before the first keyframe are not kept (they would not play). |
+| `media::replay_asks_for_a_keyframe_when_none_comes` | An encoder that makes no keyframe after the first: once the replay buffer holds twice its length it asks for one, once, and after it the buffer is back to its length. |
 | `media::a_recording_starts_at_the_next_keyframe_with_the_audio_since_then` | A recording started while encoding asks for a keyframe once, starts on it and keeps only the audio from then on. |
 | `media::a_recording_without_frames_is_an_error` | Stopping a recording before any frame reports an error instead of an empty file. |
 | `media::a_saved_replay_is_interleaved_by_time` | A saved replay writes video and audio in time order, relative to its first keyframe, from another thread. |
@@ -683,3 +684,12 @@ picture); a packet of 4 GiB, which nothing produces.
 
 Not verified: a hardware encoder that stops answering, and a thread that cannot be started;
 neither can be caused on purpose here.
+
+2026-11-23, a replay buffer that cannot grow without end, Windows 11 (same PC as release 0.8.0):
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 125 passed (two ignored) on Windows; clippy clean on stable. The new test fails when no keyframe is asked for |
+| Self-test 8 s 1080p60 with `replay`, release build | 379 frames, 0 lagged; replay saved (4 s in Explorer) |
+
+Not verified: an encoder that ignores the keyframe interval it is given (Quick Sync here keeps it).

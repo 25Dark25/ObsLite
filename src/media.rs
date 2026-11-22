@@ -274,8 +274,10 @@ impl<M: Muxer> Outputs<M> {
             self.write_file(true, &packet);
             self.file_end = self.file_end.max(packet.time + packet.duration);
         }
-        if let Some(ring) = &mut self.replay {
-            ring.push_video(packet);
+        if let Some(ring) = &mut self.replay
+            && ring.push_video(packet)
+        {
+            self.keyframe_wanted = true;
         }
     }
 
@@ -399,18 +401,27 @@ struct Ring {
     length: i64,
     video: VecDeque<Packet>,
     audio: VecDeque<Packet>,
+    /// A keyframe was asked for and has not come yet.
+    asked: bool,
 }
 
 impl Ring {
     fn new(length: i64) -> Self {
-        Self { length, video: VecDeque::new(), audio: VecDeque::new() }
+        Self { length, video: VecDeque::new(), audio: VecDeque::new(), asked: false }
     }
 
-    fn push_video(&mut self, packet: Packet) {
+    /// Keeps `packet`; true if a keyframe should be asked for. Old video goes only a whole
+    /// keyframe interval at a time, so an encoder that makes keyframes further apart than it was
+    /// told (or none after the first) would have it keep everything: once it holds twice its
+    /// length, a keyframe is asked for.
+    fn push_video(&mut self, packet: Packet) -> bool {
         if self.video.is_empty() && !packet.key {
-            return;
+            return false;
         }
         let oldest_needed = packet.time - self.length;
+        if packet.key {
+            self.asked = false;
+        }
         self.video.push_back(packet);
         // Drop whole keyframe intervals while the next keyframe still covers `length`.
         while let Some(next) = self.video.iter().skip(1).position(|p| p.key).map(|i| i + 1)
@@ -419,6 +430,12 @@ impl Ring {
             self.video.drain(..next);
         }
         self.trim_audio();
+        // With a later keyframe, the old video goes once that one is old enough.
+        let too_long = self.video.front().is_some_and(|first| first.time < oldest_needed - self.length)
+            && !self.video.iter().skip(1).any(|p| p.key);
+        let ask = too_long && !self.asked;
+        self.asked |= ask;
+        ask
     }
 
     fn push_audio(&mut self, packet: Packet) {
@@ -584,6 +601,31 @@ mod tests {
         fill(&mut ring, 5);
         assert_eq!(ring.video.len(), 150);
         assert_eq!(ring.video[0].time, 0);
+    }
+
+    #[test]
+    fn replay_asks_for_a_keyframe_when_none_comes() {
+        // An encoder that made no keyframe after the first: the buffer held all of it, for as long
+        // as it ran (gigabytes an hour).
+        let mut outputs = Outputs::<FakeMuxer>::default();
+        outputs.set_replay(Some(20));
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let mut asked = Vec::new();
+        for n in 0..60 * 30 {
+            outputs.video(packet(n * TICKS_PER_SECOND / 30, n == 0), || Ok(written.clone()));
+            if outputs.take_keyframe_request() {
+                asked.push(n);
+            }
+        }
+        // Once, when it held twice its length, until a keyframe comes.
+        assert_eq!(asked, [40 * 30 + 1]);
+        // The keyframe it asked for, and its length after it: the buffer is back to its length.
+        for n in 60 * 30..81 * 30 {
+            outputs.video(packet(n * TICKS_PER_SECOND / 30, n == 60 * 30), || unreachable!());
+        }
+        let ring = outputs.replay.as_ref().unwrap();
+        assert_eq!(ring.video[0].time, 60 * TICKS_PER_SECOND);
+        assert!(!outputs.take_keyframe_request());
     }
 
     #[test]
