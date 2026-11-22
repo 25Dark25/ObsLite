@@ -49,6 +49,9 @@ cargo test --locked
 | `config::resolution_scales_down_only_and_keeps_aspect` | Output scaling never upscales and keeps even dimensions and aspect ratio. |
 | `config::missing_fields_fall_back_to_defaults` | An old or partial `settings.json` still loads. |
 | `config::settings_saved_with_a_utf8_bom_still_load` | A `settings.json` saved with a UTF-8 BOM (e.g. by Windows PowerShell) still loads. |
+| `config::an_unreadable_settings_file_is_kept_aside` | A `settings.json` that no longer reads as settings (a hand edit gone wrong) is renamed `settings.json.bad` and the defaults are used, instead of the defaults being saved over it. |
+| `config::settings_edited_by_hand_stay_within_limits` | Values from the file are brought within limits: replay length 5–600 s, 1–240 fps, volumes 0–1, and an absolute recordings folder (else the default). |
+| `app::a_chosen_device_that_is_not_connected_stays_chosen` | A chosen audio device that is not connected stays in the settings; the default device is used until it is back, then it is used again. |
 | `app::mute_silences_regardless_of_volume` | Mute wins over any volume. |
 | `app::volume_uses_a_squared_curve` | The volume slider maps to gain as `volume²`. |
 | `app::files_are_named_after_the_local_time` | Recordings, replays and screenshots are named after the local time as `2026-01-02 03-04-05`, with zero-padded fields; the system's local time reads as a real date and time. |
@@ -634,6 +637,8 @@ Not verified: the case the change is for, a screenshot copy that fails (it needs
 out of memory).
 
 2026-11-22, stopping a camera or a capture that does not answer, Windows 11 (same PC as release
+
+2026-11-22, settings that survive hand edits and unplugged devices, Windows 11 (same PC as release
 0.8.0):
 
 | Step | Result |
@@ -642,3 +647,8 @@ out of memory).
 
 Not verified: a real camera driver that stops sending pictures; on Linux, stopping or recording
 while the screen-sharing dialog is open (only built and tested in CI).
+
+| Automated tests and clippy | 120 passed (two ignored) on Windows; clippy clean on stable. Each new test fails with its fix turned off |
+
+Not verified: two Obs Lite windows saving at the same moment (each now writes its own temporary
+file); plugging a device in while Obs Lite runs and pressing OK in Settings.

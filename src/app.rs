@@ -327,14 +327,13 @@ impl App {
     fn refresh_devices(&mut self) {
         self.system_devices = audio::list_devices(InputKind::System);
         self.mic_devices = audio::list_devices(InputKind::Microphone);
-        // A saved device that disappeared falls back to the Windows default.
-        let keep = |id: &mut Option<String>, devices: &[Device]| {
-            if id.as_ref().is_some_and(|id| !devices.iter().any(|d| &d.id == id)) {
-                *id = None;
-            }
-        };
-        keep(&mut self.config.system_device, &self.system_devices);
-        keep(&mut self.config.mic_device, &self.mic_devices);
+    }
+
+    /// The chosen desktop audio device, if it is connected. One that is not (unplugged, a dock not
+    /// seen yet) stays chosen, to be used again once it is back; the default device is used
+    /// meanwhile.
+    fn system_device(&self) -> Option<&str> {
+        connected(&self.config.system_device, &self.system_devices)
     }
 
     fn selected_source(&self) -> Option<&Source> {
@@ -357,9 +356,9 @@ impl App {
         let c = &self.config;
         match kind {
             InputKind::System | InputKind::SystemExcept(_) => {
-                (c.system_audio, c.system_device.clone(), channel_gain(c.system_volume, c.system_muted))
+                (c.system_audio, self.system_device().map(str::to_owned), channel_gain(c.system_volume, c.system_muted))
             }
-            InputKind::Microphone => (c.mic, c.mic_device.clone(), channel_gain(c.mic_volume, c.mic_muted)),
+            InputKind::Microphone => (c.mic, connected(&c.mic_device, &self.mic_devices).map(str::to_owned), channel_gain(c.mic_volume, c.mic_muted)),
             InputKind::Application(_) => (c.app_audio.is_some(), None, channel_gain(c.app_volume, c.app_muted)),
         }
     }
@@ -377,7 +376,7 @@ impl App {
     /// leave out, desktop audio too.
     fn restart_app_audio(&mut self) {
         self.start_app_audio();
-        let wanted = system_kind(self.app_audio.as_ref().map(|a| a.kind), self.config.system_device.as_deref());
+        let wanted = system_kind(self.app_audio.as_ref().map(|a| a.kind), self.system_device());
         if self.system.as_ref().is_some_and(|s| s.kind != wanted) {
             self.restart_input(InputKind::System);
         }
@@ -386,7 +385,7 @@ impl App {
     fn restart_input(&mut self, kind: InputKind) {
         let kind = match kind {
             InputKind::System | InputKind::SystemExcept(_) => {
-                system_kind(self.app_audio.as_ref().map(|a| a.kind), self.config.system_device.as_deref())
+                system_kind(self.app_audio.as_ref().map(|a| a.kind), self.system_device())
             }
             other => other,
         };
@@ -929,8 +928,10 @@ impl App {
         new.output_dir = typed_output_dir(new.output_dir, &self.config.output_dir);
         let old = std::mem::replace(&mut self.config, new);
         let c = &self.config;
-        let system_changed = (old.system_audio, &old.system_device) != (c.system_audio, &c.system_device);
-        let mic_changed = (old.mic, &old.mic_device) != (c.mic, &c.mic_device);
+        // Also when a chosen device was plugged in or out since its input started.
+        let on_other = |input: &Option<Input>, wanted: Option<&str>| input.as_ref().is_some_and(|i| i.device.as_deref() != wanted);
+        let system_changed = (old.system_audio, &old.system_device) != (c.system_audio, &c.system_device) || on_other(&self.system, self.system_device());
+        let mic_changed = (old.mic, &old.mic_device) != (c.mic, &c.mic_device) || on_other(&self.mic, connected(&c.mic_device, &self.mic_devices));
         if old.language != c.language {
             if let Some(warning) = apply_language(&self.ctx, c.language, crate::platform::sys::cjk_font) {
                 self.set_status(warning, None, true);
@@ -1883,6 +1884,11 @@ fn channel_gain(volume: f32, muted: bool) -> f32 {
     if muted { 0.0 } else { volume * volume }
 }
 
+/// `id` if it is one of `devices`.
+fn connected<'a>(id: &'a Option<String>, devices: &[Device]) -> Option<&'a str> {
+    id.as_deref().filter(|id| devices.iter().any(|d| d.id == *id))
+}
+
 /// Desktop audio leaves out the application captured on its own (`app`), which it would
 /// otherwise repeat. Leaving a process out is not tied to an output device, so with a chosen
 /// one (`system_device`) desktop audio stays that device's whole output.
@@ -2756,5 +2762,17 @@ mod tests {
         assert!(year >= 2026, "{year}");
         assert!((1..=12).contains(&month) && (1..=31).contains(&day), "{month}-{day}");
         assert!(hour < 24 && minute < 60 && second <= 60, "{hour}:{minute}:{second}");
+    }
+
+    #[test]
+    fn a_chosen_device_that_is_not_connected_stays_chosen() {
+        let mut app = test_app();
+        app.config.mic_device = Some("usb-mic".into());
+        app.refresh_devices();
+        assert_eq!(app.config.mic_device.as_deref(), Some("usb-mic"), "the choice was forgotten");
+        assert_eq!(app.channel(InputKind::Microphone).1, None, "the default microphone is used meanwhile");
+        // Plugged in again.
+        app.mic_devices.push(Device { id: "usb-mic".into(), name: "USB".into() });
+        assert_eq!(app.channel(InputKind::Microphone).1.as_deref(), Some("usb-mic"));
     }
 }

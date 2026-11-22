@@ -225,9 +225,33 @@ impl Config {
     }
 
     fn load_from(path: &Path) -> Self {
-        let mut config: Self = fs::read_to_string(path).ok().and_then(|s| Self::parse(&s)).unwrap_or_default();
+        let read = fs::read(path).ok().map(|bytes| String::from_utf8(bytes).ok().and_then(|s| Self::parse(&s)));
+        let mut config = match read {
+            Some(Some(config)) => config.within_range(),
+            // Not a settings file any more (a hand edit gone wrong, another encoding): kept aside
+            // rather than replaced by the defaults at the next save.
+            Some(None) => {
+                let _ = fs::rename(path, path.with_extension("json.bad"));
+                Self::default()
+            }
+            None => Self::default(),
+        };
         config.last_recording_on_disk = config.last_recording.clone();
         config
+    }
+
+    /// Settings edited by hand brought within limits: a replay buffer of a day would fill
+    /// the memory, and a relative folder would put recordings wherever obs-lite was started from.
+    fn within_range(mut self) -> Self {
+        self.replay_seconds = self.replay_seconds.clamp(5, 600);
+        self.fps = self.fps.clamp(1, 240);
+        for volume in [&mut self.system_volume, &mut self.mic_volume, &mut self.app_volume] {
+            *volume = volume.clamp(0.0, 1.0);
+        }
+        if !self.output_dir.is_absolute() {
+            self.output_dir = Self::default().output_dir;
+        }
+        self
     }
 
     /// Editors such as Windows PowerShell save UTF-8 with a BOM, which serde_json rejects; and a
@@ -273,7 +297,7 @@ fn write_replacing(path: &Path, data: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let new = path.with_extension("new");
+    let new = new_file(path);
     let written = File::create(&new).and_then(|mut f| f.write_all(data).and_then(|()| f.sync_all()));
     match written.and_then(|()| fs::rename(&new, path)) {
         Ok(()) => Ok(()),
@@ -282,6 +306,12 @@ fn write_replacing(path: &Path, data: &[u8]) -> std::io::Result<()> {
             Err(e)
         }
     }
+}
+
+/// The new file `write_replacing` writes first: one per process, as another obs-lite saving at the
+/// same moment would otherwise write into the same one and leave a mix of both.
+fn new_file(path: &Path) -> PathBuf {
+    path.with_extension(format!("{}.new", std::process::id()))
 }
 
 /// Whether no other obs-lite runs with these settings: the first holds a lock on a file next to
@@ -368,7 +398,7 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"new");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1, "no temporary file left");
         // The new contents cannot be written (a folder is in the way): the old ones stay.
-        fs::create_dir(path.with_extension("new")).unwrap();
+        fs::create_dir(new_file(&path)).unwrap();
         assert!(write_replacing(&path, b"lost").is_err());
         assert_eq!(fs::read(&path).unwrap(), b"new");
         fs::remove_dir_all(&dir).unwrap();
@@ -398,6 +428,42 @@ mod tests {
         assert_eq!(r.fit((300, 1080)), Some(Region { x: 100, y: 50, width: 200, height: 1030 }));
         assert_eq!(r.fit((100, 1080)), None); // starts outside a source that shrank
         assert_eq!(Region { x: 0, y: 0, width: 10, height: 500 }.fit((1920, 1080)), None);
+    }
+
+    #[test]
+    fn an_unreadable_settings_file_is_kept_aside() {
+        let dir = std::env::temp_dir().join(format!("obs-lite-bad-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        // A hand edit that left a missing quote.
+        write_replacing(&path, br#"{"fps": 30, "output_dir": "D:\Videos}"#).unwrap();
+        let loaded = Config::load_from(&path);
+        let kept = fs::read(dir.join("settings.json.bad"));
+        let replaced = path.exists();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(loaded.fps, Config::default().fps);
+        assert_eq!(kept.unwrap(), br#"{"fps": 30, "output_dir": "D:\Videos}"#, "the user's file would be overwritten with the defaults");
+        assert!(!replaced);
+    }
+
+    #[test]
+    fn settings_edited_by_hand_stay_within_limits() {
+        let dir = std::env::temp_dir().join(format!("obs-lite-range-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        let absolute = std::env::temp_dir().join("recordings");
+        let load = |json: String| {
+            write_replacing(&path, json.as_bytes()).unwrap();
+            Config::load_from(&path)
+        };
+        let wild = load(r#"{"replay_seconds": 86400, "fps": 0, "mic_volume": 5.0, "output_dir": ""}"#.to_owned());
+        let huge = load(r#"{"replay_seconds": 1, "fps": 3000000000, "system_volume": -1.0, "output_dir": "videos"}"#.to_owned());
+        let fine = load(serde_json::json!({"replay_seconds": 90, "fps": 30, "mic_volume": 0.5, "output_dir": absolute}).to_string());
+        fs::remove_dir_all(&dir).unwrap();
+        // A day of video in memory, and recordings wherever obs-lite was started from.
+        assert_eq!((wild.replay_seconds, wild.fps, wild.mic_volume), (600, 1, 1.0));
+        assert_eq!(wild.output_dir, Config::default().output_dir);
+        assert_eq!((huge.replay_seconds, huge.fps, huge.system_volume), (5, 240, 0.0));
+        assert_eq!(huge.output_dir, Config::default().output_dir);
+        assert_eq!((fine.replay_seconds, fine.fps, fine.mic_volume, fine.output_dir), (90, 30, 0.5, absolute));
     }
 
     #[test]
