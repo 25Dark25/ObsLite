@@ -2,8 +2,10 @@
 //! platform code (`platform::camera`).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use crate::i18n::tr;
@@ -152,7 +154,13 @@ pub struct CameraShared {
 pub struct Camera {
     pub shared: Arc<CameraShared>,
     thread: Option<JoinHandle<()>>,
+    /// Disconnected when the thread has ended.
+    ended: Receiver<()>,
 }
+
+/// How long removing a camera waits for it to close. It closes within a picture or two, but a
+/// driver that stops sending pictures without an error leaves it waiting for the next one.
+const CLOSE_WAIT: Duration = Duration::from_secs(2);
 
 impl Camera {
     pub fn start(device: String, repaint: Option<eframe::egui::Context>) -> Self {
@@ -175,11 +183,13 @@ impl Camera {
             opened: AtomicBool::new(opened),
             stop: AtomicBool::new(false),
         });
+        let (still_running, ended) = mpsc::channel::<()>();
         let thread = thread::Builder::new()
             .name("camera".into())
             .spawn({
                 let shared = shared.clone();
                 move || {
+                    let _still_running = still_running;
                     let result = capture(&shared, repaint.as_ref());
                     if !shared.stopped() {
                         // Unplugged, access taken away, or the stream ended: no picture to keep.
@@ -189,7 +199,7 @@ impl Camera {
                 }
             })
             .expect("spawn camera thread");
-        Self { shared, thread: Some(thread) }
+        Self { shared, thread: Some(thread), ended }
     }
 }
 
@@ -235,10 +245,14 @@ impl CameraShared {
 impl Drop for Camera {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Relaxed);
-        // A camera still waiting for the user's answer is left to end by itself once it comes:
-        // waiting here froze the window until the user answered.
+        // Nothing more from it goes into a recording, even if its thread lingers.
+        *self.shared.sink.lock().unwrap() = None;
+        // Waited for, so that it can be opened again at once; but not for long. A camera still
+        // waiting for the user's answer, or stuck in its driver, is left to end by itself: waiting
+        // for it froze the window, until the user answered or for good.
         if let Some(t) = self.thread.take()
             && self.shared.opened.load(Ordering::Relaxed)
+            && self.ended.recv_timeout(CLOSE_WAIT) == Err(RecvTimeoutError::Disconnected)
         {
             let _ = t.join();
         }
@@ -295,6 +309,27 @@ mod tests {
         drop(camera);
         assert!(removed.elapsed() < Duration::from_millis(500), "the window froze for {:?}", removed.elapsed());
         drop(answer);
+    }
+
+    #[test]
+    fn removing_a_camera_stuck_in_its_driver_does_not_freeze_the_window() {
+        // Waiting for a picture that never comes, without looking at whether it should stop.
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let camera = Camera::start_with(
+            move |_, _| {
+                let _ = released.recv_timeout(Duration::from_secs(10));
+                Ok(())
+            },
+            true,
+            None,
+        );
+        *camera.shared.sink.lock().unwrap() = Some(Box::new(|_| {}));
+        let shared = camera.shared.clone();
+        let removed = Instant::now();
+        drop(camera);
+        assert!(removed.elapsed() < CLOSE_WAIT + Duration::from_millis(500), "the window froze for {:?}", removed.elapsed());
+        assert!(shared.sink.lock().unwrap().is_none(), "its pictures would still go into the recording");
+        drop(release);
     }
 
     #[test]

@@ -91,6 +91,7 @@ cargo test --locked
 | `audio::only_sound_after_silence_wakes_the_ui` | An input wakes the window only when it goes from silence (below −60 dB) to sound. |
 | `camera::overlay_sits_in_the_corner_with_the_camera_aspect` | The webcam overlay's position and size. |
 | `camera::resize_keeps_flat_colour_and_identity` | The webcam scaling. |
+| `camera::removing_a_camera_stuck_in_its_driver_does_not_freeze_the_window` | A camera whose thread waits for a picture that never comes is removed within the 2 s it is waited for, and nothing from it reaches a recording any more. |
 | `linux::camera::denied_access_says_how_to_allow_it` | Linux only: when the desktop gives no camera access, the error says to choose the camera again or allow it in the privacy settings, instead of "Portal request was cancelled". |
 | `linux::camera::row_padding_is_dropped` | Linux only: camera pictures with padded rows are packed, and short buffers are rejected. |
 | `linux::sys::document_portal_paths_are_recognised` | Linux only: a folder granted through the folder picker (`/run/user/UID/doc/ID/NAME/…`) is recognised, so its real path can be shown; other paths are left alone. |
@@ -631,3 +632,13 @@ Not verified: a real power cut, or a recording damaged on disk; these were built
 
 Not verified: the case the change is for, a screenshot copy that fails (it needs the GPU to run
 out of memory).
+
+2026-11-22, stopping a camera or a capture that does not answer, Windows 11 (same PC as release
+0.8.0):
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 117 passed (two ignored) on Windows; clippy clean on stable. The new camera test fails without the change (removing the camera waited the full 10 s the test's camera was stuck) |
+
+Not verified: a real camera driver that stops sending pictures; on Linux, stopping or recording
+while the screen-sharing dialog is open (only built and tested in CI).
