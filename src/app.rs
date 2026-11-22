@@ -1944,9 +1944,14 @@ fn outline_region(painter: &egui::Painter, canvas: Rect, inner: Rect) {
 fn paste_camera(rgba: &mut [u8], width: u32, height: u32, frame: &CameraFrame, corner: Corner, size: CameraSize) {
     let (x, y, w, h) = camera::overlay_rect((width, height), (frame.width, frame.height), corner, size);
     let scaled = camera::resize(&frame.bgra, (frame.width, frame.height), (w, h));
-    for (row, src) in scaled.chunks(w as usize * 4).enumerate() {
+    // The overlay is at least 2×2: on a picture 1 pixel wide or high it is cut to the picture.
+    let (cols, rows) = (w.min(width.saturating_sub(x)) as usize, h.min(height.saturating_sub(y)) as usize);
+    if cols == 0 {
+        return;
+    }
+    for (row, src) in scaled.chunks(w as usize * 4).enumerate().take(rows) {
         let start = ((y as usize + row) * width as usize + x as usize) * 4;
-        for (dst, &[b, g, r, a]) in rgba[start..start + src.len()].as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
+        for (dst, &[b, g, r, a]) in rgba[start..start + cols * 4].as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
             *dst = [r, g, b, a];
         }
     }
@@ -2777,5 +2782,16 @@ mod tests {
         // Plugged in again.
         app.mic_devices.push(Device { id: "usb-mic".into(), name: "USB".into() });
         assert_eq!(app.channel(InputKind::Microphone).1.as_deref(), Some("usb-mic"));
+    }
+
+    #[test]
+    fn the_webcam_is_pasted_on_a_screenshot_of_any_size() {
+        let frame = CameraFrame { width: 4, height: 3, bgra: [10, 20, 30, 255].repeat(12) };
+        // A window 1 pixel wide or high crashed Obs Lite on the screenshot.
+        for (width, height) in [(1, 1), (1, 500), (500, 1), (2, 2), (640, 360)] {
+            let mut rgba = vec![0; width as usize * height as usize * 4];
+            paste_camera(&mut rgba, width, height, &frame, Corner::BottomRight, CameraSize::Medium);
+            assert!(rgba.chunks(4).any(|p| p == [30, 20, 10, 255]), "{width}x{height}: no webcam");
+        }
     }
 }

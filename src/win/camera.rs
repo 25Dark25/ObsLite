@@ -3,7 +3,7 @@
 use std::thread;
 
 use windows::Win32::Media::MediaFoundation::{
-    IMF2DBuffer, IMFActivate, IMFMediaBuffer, IMFMediaSource, MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
+    IMF2DBuffer2, IMFActivate, IMFMediaSource, MF2DBuffer_LockFlags_Read, MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK,
     IMFSourceReader, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
     MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED,
@@ -150,10 +150,10 @@ fn capture_loop(device: &str, shared: &CameraShared, repaint: Option<&eframe::eg
                     bgra.extend(row.as_chunks::<4>().0.iter().flat_map(|&[b, g, r, _]| [b, g, r, 255]));
                 }
             };
-            if let Ok(two_d) = buffer.cast::<IMF2DBuffer>() {
-                let (mut scan0, mut pitch) = (std::ptr::null_mut(), 0i32);
-                two_d.Lock2D(&mut scan0, &mut pitch)?;
-                let fits = fits_2d(&buffer, pitch, width, height);
+            if let Ok(two_d) = buffer.cast::<IMF2DBuffer2>() {
+                let (mut scan0, mut pitch, mut start, mut length) = (std::ptr::null_mut(), 0i32, std::ptr::null_mut(), 0u32);
+                two_d.Lock2DSize(MF2DBuffer_LockFlags_Read, &mut scan0, &mut pitch, &mut start, &mut length)?;
+                let fits = rows_fit(scan0 as usize, pitch as isize, (width, height), (start as usize, length as usize));
                 if fits {
                     copy(scan0, pitch as isize);
                 }
@@ -182,12 +182,19 @@ fn capture_loop(device: &str, shared: &CameraShared, repaint: Option<&eframe::eg
     Ok(())
 }
 
-/// Whether a 2-D buffer locked with `pitch` holds every row of the picture. Rows can be padded
-/// past `width * 4`, so the bound is the buffer's whole length, not the unpadded picture's
-/// (`GetContiguousLength`), which only fitted unpadded rows.
-fn fits_2d(buffer: &IMFMediaBuffer, pitch: i32, width: u32, height: u32) -> bool {
-    let rows = pitch.unsigned_abs() as usize * height as usize;
-    unsafe { buffer.GetMaxLength() }.is_ok_and(|len| rows <= len as usize) && pitch.unsigned_abs() as usize >= width as usize * 4
+/// Whether `height` rows of `width` pixels, `pitch` bytes apart from the top row at `scan0`
+/// (negative for a bottom-up picture, whose top row is last in memory), all lie in the buffer of
+/// `length` bytes at `start`. Rows can be padded past `width * 4`; and the picture's size comes
+/// from the media type, which a driver may not keep in step with the buffer.
+fn rows_fit(scan0: usize, pitch: isize, (width, height): (u32, u32), (start, length): (usize, usize)) -> bool {
+    let row = width as usize * 4;
+    let span = pitch.unsigned_abs().checked_mul((height as usize).saturating_sub(1));
+    let first = span.and_then(|span| if pitch < 0 { scan0.checked_sub(span) } else { Some(scan0) });
+    let last = span.and_then(|span| if pitch < 0 { Some(scan0) } else { scan0.checked_add(span) });
+    match (first, last.and_then(|last| last.checked_add(row))) {
+        (Some(first), Some(end)) => pitch.unsigned_abs() >= row && first >= start && end <= start.saturating_add(length),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -195,6 +202,19 @@ mod tests {
     use windows::Win32::Media::MediaFoundation::MFCreate2DMediaBuffer;
 
     use super::*;
+
+    #[test]
+    fn rows_outside_the_buffer_are_not_read() {
+        // 10 pixels wide, rows 48 bytes apart, in a buffer of 400 bytes at 1000, larger than the
+        // 5 rows it holds (the old check compared only the rows' total to the length).
+        let buffer = (1000, 400);
+        assert!(rows_fit(1000, 48, (10, 5), buffer));
+        assert!(rows_fit(1000 + 48 * 4, -48, (10, 5), buffer), "bottom-up");
+        // A media type saying 6 rows: bottom-up, the 6th would be read before the buffer.
+        assert!(!rows_fit(1000 + 48 * 4, -48, (10, 6), buffer));
+        assert!(!rows_fit(1000, 48, (10, 9), buffer));
+        assert!(!rows_fit(1000, 36, (10, 5), buffer), "rows narrower than the picture");
+    }
 
     #[test]
     fn a_picture_with_padded_rows_is_used() {
@@ -205,12 +225,15 @@ mod tests {
             for bottom_up in [false, true] {
                 unsafe {
                     let buffer = MFCreate2DMediaBuffer(width, height, 22 /* D3DFMT_X8R8G8B8 */, bottom_up).unwrap();
-                    let two_d: IMF2DBuffer = buffer.cast().unwrap();
-                    let (mut scan0, mut pitch) = (std::ptr::null_mut(), 0i32);
-                    two_d.Lock2D(&mut scan0, &mut pitch).unwrap();
-                    let fits = fits_2d(&buffer, pitch, width, height);
+                    let two_d: IMF2DBuffer2 = buffer.cast().unwrap();
+                    let (mut scan0, mut pitch, mut start, mut length) = (std::ptr::null_mut(), 0i32, std::ptr::null_mut(), 0u32);
+                    two_d.Lock2DSize(MF2DBuffer_LockFlags_Read, &mut scan0, &mut pitch, &mut start, &mut length).unwrap();
+                    let fits = rows_fit(scan0 as usize, pitch as isize, (width, height), (start as usize, length as usize));
+                    // One row more than the buffer holds.
+                    let over = rows_fit(scan0 as usize, pitch as isize, (width, height + 1), (start as usize, length as usize));
                     two_d.Unlock2D().unwrap();
                     assert!(fits, "{width}x{height}, pitch {pitch}");
+                    assert!(!over, "{width}x{height}, pitch {pitch}: a row outside the buffer");
                 }
             }
         }

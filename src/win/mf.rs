@@ -631,12 +631,14 @@ impl Aac {
     pub fn encode(&mut self, pcm: &[u8]) -> Result<Vec<Packet>> {
         let frames = pcm.len() as u64 / (AUDIO_CHANNELS as u64 * 2);
         unsafe {
-            let buffer = MFCreateMemoryBuffer(pcm.len() as u32)?;
+            // The buffer is made, and its length set, from this; the copy is of all of `pcm`.
+            let length = u32::try_from(pcm.len()).map_err(|_| windows::core::Error::from(windows::Win32::Foundation::E_INVALIDARG))?;
+            let buffer = MFCreateMemoryBuffer(length)?;
             let mut data = std::ptr::null_mut();
             buffer.Lock(&mut data, None, None)?;
             std::ptr::copy_nonoverlapping(pcm.as_ptr(), data, pcm.len());
             buffer.Unlock()?;
-            buffer.SetCurrentLength(pcm.len() as u32)?;
+            buffer.SetCurrentLength(length)?;
             let sample = MFCreateSample()?;
             sample.AddBuffer(&buffer)?;
             sample.SetSampleTime(self.frames as i64 * TICKS_PER_SECOND / AUDIO_RATE as i64)?;
@@ -713,12 +715,13 @@ impl Mp4 {
             return Ok(());
         }
         unsafe {
-            let buffer = MFCreateMemoryBuffer(packet.data.len() as u32)?;
+            let length = u32::try_from(packet.data.len()).map_err(|_| windows::core::Error::from(windows::Win32::Foundation::E_INVALIDARG))?;
+            let buffer = MFCreateMemoryBuffer(length)?;
             let mut data = std::ptr::null_mut();
             buffer.Lock(&mut data, None, None)?;
             std::ptr::copy_nonoverlapping(packet.data.as_ptr(), data, packet.data.len());
             buffer.Unlock()?;
-            buffer.SetCurrentLength(packet.data.len() as u32)?;
+            buffer.SetCurrentLength(length)?;
             let sample = MFCreateSample()?;
             sample.AddBuffer(&buffer)?;
             sample.SetSampleTime(time)?;
