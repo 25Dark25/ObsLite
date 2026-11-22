@@ -1,5 +1,8 @@
 //! Small Windows system calls the rest of the app needs.
 
+use std::ffi::OsString;
+use std::os::windows::ffi::OsStringExt;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -86,12 +89,40 @@ pub fn attach_console() {
 
 /// Opens `dir` in Explorer.
 pub fn open_folder(dir: &Path) {
-    let _ = Command::new("explorer").arg(dir).spawn();
+    let _ = explorer().raw_arg(quoted(dir)).spawn();
 }
 
 /// Opens the folder that holds `file` in Explorer, with the file selected.
 pub fn show_in_folder(file: &Path) {
-    let _ = Command::new("explorer").arg("/select,").arg(file).spawn();
+    let mut arg = OsString::from("/select,");
+    arg.push(quoted(file));
+    let _ = explorer().raw_arg(arg).spawn();
+}
+
+/// Opens a web page in the default browser.
+pub fn open_url(url: &str) {
+    let _ = explorer().arg(url).spawn();
+}
+
+/// Explorer from the Windows folder. Found by name, it would be looked for first in obs-lite's
+/// own folder, which for the portable build may be a downloads folder.
+fn explorer() -> Command {
+    use windows::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
+    let mut dir = [0u16; 260];
+    let len = unsafe { GetSystemWindowsDirectoryW(Some(&mut dir)) } as usize;
+    match dir.get(..len).filter(|d| !d.is_empty()) {
+        Some(dir) => Command::new(PathBuf::from(OsString::from_wide(dir)).join("explorer.exe")),
+        None => Command::new("explorer"),
+    }
+}
+
+/// `path` in quotes: Explorer splits its arguments at commas, which a path can hold, and a path
+/// cannot hold a quote.
+fn quoted(path: &Path) -> OsString {
+    let mut arg = OsString::from("\"");
+    arg.push(path);
+    arg.push("\"");
+    arg
 }
 
 /// The path as the user should see it; on Windows, the path itself.
@@ -135,4 +166,17 @@ pub fn http_get(url: &str) -> Result<String, String> {
         Ok(client.GetStringAsync(&Uri::CreateUri(&HSTRING::from(url))?)?.join()?.to_string())
     };
     get().map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explorer_is_started_from_the_windows_folder_with_the_path_in_quotes() {
+        let program = PathBuf::from(explorer().get_program());
+        assert!(program.is_absolute() && program.ends_with("explorer.exe") && program.exists(), "{program:?}");
+        // Unquoted, Explorer took the part before the comma for the folder.
+        assert_eq!(quoted(Path::new(r"D:\Videos, games\a.mp4")), OsString::from(r#""D:\Videos, games\a.mp4""#));
+    }
 }

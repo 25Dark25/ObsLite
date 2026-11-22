@@ -1598,9 +1598,12 @@ impl App {
     }
 }
 
-/// Opens a web page in the default browser.
+/// Opens a web page in the default browser (only the update check, on Windows, has any).
 fn open_url(url: &str) {
-    let _ = std::process::Command::new("explorer").arg(url).spawn();
+    #[cfg(windows)]
+    crate::platform::sys::open_url(url);
+    #[cfg(not(windows))]
+    let _ = url;
 }
 
 fn settings_page(ui: &mut egui::Ui, dialog: &mut SettingsDialog, system: &[Device], mic: &[Device]) {

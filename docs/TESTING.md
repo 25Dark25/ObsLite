@@ -102,6 +102,8 @@ cargo test --locked
 | `tray::idle_icon_is_grey_with_the_same_alpha` | The idle tray icon. |
 | `update::versions_compare_numerically` | Only a strictly newer plain version counts as an update. |
 | `update::release_is_read_from_the_github_response` | The tag and page are read from GitHub's response; an error response gives nothing. |
+| `update::only_a_link_to_a_release_page_is_taken` | A response whose link is not an `https://github.com/25Dark25/ObsLite/releases/` page (a file, a network share, another site, plain http) is not offered as a new version. |
+| `win::sys::explorer_is_started_from_the_windows_folder_with_the_path_in_quotes` | Windows only: Explorer is started by its full path in the Windows folder, and paths are given to it in quotes, so a comma in a folder name does not cut it. |
 | `app::saved_message_survives_a_source_that_is_gone` | When the recorded window is closed, the "saved" message and file link stay, and the source is deselected. |
 | `app::desktop_audio_leaves_out_the_application_captured_on_its_own` | With an application captured on its own, desktop audio leaves it out; not with no application, nor with a chosen output device. |
 | `app::a_new_release_opens_the_dialog_unless_skipped` | A newer release opens the update dialog unless the user chose not to be reminded of that version; the status-bar link shows either way. |
@@ -652,3 +654,12 @@ while the screen-sharing dialog is open (only built and tested in CI).
 
 Not verified: two Obs Lite windows saving at the same moment (each now writes its own temporary
 file); plugging a device in while Obs Lite runs and pressing OK in Settings.
+
+2026-11-22, opening links and folders, Windows 11 (same PC as release 0.8.0):
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 122 passed (two ignored) on Windows; clippy clean on stable |
+
+Not verified: opening by hand a folder whose name has a comma, and the update link (no newer
+release exists to offer).

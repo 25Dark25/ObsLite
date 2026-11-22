@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is used until it is back, instead of the choice being forgotten.
 - Two Obs Lite windows saving their settings at the same moment can no longer leave an unreadable
   settings file.
+- Windows: *File › Show Recordings* and *Show in folder* open the right place when a folder name
+  has a comma.
+
+### Security
+
+- Windows: the link to a new version is opened only if it is a release page of this project, and
+  Explorer is always started from the Windows folder, never from the folder Obs Lite is in (which
+  for the portable build may be a downloads folder).
 
 ## [0.8.0] - 2026-11-22
 
