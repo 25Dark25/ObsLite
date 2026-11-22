@@ -589,3 +589,16 @@ VirtualBox's driver reports the error or writes nothing without one.
 
 Not verified for this release: the Japanese and Chinese font lookup on Linux (fontconfig inside
 the Flatpak), and whether the translations read naturally (they are machine translations).
+
+2026-11-22, release 0.8.0, Windows 11 (the release build of that branch), on a PC other than the
+laptop above, encoding on its Intel GPU (Quick Sync):
+
+| Step | Result |
+|---|---|
+| Self-test 8 s 1080p60 | Quick Sync; 1920×1080 at 60 fps, 369 frames, 0 lagged |
+| Self-test 6 s with pause, 720p, `replay`, `preview` and `shot` | 1280×720 at 60 fps, 0 lagged; replay saved; 27 preview pictures, the last 640×360; a 1920×1080 screenshot |
+| Start of a recording | The hardware encoder takes 0.5–1.5 s to start on this PC: three 6 s self-tests gave 257, 323 and 325 frames, and 0.7.0 built and run the same way gave 258, 324 and 326 |
+| Automated tests and clippy | 106 passed (two ignored) on Windows; clippy clean on stable; CI green on Windows and Linux |
+
+Not verified for this release: the interface by hand, and Linux outside CI (the Flatpak is built
+and validated there).
