@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by this repository's *Release build* workflow and from which commit
   (`gh attestation verify <file> -R 25Dark25/ObsLite`).
 
+### Fixed
+
+- Repairing a recording after a crash or a power cut is safer. Zeros left at the end of the file
+  no longer make the repaired recording unplayable; a recording damaged before its end is left as
+  it was instead of being cut at the damage; a damaged file no longer crashes Obs Lite at every
+  start; and on Windows a recording that another Obs Lite is still writing is left alone.
+
 ## [0.8.0] - 2026-11-22
 
 ### Changed
