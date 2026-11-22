@@ -271,6 +271,14 @@ A7FC EDEA D7E6 C343 7312  284A 442D A687 E0FF 73EE
    `sha256sum obs-lite-0.8.0-portable-windows-x64.zip`, or on Windows
    `Get-FileHash obs-lite-0.8.0-portable-windows-x64.zip -Algorithm SHA256`.
 
+Releases after 0.8.0 also have a build provenance attestation from GitHub for each file. It shows
+that the file was built by this repository's *Release build* workflow, and from which commit. With
+the [GitHub CLI](https://cli.github.com/):
+
+```sh
+gh attestation verify obs-lite-<version>-portable-windows-x64.zip -R 25Dark25/ObsLite
+```
+
 `gpg` ships with [Gpg4win](https://gpg4win.org/) and with Git for Windows.
 
 ## Development

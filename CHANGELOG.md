@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Each release file has a build provenance attestation from GitHub, which shows that it was built
+  by this repository's *Release build* workflow and from which commit
+  (`gh attestation verify <file> -R 25Dark25/ObsLite`).
+
 ## [0.8.0] - 2026-11-22
 
 ### Changed
