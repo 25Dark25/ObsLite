@@ -4,7 +4,7 @@ Lightweight screen recorder for Windows and Linux, a small alternative to OBS St
 on Windows a single ~7 MB `.exe`, on Linux a ~4 MB Flatpak, with no bundled browser. The interface
 follows OBS Studio, so OBS users find everything where they expect it.
 
-**Website and downloads: <https://25dark25.github.io/ObsLite/>**
+**Website and downloads: <https://25dark25.github.io/ObsLite/>** (in the same 10 languages as the app)
 
 > **Obs Lite is an independent project.** It is not affiliated with, endorsed by or sponsored by
 > the OBS Project or OBS Studio. "OBS" and "OBS Studio" are trademarks of their respective owners.
@@ -336,7 +336,10 @@ with [WiX](https://wixtoolset.org/) 6.0.2 (`installer/build.ps1`).
 
 The website in `site/` is published to GitHub Pages by `.github/workflows/pages.yml`, on each push
 to `site/` and each published release; `sh site/build.sh OUT_DIR` builds it locally (it needs `gh`, to
-fill in the latest release's version, sizes and hashes).
+fill in the latest release's version, sizes and hashes, and `perl`). `site/index.html` is one template
+for every language and `site/i18n/<language>.json` holds its texts: each language must have every
+text, or the build stops. The build writes one page per language (`/es/`, `/de/`…) with its
+`hreflang` links, the FAQ as structured data, and `sitemap.xml`.
 
 ### How it works
 
