@@ -20,7 +20,7 @@ use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
 
 use crate::audio::{CHANNELS, SAMPLE_RATE};
-use crate::camera::{self, CameraSize, Corner, PixelRect};
+use crate::camera::{self, PixelRect, Place};
 use crate::i18n::tr;
 use crate::media::{self, Clock, Muxer, Packet};
 
@@ -57,7 +57,7 @@ pub struct EncoderSettings {
     pub bitrate: u32,
     pub audio: bool,
     /// Where the webcam goes, if there is one.
-    pub overlay: Option<(Corner, CameraSize)>,
+    pub overlay: Option<Place>,
     /// The pictures hold red first (RGBx, as some desktops send them) instead of blue (BGRx).
     pub red_first: bool,
     /// The first frame, if frames come on the GPU (DMA-BUFs, see `push_gpu_frame`).
@@ -128,7 +128,7 @@ pub struct Encoder {
     audio_frames: Mutex<u64>,
     /// As `Inner::video_failed`, for the audio pipeline.
     audio_failed: AtomicBool,
-    overlay: Option<(Corner, CameraSize)>,
+    overlay: Option<Place>,
     name: String,
 }
 
@@ -355,7 +355,7 @@ impl Encoder {
 
     /// Where a `camera`-sized webcam picture goes on the recording, if there is an overlay.
     pub fn overlay_rect(&self, camera: (u32, u32)) -> Option<PixelRect> {
-        self.overlay.map(|(corner, size)| camera::overlay_rect(self.inner.input, camera, corner, size))
+        self.overlay.map(|place| camera::overlay_rect(self.inner.input, camera, place))
     }
 
     /// The camera stopped: its last picture is no longer put on the recording.
@@ -1131,7 +1131,7 @@ mod tests {
             fps: 30,
             bitrate: 2_000_000,
             audio: false,
-            overlay: webcam.map(|_| (Corner::TopLeft, CameraSize::Small)),
+            overlay: webcam.map(|_| Place { x: 0.0, y: 0.0, width: 0.2 }),
             red_first: false,
             gpu: Some(frames[0].clone()),
         };

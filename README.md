@@ -44,7 +44,7 @@ Obs Lite does one thing, record, and leaves out what it would need a much larger
 | Replay buffer | ✓ | ✓ |
 | Recording kept after a crash | ✓ (fragmented MP4, repaired at the next start) | ✓ (MKV, or hybrid MP4) |
 | Microphone noise suppression | ✓ (RNNoise) | ✓ (RNNoise, Speex, NVIDIA) |
-| Webcam | one, in a corner | any number, anywhere |
+| Webcam | one, anywhere, any size | any number, anywhere |
 | Region of the source | ✓ | ✓ (crop filter) |
 | Scenes, several sources, filters, transitions | — | ✓ |
 | Streaming | — | ✓ |
@@ -101,9 +101,10 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording
 - **Preview** on top and, below it, the **Sources**, **Audio Mixer** and **Controls** docks.
   Right-click the preview to take a screenshot.
 - **Sources › +**: *Display Capture*, *Window Capture*, *Application Audio Capture* (the sound of
-  one application, with its own mixer channel) or *Video Capture Device* (a webcam shown in a
-  corner of the recording). **Properties**: capture the cursor, *Select Region…* to record only part
-  of the source, and the webcam's corner and size.
+  one application, with its own mixer channel) or *Video Capture Device* (a webcam shown on the
+  recording; when not recording, drag it on the preview to move it, or its corner to resize it,
+  and it stays there).
+  **Properties**: capture the cursor, *Select Region…* to record only part of the source.
 - **Audio Mixer**: desktop audio and *Mic/Aux*, each with a meter, volume slider and mute button
   (mute also works while recording). If the channels together go over the maximum, a limiter
   lowers the volume at those moments instead of letting it distort, and the mixer says so.
@@ -145,7 +146,8 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording
   encodes in that time, about 30 MB for 20 s at 1080p60 medium.
 - **Hardware scaling** to 1440p, 1080p or 720p (downscale only, aspect ratio preserved).
 - **Region recording**: drag a rectangle on the preview to record only that part (cropped on the GPU).
-- **Webcam overlay** (picture-in-picture) in any corner, in three sizes.
+- **Webcam overlay** (picture-in-picture) anywhere and at any size, placed by dragging it on the
+  preview and kept for the next start.
 - **Screenshots** as full-resolution PNG, with the region and webcam applied.
 - **Microphone noise suppression** with RNNoise, like OBS's filter.
 - **Configurable global hotkeys** for start/stop, pause/resume, the replay buffer, saving a replay,

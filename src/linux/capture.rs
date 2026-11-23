@@ -516,7 +516,7 @@ fn watch(pipeline: &gst::Pipeline, handler: &Arc<Mutex<Handler>>, stop: &AtomicB
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::camera::{CameraSize, Corner};
+    use crate::camera::Place;
     use crate::config::{Quality, Region, Resolution};
 
     #[test]
@@ -546,7 +546,7 @@ mod tests {
         // Where VA-API can record them (not in CI), in as many formats as it reads, with a region
         // and the webcam too.
         let region = Region { x: 0, y: 0, width: 640, height: 360 };
-        let webcam = Some((Corner::BottomRight, CameraSize::Small));
+        let webcam = Some(Place { x: 1.0, y: 1.0, width: 0.2 });
         for (region, overlay) in [(None, None), (Some(region), None), (None, webcam), (Some(region), webcam)] {
             assert_eq!(handler(Some(recording(region, overlay))).gpu_formats(), gpu::formats());
         }

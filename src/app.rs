@@ -18,7 +18,7 @@ use eframe::egui::{
 };
 
 use crate::audio::{self, Device, Input, InputKind, METER_FLOOR, Mixer};
-use crate::camera::{self, Camera, CameraConfig, CameraDevice, CameraFrame, CameraSize, Corner};
+use crate::camera::{self, Camera, CameraConfig, CameraDevice, CameraFrame, PixelRect, Place};
 use crate::capture::{self, RecordConfig, Session, SessionOptions, Source, SourceId};
 use crate::platform::encoder::{Encoder, PendingFile};
 use crate::config::{Config, Hotkeys, Quality, Region, Resolution};
@@ -91,6 +91,30 @@ struct SettingsDialog {
     capturing: Option<usize>,
 }
 
+/// The webcam overlay being dragged on the preview.
+struct CameraDrag {
+    /// Where it was when the drag started (pixels of the recorded area).
+    from: PixelRect,
+    /// By its corner: resizing it rather than moving it.
+    resize: bool,
+    /// How far the pointer has gone, in points.
+    moved: egui::Vec2,
+}
+
+impl CameraDrag {
+    /// Where the overlay goes for the pointer `moved` that far (pixels) on an `area`-sized picture.
+    fn place(&self, area: (u32, u32), moved: egui::Vec2) -> Place {
+        let (x, y, w, h) = (self.from.0 as f32, self.from.1 as f32, self.from.2 as f32, self.from.3 as f32);
+        if self.resize {
+            // The corner follows the pointer, the camera keeping its aspect and its top left.
+            let width = (w + (moved.x + moved.y * w / h) / 2.0).max(1.0);
+            Place::at(area, (x, y), (width, width * h / w))
+        } else {
+            Place::at(area, (x + moved.x, y + moved.y), (w, h))
+        }
+    }
+}
+
 /// Process CPU usage as a share of all cores, like the OBS status bar.
 struct CpuMeter {
     last: Option<(Instant, u64)>,
@@ -129,6 +153,8 @@ pub struct App {
     /// Choosing a region on the preview, and the drag in progress (start, end).
     picking_region: bool,
     region_drag: Option<(egui::Pos2, egui::Pos2)>,
+    /// The webcam overlay being dragged on the preview (see `CameraDrag`).
+    camera_drag: Option<CameraDrag>,
     status: Option<Status>,
     settings: Option<SettingsDialog>,
     cpu: CpuMeter,
@@ -202,6 +228,7 @@ impl App {
             texture_seq: None,
             picking_region: false,
             region_drag: None,
+            camera_drag: None,
             status: font_warning.map(|text| Status { text, file: None, error: true }),
             settings: None,
             cpu: CpuMeter { last: None, percent: 0.0 },
@@ -415,8 +442,8 @@ impl App {
     }
 
     /// The camera overlay, when a camera is configured and running.
-    fn overlay(&self) -> Option<(Corner, CameraSize)> {
-        self.camera.as_ref().filter(|c| !c.shared.ended()).and(self.config.camera.as_ref()).map(|c| (c.corner, c.size))
+    fn overlay(&self) -> Option<Place> {
+        self.camera.as_ref().filter(|c| !c.shared.ended()).and(self.config.camera.as_ref()).map(|c| c.place)
     }
 
     /// A camera that stopped by itself (unplugged, say): its picture leaves a recording going on,
@@ -758,10 +785,10 @@ impl App {
             rgba = capture::crop_rgba(&rgba, width, region);
             (width, height) = (region.width, region.height);
         }
-        if let (Some((corner, size)), Some(camera)) = (self.overlay(), self.camera.as_ref())
+        if let (Some(place), Some(camera)) = (self.overlay(), self.camera.as_ref())
             && let Some(frame) = camera.shared.latest.lock().unwrap().clone()
         {
-            paste_camera(&mut rgba, width, height, &frame, corner, size);
+            paste_camera(&mut rgba, width, height, &frame, place);
         }
         self.save_screenshot(ctx, width, height, rgba);
     }
@@ -1093,20 +1120,59 @@ impl App {
         }
         let Some(source) = source.filter(|_| self.texture.is_some()) else { return };
         let area = self.config.region.and_then(|r| r.fit(source));
-        if let (Some((corner, size)), Some(texture)) = (self.overlay(), &self.camera_texture)
+        let camera = self.overlay().zip(self.camera_texture.as_ref().map(|t| (t.id(), t.size())));
+        if let Some((place, (texture, size))) = camera
             && !self.picking_region
         {
             // The overlay sits in the recorded area: the region, or the whole source.
             let area = area.unwrap_or(Region { x: 0, y: 0, width: source.0, height: source.1 });
-            let (x, y, w, h) = camera::overlay_rect((area.width, area.height), (texture.size()[0] as u32, texture.size()[1] as u32), corner, size);
-            let rect = region_rect(Region { x: area.x + x, y: area.y + y, width: w, height: h }, canvas, source);
-            painter.image(texture.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            let at = camera::overlay_rect((area.width, area.height), (size[0] as u32, size[1] as u32), place);
+            let rect = region_rect(Region { x: area.x + at.0, y: area.y + at.1, width: at.2, height: at.3 }, canvas, source);
+            painter.image(texture, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            // Like every other setting, not while a recording or the replay buffer runs.
+            if !self.is_session_active() {
+                self.move_camera(ui, &painter, rect, at, (area.width, area.height), source.0 as f32 / canvas.width());
+            }
         }
         if self.picking_region {
             self.pick_region(ui, &response, &painter, canvas, source);
         } else if let Some(region) = self.config.region.and_then(|r| r.fit(source)) {
             outline_region(&painter, canvas, region_rect(region, canvas, source));
         }
+    }
+
+    /// Drag the webcam on the preview to move it, or its corner to resize it. `at` is where it is
+    /// on the recorded `area` (pixels), drawn at `rect`; `scale` is pixels per point.
+    fn move_camera(&mut self, ui: &egui::Ui, painter: &egui::Painter, rect: Rect, at: PixelRect, area: (u32, u32), scale: f32) {
+        let id = ui.scope_id().with("camera overlay");
+        let body = ui.interact(rect, id, Sense::drag());
+        let handle = Rect::from_center_size(rect.max, vec2(12.0, 12.0));
+        let corner = ui.interact(handle, id.with("corner"), Sense::drag());
+        let resizing = corner.hovered() || corner.dragged();
+        if body.drag_started() || corner.drag_started() {
+            self.camera_drag = Some(CameraDrag { from: at, resize: corner.drag_started(), moved: egui::Vec2::ZERO });
+        }
+        if let Some(drag) = &mut self.camera_drag {
+            drag.moved += body.drag_delta() + corner.drag_delta();
+            if let Some(camera) = &mut self.config.camera {
+                camera.place = drag.place(area, drag.moved * scale);
+            }
+            if body.drag_stopped() || corner.drag_stopped() || !(body.dragged() || corner.dragged()) {
+                self.camera_drag = None;
+            }
+        }
+        if resizing || self.camera_drag.as_ref().is_some_and(|d| d.resize) {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+        } else if body.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if body.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+        if body.hovered() || resizing || self.camera_drag.is_some() {
+            painter.rect_stroke(rect, 0.0, Stroke::new(1.5, PRIMARY_LIGHT), egui::StrokeKind::Inside);
+            painter.rect_filled(handle.shrink(2.0), 1.0, PRIMARY_LIGHT);
+        }
+        body.on_hover_text(tr!("Arrastra para mover la cámara; arrastra su esquina para cambiar el tamaño", "Drag to move the camera; drag its corner to resize it"));
     }
 
     /// Drag on the preview to choose the region to record; Escape cancels.
@@ -1227,8 +1293,9 @@ impl App {
                         ui.close();
                     }
                     if let Some(device) = camera_choice {
-                        let (corner, size) = self.config.camera.as_ref().map_or((Corner::BottomRight, CameraSize::Medium), |c| (c.corner, c.size));
-                        self.config.camera = Some(CameraConfig { device: device.id, name: device.name, corner, size });
+                        // Another camera goes where the last one was.
+                        let place = self.config.camera.as_ref().map_or_else(Place::default, |c| c.place);
+                        self.config.camera = Some(CameraConfig { device: device.id, name: device.name, place });
                         self.restart_camera(&ctx);
                         ui.close();
                     }
@@ -1255,16 +1322,7 @@ impl App {
                             }
                         }
                         let mut remove_camera = false;
-                        if let Some(cam) = &mut self.config.camera {
-                            ui.separator();
-                            ui.label(RichText::new(tr!("Cámara", "Camera")).strong());
-                            for corner in Corner::ALL {
-                                ui.radio_value(&mut cam.corner, corner, corner.label());
-                            }
-                            ui.separator();
-                            for size in CameraSize::ALL {
-                                ui.radio_value(&mut cam.size, size, size.label());
-                            }
+                        if self.config.camera.is_some() {
                             ui.separator();
                             remove_camera = ui.button(tr!("Quitar cámara", "Remove Camera")).clicked();
                         }
@@ -1968,8 +2026,8 @@ fn outline_region(painter: &egui::Painter, canvas: Rect, inner: Rect) {
 }
 
 /// Draws the webcam onto an RGBA screenshot where the recording would show it.
-fn paste_camera(rgba: &mut [u8], width: u32, height: u32, frame: &CameraFrame, corner: Corner, size: CameraSize) {
-    let (x, y, w, h) = camera::overlay_rect((width, height), (frame.width, frame.height), corner, size);
+fn paste_camera(rgba: &mut [u8], width: u32, height: u32, frame: &CameraFrame, place: Place) {
+    let (x, y, w, h) = camera::overlay_rect((width, height), (frame.width, frame.height), place);
     let scaled = camera::resize(&frame.bgra, (frame.width, frame.height), (w, h));
     // The overlay is at least 2×2: on a picture 1 pixel wide or high it is cut to the picture.
     let (cols, rows) = (w.min(width.saturating_sub(x)) as usize, h.min(height.saturating_sub(y)) as usize);
@@ -2370,6 +2428,7 @@ mod tests {
             texture_seq: None,
             picking_region: false,
             region_drag: None,
+            camera_drag: None,
             status: None,
             settings: None,
             cpu: CpuMeter { last: None, percent: 0.0 },
@@ -2473,6 +2532,20 @@ mod tests {
     }
 
     #[test]
+    fn dragging_the_webcam_moves_or_resizes_it() {
+        let area = (1920, 1080);
+        let from = camera::overlay_rect(area, (640, 480), Place::default());
+        // Moved 600 pixels left and 300 up, the size kept.
+        let drag = CameraDrag { from, resize: false, moved: egui::Vec2::ZERO };
+        let moved = camera::overlay_rect(area, (640, 480), drag.place(area, egui::vec2(-600.0, -300.0)));
+        assert_eq!((moved.0, moved.1, moved.2, moved.3), (from.0 - 600, from.1 - 300, from.2, from.3));
+        // By its corner, 192 pixels wider: the top left stays, the aspect too.
+        let drag = CameraDrag { from: (100, 100, 576, 432), resize: true, moved: egui::Vec2::ZERO };
+        let resized = camera::overlay_rect(area, (640, 480), drag.place(area, egui::vec2(192.0, 144.0)));
+        assert_eq!(resized, (100, 100, 768, 576));
+    }
+
+    #[test]
     fn hotkeys_stay_registered_while_settings_are_locked() {
         // Settings open while recording: everything there is locked, and Stop and Pause must
         // still work from a game.
@@ -2494,7 +2567,7 @@ mod tests {
         let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
         let ctx = egui::Context::default();
         let mut app = test_app();
-        app.config.camera = Some(CameraConfig { device: "cam".into(), name: "Cam".into(), corner: Corner::BottomRight, size: CameraSize::Small });
+        app.config.camera = Some(CameraConfig { device: "cam".into(), name: "Cam".into(), place: Place { x: 1.0, y: 1.0, width: 0.2 } });
         app.camera = Some(Camera::start_with(|_, _| Err("unplugged".into()), true, None));
         let start = Instant::now();
         while !app.camera.as_ref().unwrap().shared.ended() && start.elapsed() < Duration::from_secs(1) {
@@ -2840,7 +2913,7 @@ mod tests {
         // A window 1 pixel wide or high crashed Obs Lite on the screenshot.
         for (width, height) in [(1, 1), (1, 500), (500, 1), (2, 2), (640, 360)] {
             let mut rgba = vec![0; width as usize * height as usize * 4];
-            paste_camera(&mut rgba, width, height, &frame, Corner::BottomRight, CameraSize::Medium);
+            paste_camera(&mut rgba, width, height, &frame, Place::default());
             assert!(rgba.chunks(4).any(|p| p == [30, 20, 10, 255]), "{width}x{height}: no webcam");
         }
     }

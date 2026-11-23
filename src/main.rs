@@ -89,7 +89,7 @@ fn selftest(args: &[String]) -> Result<(), String> {
                 resolution,
                 audio: true,
                 region,
-                overlay: webcam.then_some((camera::Corner::BottomRight, camera::CameraSize::Medium)),
+                overlay: webcam.then_some(camera::Place::default()),
             }),
         },
         None,
