@@ -1,7 +1,7 @@
 //! Capture sources, recording settings and picture helpers shared by every platform. The
 //! capture session itself is platform code (`platform::capture`).
 
-use crate::camera::{CameraSize, Corner};
+use crate::camera::Place;
 use crate::config::{Quality, Region, Resolution};
 use crate::i18n::tr;
 
@@ -64,7 +64,7 @@ pub struct RecordConfig {
     pub resolution: Resolution,
     pub audio: bool,
     pub region: Option<Region>,
-    pub overlay: Option<(Corner, CameraSize)>,
+    pub overlay: Option<Place>,
 }
 
 pub struct PreviewFrame {

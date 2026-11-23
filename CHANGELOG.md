@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The webcam can go anywhere on the recording, at any size: drag it on the preview to move it, or
+  its corner to resize it. Where it is and its size are kept for the next start. This replaces
+  the four corners and three sizes; a webcam already in a corner stays where it was.
 - Each release file has a build provenance attestation from GitHub, which shows that it was built
   by this repository's *Release build* workflow and from which commit
   (`gh attestation verify <file> -R 25Dark25/ObsLite`).

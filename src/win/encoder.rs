@@ -27,7 +27,7 @@ use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::core::{BOOL, Interface};
 use windows_capture::frame::Frame;
 
-use crate::camera::{self, CameraSize, Corner, PixelRect};
+use crate::camera::{self, PixelRect, Place};
 use crate::capture::{Placement, placement};
 use crate::i18n::tr;
 use crate::media::{self, Clock, Muxer, Packet, TICKS_PER_SECOND};
@@ -50,7 +50,7 @@ pub struct EncoderSettings {
     pub bitrate: u32,
     pub audio: bool,
     /// Where the webcam goes, if there is one.
-    pub overlay: Option<(Corner, CameraSize)>,
+    pub overlay: Option<Place>,
 }
 
 /// A scaler and the frame size it was made for; no scaler if the GPU cannot scale.
@@ -148,7 +148,7 @@ pub struct Encoder {
     threads: Vec<JoinHandle<()>>,
     input: (u32, u32),
     device: Com<ID3D11Device>,
-    overlay: Option<(Corner, CameraSize)>,
+    overlay: Option<Place>,
     /// The newest webcam picture, scaled, and where it goes: (x, y, width, height).
     overlay_texture: Mutex<Option<(Com<ID3D11Texture2D>, PixelRect)>>,
     /// For frames of another size than the recording (a resized window).
@@ -306,7 +306,7 @@ impl Encoder {
 
     /// Where a `camera`-sized webcam picture goes on the recording, if there is an overlay.
     pub fn overlay_rect(&self, camera: (u32, u32)) -> Option<PixelRect> {
-        self.overlay.map(|(corner, size)| camera::overlay_rect(self.input, camera, corner, size))
+        self.overlay.map(|place| camera::overlay_rect(self.input, camera, place))
     }
 
     /// The camera stopped: its last picture is no longer drawn on the screen's frames (it goes

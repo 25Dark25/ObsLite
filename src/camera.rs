@@ -18,73 +18,98 @@ pub struct CameraDevice {
     pub name: String,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub enum Corner {
-    TopLeft,
-    TopRight,
-    BottomLeft,
-    BottomRight,
+/// Where the webcam overlay goes on the recorded picture, and how big it is, independent of the
+/// picture's size. `x` and `y` place it within the room left around it (0 at the left or top
+/// edge, 1 at the right or bottom one), so it never leaves the picture; `width` is its share of
+/// the picture's width (its height follows the camera's aspect).
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+pub struct Place {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
 }
 
-impl Corner {
-    pub const ALL: [Self; 4] = [Self::TopLeft, Self::TopRight, Self::BottomLeft, Self::BottomRight];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::TopLeft => tr!("Arriba a la izquierda", "Top left"),
-            Self::TopRight => tr!("Arriba a la derecha", "Top right"),
-            Self::BottomLeft => tr!("Abajo a la izquierda", "Bottom left"),
-            Self::BottomRight => tr!("Abajo a la derecha", "Bottom right"),
-        }
+impl Default for Place {
+    /// Bottom right, 30 % of the width.
+    fn default() -> Self {
+        Self { x: 1.0, y: 1.0, width: 0.3 }
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub enum CameraSize {
-    Small,
-    Medium,
-    Large,
-}
+impl Place {
+    /// Smaller than this, the overlay is hard to see and to grab again.
+    const MIN_WIDTH: f32 = 0.05;
 
-impl CameraSize {
-    pub const ALL: [Self; 3] = [Self::Small, Self::Medium, Self::Large];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Small => tr!("Pequeña", "Small"),
-            Self::Medium => tr!("Mediana", "Medium"),
-            Self::Large => tr!("Grande", "Large"),
-        }
+    /// Within 0–1 (a hand-edited file may say anything).
+    fn within(self) -> Self {
+        let unit = |v: f32, default: f32| if v.is_finite() { v.clamp(0.0, 1.0) } else { default };
+        let width = if self.width.is_finite() { self.width.clamp(Self::MIN_WIDTH, 1.0) } else { 0.3 };
+        Self { x: unit(self.x, 1.0), y: unit(self.y, 1.0), width }
     }
 
-    /// Overlay width as a share of the picture width.
-    fn fraction(self) -> f32 {
-        match self {
-            Self::Small => 0.2,
-            Self::Medium => 0.3,
-            Self::Large => 0.4,
-        }
+    /// The place of an overlay drawn at `left`, `top`, `width` × `height` pixels on `picture`
+    /// (what dragging it there means).
+    pub fn at(picture: (u32, u32), (left, top): (f32, f32), (width, height): (f32, f32)) -> Self {
+        let margin = margin(picture) as f32;
+        let share = |offset: f32, room: f32| if room > 0.0 { (offset - margin) / room } else { 0.0 };
+        let (room_x, room_y) = (picture.0 as f32 - width - 2.0 * margin, picture.1 as f32 - height - 2.0 * margin);
+        Self { x: share(left, room_x), y: share(top, room_y), width: width / picture.0.max(1) as f32 }.within()
     }
 }
 
 /// The webcam source: which device, and where its overlay goes.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "SavedCamera")]
 pub struct CameraConfig {
     /// Platform device id (on Windows, the Media Foundation symbolic link).
     pub device: String,
     pub name: String,
-    pub corner: Corner,
-    pub size: CameraSize,
+    pub place: Place,
+}
+
+/// A camera as saved, by older versions too: they had one of four corners and three sizes.
+#[derive(Deserialize)]
+struct SavedCamera {
+    device: String,
+    name: String,
+    place: Option<Place>,
+    corner: Option<String>,
+    size: Option<String>,
+}
+
+impl From<SavedCamera> for CameraConfig {
+    fn from(saved: SavedCamera) -> Self {
+        let place = saved.place.unwrap_or_else(|| {
+            let (x, y) = match saved.corner.as_deref() {
+                Some("TopLeft") => (0.0, 0.0),
+                Some("TopRight") => (1.0, 0.0),
+                Some("BottomLeft") => (0.0, 1.0),
+                _ => (1.0, 1.0),
+            };
+            let width = match saved.size.as_deref() {
+                Some("Small") => 0.2,
+                Some("Large") => 0.4,
+                _ => 0.3,
+            };
+            Place { x, y, width }
+        });
+        Self { device: saved.device, name: saved.name, place: place.within() }
+    }
 }
 
 /// `(x, y, width, height)` in pixels.
 pub type PixelRect = (u32, u32, u32, u32);
 
-/// Overlay rectangle `(x, y, width, height)` for a `camera`-sized image on a `picture`.
-/// Keeps the camera's aspect ratio and even sides, with a small margin from the edges.
-pub fn overlay_rect(picture: (u32, u32), camera: (u32, u32), corner: Corner, size: CameraSize) -> PixelRect {
-    let margin = (picture.0.min(picture.1) as f32 * 0.02) as u32;
-    let mut w = (picture.0 as f32 * size.fraction()) as u32;
+/// Space kept between the overlay and the picture's edges.
+fn margin(picture: (u32, u32)) -> u32 {
+    (picture.0.min(picture.1) as f32 * 0.02) as u32
+}
+
+/// Overlay rectangle `(x, y, width, height)` for a `camera`-sized image at `place` on a `picture`.
+/// Keeps the camera's aspect ratio and even sides, inside the picture with a small margin.
+pub fn overlay_rect(picture: (u32, u32), camera: (u32, u32), place: Place) -> PixelRect {
+    let margin = margin(picture);
+    let mut w = ((picture.0 as f32 * place.width) as u32).min(picture.0.saturating_sub(2 * margin));
     let mut h = (w as u64 * camera.1 as u64 / camera.0.max(1) as u64) as u32;
     let max_h = picture.1.saturating_sub(2 * margin);
     if h > max_h {
@@ -92,14 +117,9 @@ pub fn overlay_rect(picture: (u32, u32), camera: (u32, u32), corner: Corner, siz
         h = max_h;
     }
     let (w, h) = ((w & !1).max(2), (h & !1).max(2));
-    let right = picture.0.saturating_sub(w + margin);
-    let bottom = picture.1.saturating_sub(h + margin);
-    let (x, y) = match corner {
-        Corner::TopLeft => (margin, margin),
-        Corner::TopRight => (right, margin),
-        Corner::BottomLeft => (margin, bottom),
-        Corner::BottomRight => (right, bottom),
-    };
+    let room = |size: u32, side: u32, at: f32| (size.saturating_sub(side + 2 * margin) as f32 * at) as u32;
+    let x = (margin + room(picture.0, w, place.x)).min(picture.0.saturating_sub(w));
+    let y = (margin + room(picture.1, h, place.y)).min(picture.1.saturating_sub(h));
     (x, y, w, h)
 }
 
@@ -393,12 +413,44 @@ mod tests {
     }
 
     #[test]
+    fn the_webcam_goes_anywhere_and_stays_inside_the_picture() {
+        let pic = (1920, 1080);
+        // In the middle, half the width.
+        assert_eq!(overlay_rect(pic, (640, 480), Place { x: 0.5, y: 0.5, width: 0.5 }), (480, 180, 960, 720));
+        // As large as it goes: the height limits it, and it stays inside.
+        let (x, y, w, h) = overlay_rect(pic, (640, 480), Place { x: 1.0, y: 1.0, width: 1.0 });
+        assert!(x + w <= 1920 && y + h <= 1080 && h == 1080 - 2 * 21, "{x},{y} {w}×{h}");
+        // Where it is drawn gives back where it is.
+        for place in [Place::default(), Place { x: 0.25, y: 0.75, width: 0.2 }, Place { x: 0.0, y: 0.0, width: 0.6 }] {
+            let (x, y, w, h) = overlay_rect(pic, (1280, 720), place);
+            let back = Place::at(pic, (x as f32, y as f32), (w as f32, h as f32));
+            assert!((back.x - place.x).abs() < 0.01 && (back.y - place.y).abs() < 0.01, "{place:?} → {back:?}");
+            assert!((back.width - place.width).abs() < 0.01, "{place:?} → {back:?}");
+        }
+        // Dragged past an edge: stopped there.
+        assert_eq!(Place::at(pic, (5000.0, -300.0), (384.0, 216.0)), Place { x: 1.0, y: 0.0, width: 0.2 });
+    }
+
+    #[test]
+    fn a_camera_saved_in_a_corner_stays_there() {
+        // Settings from before the webcam could go anywhere: four corners, three sizes.
+        let old: CameraConfig = serde_json::from_str(r#"{"device": "d", "name": "Cam", "corner": "TopRight", "size": "Large"}"#).unwrap();
+        assert_eq!(old.place, Place { x: 1.0, y: 0.0, width: 0.4 });
+        let saved = serde_json::to_string(&old).unwrap();
+        assert!(!saved.contains("corner"), "{saved}");
+        assert_eq!(serde_json::from_str::<CameraConfig>(&saved).unwrap(), old);
+        // A hand edit out of range is brought back.
+        let wild: CameraConfig = serde_json::from_str(r#"{"device": "d", "name": "Cam", "place": {"x": 7, "y": -1, "width": 0}}"#).unwrap();
+        assert_eq!(wild.place, Place { x: 1.0, y: 0.0, width: 0.05 });
+    }
+
+    #[test]
     fn overlay_sits_in_the_corner_with_the_camera_aspect() {
         let pic = (1920, 1080);
-        assert_eq!(overlay_rect(pic, (640, 480), Corner::BottomRight, CameraSize::Medium), (1323, 627, 576, 432));
-        assert_eq!(overlay_rect(pic, (1280, 720), Corner::TopLeft, CameraSize::Small), (21, 21, 384, 216));
+        assert_eq!(overlay_rect(pic, (640, 480), Place::default()), (1323, 627, 576, 432));
+        assert_eq!(overlay_rect(pic, (1280, 720), Place { x: 0.0, y: 0.0, width: 0.2 }), (21, 21, 384, 216));
         // A tall picture: the overlay is limited by the height.
-        let (_, _, w, h) = overlay_rect((400, 200), (640, 480), Corner::TopLeft, CameraSize::Large);
+        let (_, _, w, h) = overlay_rect((400, 200), (640, 480), Place { x: 0.0, y: 0.0, width: 0.4 });
         assert!(h <= 200 - 2 * 4 && w <= 160, "{w}×{h}");
     }
 
