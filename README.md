@@ -104,7 +104,8 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording
   one application, with its own mixer channel) or *Video Capture Device* (a webcam shown on the
   recording; when not recording, drag it on the preview to move it, or its corner to resize it,
   and it stays there).
-  **Properties**: capture the cursor, *Select Region…* to record only part of the source.
+  **Right-click a source** for its options: capture the cursor and *Select Region…* to record only
+  part of a display or window; remove the application audio or the webcam.
 - **Audio Mixer**: desktop audio and *Mic/Aux*, each with a meter, volume slider and mute button
   (mute also works while recording). If the channels together go over the maximum, a limiter
   lowers the volume at those moments instead of letting it distort, and the mixer says so.

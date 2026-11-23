@@ -62,7 +62,6 @@ pub const TEXT: &[(&str, &str)] = &[
     ("Video Capture Device", "Устройство захвата видео"),
     ("No camera found", "Камера не найдена"),
     ("Add source", "Добавить источник"),
-    ("Properties", "Свойства"),
     ("Capture Cursor", "Захватывать курсор"),
     ("Select Region…", "Выбрать область…"),
     ("Record Whole Source", "Записывать весь источник"),
@@ -200,4 +199,5 @@ pub const TEXT: &[(&str, &str)] = &[
     ("the region no longer fits the source; select it again", "область больше не помещается в источник; выберите её заново"),
     ("encoding did not finish in time; the end may be missing", "кодирование не завершилось вовремя; конец может отсутствовать"),
     ("Drag to move the camera; drag its corner to resize it", "Перетащите камеру, чтобы переместить её; перетащите её угол, чтобы изменить размер"),
+    ("Right-click for its options", "Щёлкните правой кнопкой, чтобы открыть параметры"),
 ];

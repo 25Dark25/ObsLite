@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by this repository's *Release build* workflow and from which commit
   (`gh attestation verify <file> -R 25Dark25/ObsLite`).
 
+### Changed
+
+- A source's options are on a right click on it in *Sources*, instead of the *Properties* button:
+  the cursor and the region for a display or window, *Remove* for the application audio and the
+  webcam.
+
 ### Fixed
 
 - Repairing a recording after a crash or a power cut is safer. Zeros left at the end of the file

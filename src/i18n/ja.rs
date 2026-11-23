@@ -59,7 +59,6 @@ pub const TEXT: &[(&str, &str)] = &[
     ("Video Capture Device", "映像キャプチャデバイス"),
     ("No camera found", "カメラが見つかりません"),
     ("Add source", "ソースを追加"),
-    ("Properties", "プロパティ"),
     ("Capture Cursor", "カーソルをキャプチャ"),
     ("Select Region…", "範囲を選択…"),
     ("Record Whole Source", "ソース全体を録画"),
@@ -197,4 +196,5 @@ pub const TEXT: &[(&str, &str)] = &[
     ("the region no longer fits the source; select it again", "範囲がソースに収まらなくなりました。もう一度選択してください"),
     ("encoding did not finish in time; the end may be missing", "エンコードが時間内に終わりませんでした。最後の部分が欠けている可能性があります"),
     ("Drag to move the camera; drag its corner to resize it", "カメラをドラッグして移動、角をドラッグしてサイズを変更"),
+    ("Right-click for its options", "右クリックでオプションを表示"),
 ];
