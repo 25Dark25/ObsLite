@@ -68,6 +68,16 @@ enum RecState {
 /// A recording in progress (the session may also be running for the replay buffer).
 struct Recording;
 
+/// Updating this copy with the new release's installer (Windows, installed copies only).
+#[cfg_attr(not(windows), allow(dead_code))]
+enum Updating {
+    No,
+    /// The installer is being downloaded and checked; then Obs Lite closes to run it.
+    Downloading(Receiver<Result<PathBuf, String>>),
+    /// Why it could not be done; the dialog then links to the website instead.
+    Failed(String),
+}
+
 struct Status {
     text: String,
     file: Option<PathBuf>,
@@ -175,6 +185,7 @@ pub struct App {
     update_check: Option<Receiver<Option<Release>>>,
     /// The dialog telling of `update` is open.
     update_dialog: bool,
+    updating: Updating,
     /// Files being written in the background (a stopped recording, a replay).
     jobs: Vec<JoinHandle<Status>>,
     /// Output files named this run, which may not exist yet.
@@ -243,9 +254,13 @@ impl App {
             update: None,
             update_check: None,
             update_dialog: false,
+            updating: Updating::No,
             jobs: Vec::new(),
             named: HashSet::new(),
         };
+        // An installer downloaded by the last update has been run by now.
+        #[cfg(windows)]
+        let _ = std::fs::remove_file(update::installer_path());
         // The Flatpak has no network access, for privacy; Linux users follow the Releases page.
         if cfg!(windows) && app.config.check_updates {
             let (tx, rx) = mpsc::channel();
@@ -816,10 +831,35 @@ impl App {
             self.set_status(tr!("Atajos globales no disponibles: {}", "Global hotkeys unavailable: {}", e), None, true);
         }
         if let Some(rx) = &self.update_check
-            && let Ok(release) = rx.try_recv()
+            && let Ok(mut release) = rx.try_recv()
         {
+            // Only a copy where the installer put it can be updated by the installer.
+            if let Some(release) = &mut release
+                && !update::installed()
+            {
+                release.installer = None;
+            }
             self.update_dialog = release.as_ref().is_some_and(|r| self.config.skipped_version.as_ref() != Some(&r.version));
             (self.update, self.update_check) = (release, None);
+        }
+        if let Updating::Downloading(rx) = &self.updating
+            && let Ok(result) = rx.try_recv()
+        {
+            self.updating = match result {
+                // Started from a hotkey or the tray while downloading: closing would end it.
+                Ok(_) if self.is_session_active() => Updating::Failed(
+                    tr!("Detén la grabación y el búfer de repetición primero.", "Stop the recording and the replay buffer first.").to_owned(),
+                ),
+                Ok(msi) => {
+                    #[cfg(windows)]
+                    update::install_on_exit(msi);
+                    #[cfg(not(windows))]
+                    let _ = msi;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    Updating::No
+                }
+                Err(e) => Updating::Failed(tr!("No se pudo descargar la actualización: {}", "Could not download the update: {}", e)),
+            };
         }
         let commands: Vec<TrayCommand> = self.tray_commands.lock().unwrap().drain(..).collect();
         for command in commands {
@@ -1516,8 +1556,8 @@ impl App {
                 if let Some(release) = &self.update {
                     let text = tr!("Nueva versión {} disponible", "New version {} available", release.version);
                     let link = ui.add(egui::Label::new(RichText::new(text).small().color(PRIMARY_LIGHT).underline()).sense(Sense::click()));
-                    if link.on_hover_text(update::download_page()).clicked() {
-                        open_url(update::download_page());
+                    if link.clicked() {
+                        self.update_dialog = true;
                     }
                 }
             });
@@ -1644,7 +1684,12 @@ impl App {
     /// Waits for the settings dialog to close: OK there would save its older copy of the config.
     fn update_dialog(&mut self, ctx: &egui::Context) {
         let Some(release) = self.update.as_ref().filter(|_| self.update_dialog && self.settings.is_none()) else { return };
+        // An installed copy can update itself; a portable one, or after a failure, gets the website.
+        let installer = release.installer.as_ref();
+        let downloading = matches!(self.updating, Updating::Downloading(_));
+        let busy = self.is_session_active();
         let mut skip = false;
+        let mut start = None;
         let response = egui::Modal::new(egui::Id::unique("update"))
             .frame(egui::Frame::new().fill(GREY7).stroke(Stroke::new(1.0, GREY4)).corner_radius(6).inner_margin(16))
             .show(ctx, |ui| {
@@ -1656,20 +1701,54 @@ impl App {
                     release.version,
                     env!("CARGO_PKG_VERSION")
                 ));
+                match &self.updating {
+                    Updating::Failed(e) => {
+                        ui.add_space(6.0);
+                        ui.label(RichText::new(e).color(RED));
+                    }
+                    _ if installer.is_some() => {
+                        ui.add_space(6.0);
+                        ui.label(RichText::new(tr!(
+                            "Al actualizar, Obs Lite se cierra, instala la versión nueva y se vuelve a abrir.",
+                            "To update, Obs Lite closes, installs the new version and opens again."
+                        )).color(TEXT_MUTED));
+                    }
+                    _ => {}
+                }
                 ui.add_space(14.0);
                 // The buttons, the widest row, set the dialog's width (it differs by language).
                 ui.horizontal(|ui| {
-                    if ui.add(Button::new(tr!("No recordar esta versión", "Don't remind me of this version")).min_size(vec2(0.0, 26.0))).clicked() {
-                        skip = true;
-                        ui.close();
-                    }
-                    if ui.add(Button::new(tr!("Cerrar", "Close")).min_size(vec2(90.0, 26.0))).clicked() {
-                        ui.close();
-                    }
-                    let download = Button::new(RichText::new(tr!("Descargar", "Download")).color(Color32::WHITE)).fill(PRIMARY);
-                    if ui.add(download.min_size(vec2(90.0, 26.0))).on_hover_text(update::download_page()).clicked() {
-                        open_url(update::download_page());
-                        ui.close();
+                    ui.add_enabled_ui(!downloading, |ui| {
+                        if ui.add(Button::new(tr!("No recordar esta versión", "Don't remind me of this version")).min_size(vec2(0.0, 26.0))).clicked() {
+                            skip = true;
+                            ui.close();
+                        }
+                        if ui.add(Button::new(tr!("Cerrar", "Close")).min_size(vec2(90.0, 26.0))).clicked() {
+                            ui.close();
+                        }
+                    });
+                    match installer.filter(|_| !matches!(self.updating, Updating::Failed(_))) {
+                        Some(installer) => {
+                            let text = if downloading { tr!("Descargando…", "Downloading…") } else { tr!("Actualizar ahora", "Update now") };
+                            let button = Button::new(RichText::new(text).color(Color32::WHITE)).fill(PRIMARY).min_size(vec2(90.0, 26.0));
+                            let mut response = ui.add_enabled(!downloading && !busy, button);
+                            if busy {
+                                response = response.on_disabled_hover_text(tr!(
+                                    "Detén la grabación y el búfer de repetición primero.",
+                                    "Stop the recording and the replay buffer first."
+                                ));
+                            }
+                            if response.clicked() {
+                                start = Some(installer.clone());
+                            }
+                        }
+                        None => {
+                            let download = Button::new(RichText::new(tr!("Descargar", "Download")).color(Color32::WHITE)).fill(PRIMARY);
+                            if ui.add(download.min_size(vec2(90.0, 26.0))).on_hover_text(update::download_page()).clicked() {
+                                open_url(update::download_page());
+                                ui.close();
+                            }
+                        }
                     }
                 });
             });
@@ -1677,7 +1756,20 @@ impl App {
             self.config.skipped_version = Some(release.version.clone());
             self.config.save();
         }
-        if response.should_close() {
+        #[cfg(windows)]
+        if let Some(installer) = start {
+            let (tx, rx) = mpsc::channel();
+            let ctx = ctx.clone();
+            thread::spawn(move || {
+                let _ = tx.send(update::download(&installer));
+                ctx.request_repaint();
+            });
+            self.updating = Updating::Downloading(rx);
+        }
+        #[cfg(not(windows))]
+        let _ = start;
+        // While downloading, Escape or a click outside does not close it: it closes Obs Lite.
+        if response.should_close() && !downloading {
             self.update_dialog = false;
         }
     }
@@ -2444,6 +2536,7 @@ mod tests {
             update: None,
             update_check: None,
             update_dialog: false,
+            updating: Updating::No,
             jobs: Vec::new(),
             named: HashSet::new(),
         }
@@ -2653,7 +2746,7 @@ mod tests {
     #[test]
     fn a_new_release_opens_the_dialog_unless_skipped() {
         let ctx = egui::Context::default();
-        let release = Release { version: "9.0.0".into() };
+        let release = Release { version: "9.0.0".into(), installer: None };
         for (skipped, dialog) in [(None, true), (Some("8.0.0"), true), (Some("9.0.0"), false)] {
             let mut app = test_app();
             app.config.skipped_version = skipped.map(str::to_owned);
@@ -2673,12 +2766,31 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_update_download_is_told() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        i18n::set(Language::English);
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        let (tx, rx) = mpsc::channel();
+        tx.send(Err("the file does not match its SHA-256".into())).unwrap();
+        app.updating = Updating::Downloading(rx);
+        app.poll(&ctx);
+        match &app.updating {
+            Updating::Failed(e) => assert_eq!(e, "Could not download the update: the file does not match its SHA-256"),
+            _ => panic!("not failed"),
+        }
+        i18n::set(Language::Spanish);
+    }
+
+    #[test]
     fn update_dialog_buttons_stay_inside_it_in_every_language() {
         let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
-        for language in Language::ALL {
+        let installer = crate::update::Installer { url: "https://example.com".into(), sha256: String::new() };
+        for (language, installer) in Language::ALL.into_iter().flat_map(|l| [(l, None), (l, Some(installer.clone()))]) {
             i18n::set(language);
             let mut app = test_app();
-            app.update = Some(Release { version: "10.10.10".into() });
+            let can_update = installer.is_some();
+            app.update = Some(Release { version: "10.10.10".into(), installer });
             app.update_dialog = true;
             let ctx = egui::Context::default();
             let input = || egui::RawInput {
@@ -2716,6 +2828,9 @@ mod tests {
                 .map(|r| r.min.x)
                 .fold(f32::INFINITY, f32::min);
             assert!(left >= title_pos.x - 0.5, "{language:?}: something starts at x = {left}, left of the title at {}", title_pos.x);
+            let update_now = tr!("Actualizar ahora", "Update now");
+            let drawn = flat.iter().any(|s| matches!(s, egui::Shape::Text(t) if t.galley.text() == update_now));
+            assert_eq!(drawn, can_update, "{language:?}: Update now is offered only with an installer");
         }
         i18n::set(Language::Spanish);
     }

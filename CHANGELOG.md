@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *Update now* in the new-version notice, for a copy installed with the installer: Obs Lite
+  downloads the new installer, checks it against its SHA-256 published by GitHub, closes,
+  installs it with only a progress bar and opens again. Not offered while recording or while the
+  replay buffer runs, nor to the portable version, which gets the link to the website. The
+  status-bar link now opens the notice again instead of the website.
+
 ### Changed
 
 - The new-version notice links to the [website](https://25dark25.github.io/ObsLite/) instead of
