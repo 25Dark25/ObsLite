@@ -49,6 +49,11 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.9.0" date="2026-11-23">
+      <description>
+        <p>The webcam can be placed anywhere on the recording and at any size, by dragging it on the preview, and each source's options are on a right click. Repairing a recording after a crash is safer, a region that no longer fits is refused instead of recording the whole source, the window no longer freezes while the screen-sharing dialog is open, and hotkeys keep working with Settings open during a recording.</p>
+      </description>
+    </release>
     <release version="0.8.0" date="2026-11-22">
       <description>
         <p>Starting a recording no longer freezes the window, and the webcam works with older PipeWire. A recording whose finishing was cut short is repaired at the next start, an unreadable setting no longer resets the others, and the app is called Obs Lite everywhere.</p>
