@@ -49,6 +49,11 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.9.1" date="2026-11-23">
+      <description>
+        <p>On Windows, the new-version notice links to the website, which offers the same kind of file as the installed or portable copy, and a copy installed with the installer can update itself with Update now: the new installer is downloaded, checked against its SHA-256 and installed, and Obs Lite opens again. Nothing changes on Linux.</p>
+      </description>
+    </release>
     <release version="0.9.0" date="2026-11-23">
       <description>
         <p>The webcam can be placed anywhere on the recording and at any size, by dragging it on the preview, and each source's options are on a right click. Repairing a recording after a crash is safer, a region that no longer fits is refused instead of recording the whole source, the window no longer freezes while the screen-sharing dialog is open, and hotkeys keep working with Settings open during a recording.</p>
