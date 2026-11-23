@@ -111,12 +111,18 @@ cargo test --locked
 | `tray::idle_icon_is_grey_with_the_same_alpha` | The idle tray icon. |
 | `update::versions_compare_numerically` | Only a strictly newer plain version counts as an update. |
 | `update::release_is_read_from_the_github_response` | The version is read from the tag in GitHub's response; an error response gives nothing. |
+| `update::the_installer_and_its_sha256_are_read_from_the_github_response` | The release's `.msi`, its download link and its SHA-256 are read from GitHub's response. |
+| `update::an_installer_is_offered_only_from_this_repository_with_a_valid_sha256` | No installer is offered for another version's file, a link outside this repository's release downloads (another site, plain http), or a missing, non-SHA-256, short or uppercase digest. |
+| `update::the_latest_installer_is_downloaded_and_checked` | Windows, ignored by default (needs the network; `cargo test the_latest_installer -- --ignored`): the latest release's installer is downloaded and matches its SHA-256; with a wrong SHA-256 it is refused and no file is left to run. |
 | `update::installed_copies_are_told_apart_from_portable_ones` | A copy in `%LOCALAPPDATA%\Programs\obs-lite` (in any letter case) counts as installed, so the update link offers the installer; anywhere else, a subfolder there included, counts as portable. |
 | `win::sys::explorer_is_started_from_the_windows_folder_with_the_path_in_quotes` | Windows only: Explorer is started by its full path in the Windows folder, and paths are given to it in quotes, so a comma in a folder name does not cut it. |
+| `win::sys::sha256_matches_the_standard_test_vector` | Windows only: SHA-256 from Windows' own cryptography gives the standard result for "abc". |
+| `win::sys::the_installer_is_not_run_from_a_path_cmd_would_change` | Windows only: a path with `%` or a quote is refused rather than given to cmd, and `cmd.exe` and `msiexec.exe` are taken from the system folder. |
 | `app::saved_message_survives_a_source_that_is_gone` | When the recorded window is closed, the "saved" message and file link stay, and the source is deselected. |
 | `app::desktop_audio_leaves_out_the_application_captured_on_its_own` | With an application captured on its own, desktop audio leaves it out; not with no application, nor with a chosen output device. |
 | `app::a_new_release_opens_the_dialog_unless_skipped` | A newer release opens the update dialog unless the user chose not to be reminded of that version; the status-bar link shows either way. |
-| `app::update_dialog_buttons_stay_inside_it_in_every_language` | In every language, nothing in the update dialog starts left of its title: the buttons fit. |
+| `app::update_dialog_buttons_stay_inside_it_in_every_language` | In every language, with and without *Update now* and after a long download error, nothing in the update dialog starts left of its title or ends beyond its maximum width (440 points): the buttons fit and long texts wrap; *Update now* is drawn only when the release has an installer for this copy, and not after a failure. |
+| `app::a_failed_update_download_is_told` | A failed download or a SHA-256 mismatch is shown in the dialog, with the reason. |
 | `app::hotkeys_stay_registered_while_settings_are_locked` | With Settings open the global hotkeys are let go, except while a recording or the replay buffer runs (every setting is locked then), so Stop and Pause still work. |
 | `capture::a_region_that_no_longer_fits_is_refused_not_dropped` | A region that no longer fits the source (a window made smaller) is an error instead of the whole source being recorded. |
 

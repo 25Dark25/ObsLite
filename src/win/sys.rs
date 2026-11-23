@@ -151,21 +151,71 @@ pub fn init_com() {
     let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
 }
 
+/// An HTTP client for GitHub, for a thread of its own.
+fn http_client() -> windows::core::Result<windows::Web::Http::HttpClient> {
+    use windows::core::HSTRING;
+    init_com();
+    let client = windows::Web::Http::HttpClient::new()?;
+    // GitHub's API rejects requests without a User-Agent.
+    let agent = concat!("obs-lite/", env!("CARGO_PKG_VERSION"));
+    client.DefaultRequestHeaders()?.TryAppendWithoutValidation(&HSTRING::from("User-Agent"), &HSTRING::from(agent))?;
+    Ok(client)
+}
+
+fn uri(url: &str) -> windows::core::Result<windows::Foundation::Uri> {
+    windows::Foundation::Uri::CreateUri(&windows::core::HSTRING::from(url))
+}
+
 /// GET `url` and return the body as text.
 pub fn http_get(url: &str) -> Result<String, String> {
-    use windows::Foundation::Uri;
-    use windows::Web::Http::HttpClient;
-    use windows::core::HSTRING;
-    // Called on a thread of its own.
-    init_com();
-    let get = || -> windows::core::Result<String> {
-        let client = HttpClient::new()?;
-        // GitHub's API rejects requests without a User-Agent.
-        let agent = concat!("obs-lite/", env!("CARGO_PKG_VERSION"));
-        client.DefaultRequestHeaders()?.TryAppendWithoutValidation(&HSTRING::from("User-Agent"), &HSTRING::from(agent))?;
-        Ok(client.GetStringAsync(&Uri::CreateUri(&HSTRING::from(url))?)?.join()?.to_string())
+    let get = || -> windows::core::Result<String> { Ok(http_client()?.GetStringAsync(&uri(url)?)?.join()?.to_string()) };
+    get().map_err(|e| e.to_string())
+}
+
+/// GET `url`, following redirects, and return the body.
+pub fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let get = || -> windows::core::Result<Vec<u8>> {
+        let buffer = http_client()?.GetBufferAsync(&uri(url)?)?.join()?;
+        let mut bytes = vec![0; buffer.Length()? as usize];
+        windows::Storage::Streams::DataReader::FromBuffer(&buffer)?.ReadBytes(&mut bytes)?;
+        Ok(bytes)
     };
     get().map_err(|e| e.to_string())
+}
+
+/// SHA-256 of `data`, from Windows' own cryptography.
+pub fn sha256(data: &[u8]) -> Result<[u8; 32], String> {
+    use windows::Win32::Security::Cryptography::{BCRYPT_SHA256_ALG_HANDLE, BCryptHash};
+    let mut hash = [0; 32];
+    unsafe { BCryptHash(BCRYPT_SHA256_ALG_HANDLE, None, data, &mut hash) }.ok().map_err(|e| e.to_string())?;
+    Ok(hash)
+}
+
+/// Starts the installer `msi` with no questions, only a progress bar, then `exe` again. Called as
+/// the very last thing before exiting: Windows Installer takes seconds to get to replacing files,
+/// so by then this process has ended. Each program is waited for with `start /wait`.
+pub fn install_and_restart(msi: &Path, exe: &Path) -> Result<(), String> {
+    // Inside the quotes cmd takes everything literally but % (environment variables).
+    if [msi, exe].iter().any(|p| p.as_os_str().to_string_lossy().contains(['"', '%'])) {
+        return Err("unexpected character in a path".into());
+    }
+    let system = system_dir().ok_or("no system folder")?;
+    let mut line = OsString::from("/d /c start \"\" /wait ");
+    line.push(quoted(&system.join("msiexec.exe")));
+    line.push(" /i ");
+    line.push(quoted(msi));
+    line.push(" /passive & start \"\" ");
+    line.push(quoted(exe));
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    Command::new(system.join("cmd.exe")).raw_arg(line).creation_flags(CREATE_NO_WINDOW).spawn().map(drop).map_err(|e| e.to_string())
+}
+
+/// System32, so that cmd and msiexec are never looked for in obs-lite's own folder first.
+fn system_dir() -> Option<PathBuf> {
+    use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
+    let mut dir = [0u16; 260];
+    let len = unsafe { GetSystemDirectoryW(Some(&mut dir)) } as usize;
+    dir.get(..len).filter(|d| !d.is_empty()).map(|d| PathBuf::from(OsString::from_wide(d)))
 }
 
 #[cfg(test)]
@@ -178,5 +228,20 @@ mod tests {
         assert!(program.is_absolute() && program.ends_with("explorer.exe") && program.exists(), "{program:?}");
         // Unquoted, Explorer took the part before the comma for the folder.
         assert_eq!(quoted(Path::new(r"D:\Videos, games\a.mp4")), OsString::from(r#""D:\Videos, games\a.mp4""#));
+    }
+
+    #[test]
+    fn sha256_matches_the_standard_test_vector() {
+        let hex: String = sha256(b"abc").unwrap().iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    }
+
+    #[test]
+    fn the_installer_is_not_run_from_a_path_cmd_would_change() {
+        let exe = Path::new(r"C:\Users\Ana\AppData\Local\Programs\obs-lite\obs-lite.exe");
+        assert!(install_and_restart(Path::new(r"C:\Temp\100%TEMP%\obs-lite-update.msi"), exe).is_err());
+        assert!(install_and_restart(Path::new(r#"C:\Temp\a"b.msi"#), exe).is_err());
+        let system = system_dir().unwrap();
+        assert!(system.join("msiexec.exe").exists() && system.join("cmd.exe").exists(), "{system:?}");
     }
 }

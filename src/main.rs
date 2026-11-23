@@ -53,7 +53,11 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "linux")]
     let viewport = viewport.with_app_id(platform::APP_ID);
     let options = eframe::NativeOptions { viewport, ..Default::default() };
-    eframe::run_native("obs-lite", options, Box::new(|cc| Ok(Box::new(app::App::new(cc)))))
+    let result = eframe::run_native("obs-lite", options, Box::new(|cc| Ok(Box::new(app::App::new(cc)))));
+    // After the window and everything in it are gone, the installer can replace this copy.
+    #[cfg(windows)]
+    update::run_pending_install();
+    result
 }
 
 /// Records the first monitor plus system audio without UI, using the same pipeline as the app.

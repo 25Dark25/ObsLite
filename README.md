@@ -166,9 +166,12 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording
 - **Update notice**: at start-up it asks GitHub for the latest release and, if there is a newer
   one, says so in a dialog (and in the status bar) with a link to the
   [website](https://25dark25.github.io/ObsLite/), which offers the same kind of file: the
-  installer if Obs Lite was installed with it, otherwise the portable zip. "Don't remind me of
-  this version" stops the dialog until the next release. Nothing is downloaded; Settings › General
-  turns the check off.
+  installer if Obs Lite was installed with it, otherwise the portable zip. A copy installed with
+  the installer also offers *Update now*: it downloads the new installer, checks it against its
+  SHA-256 published by GitHub, closes, installs it with only a progress bar and opens again (not
+  while recording or while the replay buffer runs), and *Web* next to it for the website. "Don't
+  remind me" stops the dialog until the next release; the status-bar link opens it again. Nothing is downloaded unless
+  asked; Settings › General turns the check off.
 - Sharp preview at 5 fps: frames are scaled down to the size the preview is drawn at, averaging
   every pixel, so text stays legible.
 
