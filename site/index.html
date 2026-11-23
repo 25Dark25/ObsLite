@@ -2,7 +2,7 @@
 <html lang="{{LANG}}">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+{{AUTO_LANG}}<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{a:title}}</title>
 <meta name="description" content="{{a:description}}">
 <link rel="canonical" href="{{CANONICAL}}">
@@ -722,10 +722,16 @@ footer .langs a[aria-current]{color:var(--text-2)}
   // Switching language keeps what the page was opened with (the update notice's ?file=zip).
   if (location.search) document.querySelectorAll("a[hreflang]").forEach(function (a) { a.href = a.getAttribute("href") + location.search; });
 
-  // Offers the page in the visitor's language when there is one; never redirects.
+  // A language picked by hand is remembered: the main page then opens in it, not the browser's.
+  document.addEventListener("click", function (e) {
+    var a = e.target.closest("a[hreflang]");
+    if (a) try { localStorage.setItem("obslite-lang", a.getAttribute("hreflang").toLowerCase()); } catch (err) {}
+  });
+
+  // On a page reached directly (a link, a search result), offers the visitor's language.
   var hints = {{LANG_HINTS}};
   try {
-    var dismissed = localStorage.getItem("obslite-lang-hint") === "off";
+    var dismissed = localStorage.getItem("obslite-lang-hint") === "off" || !!localStorage.getItem("obslite-lang");
     var wanted = (navigator.languages || [navigator.language || ""]).map(function (l) {
       l = l.toLowerCase();
       if (/^zh-(tw|hk|mo|hant)/.test(l)) return "zh-hant";
