@@ -56,7 +56,6 @@ pub const TEXT: &[(&str, &str)] = &[
     ("Video Capture Device", "視訊擷取裝置"),
     ("No camera found", "找不到攝影機"),
     ("Add source", "新增來源"),
-    ("Properties", "屬性"),
     ("Capture Cursor", "擷取游標"),
     ("Select Region…", "選擇範圍…"),
     ("Record Whole Source", "錄製整個來源"),
@@ -179,4 +178,5 @@ pub const TEXT: &[(&str, &str)] = &[
     ("the region no longer fits the source; select it again", "範圍已超出來源，請重新選擇"),
     ("encoding did not finish in time; the end may be missing", "編碼未能及時完成，結尾可能缺失"),
     ("Drag to move the camera; drag its corner to resize it", "拖曳攝影機以移動，拖曳其角落以調整大小"),
+    ("Right-click for its options", "按右鍵查看選項"),
 ];

@@ -100,6 +100,7 @@ cargo test --locked
 | `camera::the_webcam_goes_anywhere_and_stays_inside_the_picture` | The webcam overlay at any place and size stays inside the picture, and where it is drawn gives back its place. |
 | `camera::a_camera_saved_in_a_corner_stays_there` | Settings from before free placement (a corner and a size) give the same place; out-of-range values are brought back. |
 | `app::dragging_the_webcam_moves_or_resizes_it` | Dragging the webcam moves it by as much; dragging its corner resizes it from its top left, keeping its aspect. |
+| `app::a_source_is_changed_by_right_clicking_it` | Right-clicking a row in Sources opens that source's options and no other: the webcam's *Remove Camera* removes it; the display's menu has *Select Region…*. |
 | `camera::removing_a_camera_stuck_in_its_driver_does_not_freeze_the_window` | A camera whose thread waits for a picture that never comes is removed within the 2 s it is waited for, and nothing from it reaches a recording any more. |
 | `linux::camera::denied_access_says_how_to_allow_it` | Linux only: when the desktop gives no camera access, the error says to choose the camera again or allow it in the privacy settings, instead of "Portal request was cancelled". |
 | `linux::camera::row_padding_is_dropped` | Linux only: camera pictures with padded rows are packed, and short buffers are rejected. |
@@ -731,3 +732,11 @@ sending padded or offset frames, an encoder that does not drain, two quick hotke
 
 Not verified: dragging the webcam on the preview by hand, and a real camera (the self-test's
 webcam is a made-up picture).
+
+2026-11-23, each source's options on a right click, Windows 11 (same PC as release 0.8.0):
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 131 passed (two ignored) on Windows; clippy clean on stable. The new test fails when the rows do not take clicks |
+
+Not verified: by hand in the window.

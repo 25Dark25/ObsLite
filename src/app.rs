@@ -1299,12 +1299,32 @@ impl App {
                         self.restart_camera(&ctx);
                         ui.close();
                     }
-                    ui.menu_button(tr!("Propiedades", "Properties"), |ui| {
+                });
+            });
+            ui.add_space(2.0);
+            ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                let Some(source) = self.selected_source() else {
+                    ui.label(RichText::new(tr!("No hay ninguna fuente. Pulsa + para añadir una.", "No sources. Press + to add one.")).color(TEXT_MUTED));
+                    return;
+                };
+                let kind = match source.id {
+                    SourceId::Monitor(_) => tr!("Captura de pantalla", "Display Capture"),
+                    SourceId::Window(_) => tr!("Captura de ventana", "Window Capture"),
+                    #[cfg(target_os = "linux")]
+                    SourceId::Portal => tr!("Captura de pantalla o ventana", "Screen or Window Capture"),
+                };
+                // Before the label, which is often too long to show in full.
+                let region = self.config.region.map_or(String::new(), |r| format!(" ({} {}×{})", tr!("región", "region"), r.width, r.height));
+                let source_text = format!("{kind}{region}  ·  {}", source.label);
+                // Each source's options on a right click; none while recording, which locks them.
+                let row = list_row(ui, &source_text);
+                if !recording {
+                    row.context_menu(|ui| {
                         if ui.checkbox(&mut self.config.cursor, tr!("Capturar el cursor", "Capture Cursor")).changed() {
                             self.restart_preview(&ctx);
                         }
                         ui.separator();
-                        if ui.add_enabled(self.selected.is_some(), Button::new(tr!("Seleccionar región…", "Select Region…"))).clicked() {
+                        if ui.button(tr!("Seleccionar región…", "Select Region…")).clicked() {
                             self.picking_region = true;
                             ui.close();
                         }
@@ -1313,58 +1333,38 @@ impl App {
                             self.config.region = None;
                             ui.close();
                         }
-                        if self.config.app_audio.is_some() {
-                            ui.separator();
+                    });
+                }
+                if let Some(exe) = self.config.app_audio.clone() {
+                    ui.add_space(2.0);
+                    let state = if self.app_audio.is_some() { "" } else { tr!(" (no se está ejecutando)", " (not running)") };
+                    let row = list_row(ui, &format!("{}  ·  {exe}{state}", tr!("Captura de audio de aplicación", "Application Audio Capture")));
+                    if !recording {
+                        row.context_menu(|ui| {
                             if ui.button(tr!("Quitar audio de aplicación", "Remove Application Audio")).clicked() {
                                 self.config.app_audio = None;
                                 self.restart_app_audio();
                                 ui.close();
                             }
-                        }
-                        let mut remove_camera = false;
-                        if self.config.camera.is_some() {
-                            ui.separator();
-                            remove_camera = ui.button(tr!("Quitar cámara", "Remove Camera")).clicked();
-                        }
-                        if remove_camera {
-                            self.config.camera = None;
-                            self.restart_camera(&ctx);
-                            ui.close();
-                        }
-                    });
-                });
-            });
-            ui.add_space(2.0);
-            ui.with_layout(Layout::top_down(Align::Min), |ui| match self.selected_source() {
-                Some(source) => {
-                    let kind = match source.id {
-                        SourceId::Monitor(_) => tr!("Captura de pantalla", "Display Capture"),
-                        SourceId::Window(_) => tr!("Captura de ventana", "Window Capture"),
-                        #[cfg(target_os = "linux")]
-                        SourceId::Portal => tr!("Captura de pantalla o ventana", "Screen or Window Capture"),
-                    };
-                    // Before the label, which is often too long to show in full.
-                    let region = self.config.region.map_or(String::new(), |r| {
-                        format!(" ({} {}×{})", tr!("región", "region"), r.width, r.height)
-                    });
-                    list_row(ui, &format!("{kind}{region}  ·  {}", source.label));
-                    if let Some(exe) = &self.config.app_audio {
-                        ui.add_space(2.0);
-                        let state = if self.app_audio.is_some() { String::new() } else { tr!(" (no se está ejecutando)", " (not running)").to_owned() };
-                        list_row(ui, &format!("{}  ·  {exe}{state}", tr!("Captura de audio de aplicación", "Application Audio Capture")));
-                    }
-                    if let Some(cam) = &self.config.camera {
-                        ui.add_space(2.0);
-                        let error = self.camera.as_ref().and_then(|c| c.shared.error.lock().unwrap().clone());
-                        let text = format!("{}  ·  {}", tr!("Dispositivo de captura de vídeo", "Video Capture Device"), cam.name);
-                        let row = list_row(ui, &text);
-                        if let Some(e) = error {
-                            row.on_hover_text(tr!("Error de la cámara: {}", "Camera error: {}", e));
-                        }
+                        });
                     }
                 }
-                None => {
-                    ui.label(RichText::new(tr!("No hay ninguna fuente. Pulsa + para añadir una.", "No sources. Press + to add one.")).color(TEXT_MUTED));
+                if let Some(name) = self.config.camera.as_ref().map(|c| c.name.clone()) {
+                    ui.add_space(2.0);
+                    let error = self.camera.as_ref().and_then(|c| c.shared.error.lock().unwrap().clone());
+                    let mut row = list_row(ui, &format!("{}  ·  {name}", tr!("Dispositivo de captura de vídeo", "Video Capture Device")));
+                    if let Some(e) = error {
+                        row = row.on_hover_text(tr!("Error de la cámara: {}", "Camera error: {}", e));
+                    }
+                    if !recording {
+                        row.context_menu(|ui| {
+                            if ui.button(tr!("Quitar cámara", "Remove Camera")).clicked() {
+                                self.config.camera = None;
+                                self.restart_camera(&ctx);
+                                ui.close();
+                            }
+                        });
+                    }
                 }
             });
         });
@@ -2063,7 +2063,7 @@ fn dock(ui: &mut egui::Ui, title: &str, size: Vec2, content: impl FnOnce(&mut eg
 
 /// A selected list item, as in the OBS Sources list.
 fn list_row(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
     ui.painter().rect_filled(rect, 3.0, PRIMARY);
     let clip = rect.shrink2(vec2(8.0, 0.0));
     ui.painter().with_clip_rect(clip).text(
@@ -2073,7 +2073,8 @@ fn list_row(ui: &mut egui::Ui, text: &str) -> egui::Response {
         FontId::proportional(13.5),
         Color32::WHITE,
     );
-    response.on_hover_text(text)
+    response.on_hover_text(format!("{text}
+{}", tr!("Clic derecho para ver sus opciones", "Right-click for its options")))
 }
 
 fn group_title(ui: &mut egui::Ui, title: &str) {
@@ -2783,6 +2784,58 @@ mod tests {
     fn settings_pass(ctx: &egui::Context, app: &mut App, events: Vec<egui::Event>) {
         let mut output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| app.settings_dialog(ui.ctx()));
         output.textures_delta.clear();
+    }
+
+    /// One pass of the Sources dock with `events` as input; the texts drawn, and where.
+    fn sources_pass(ctx: &egui::Context, app: &mut App, events: Vec<egui::Event>) -> Vec<(String, egui::Pos2)> {
+        let input = egui::RawInput { events, screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 300.0))), ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| app.sources_dock(ui));
+        output.textures_delta.clear();
+        let mut texts = Vec::new();
+        let mut pending: Vec<egui::Shape> = output.shapes.into_iter().map(|c| c.shape).collect();
+        while let Some(shape) = pending.pop() {
+            match shape {
+                egui::Shape::Vec(inner) => pending.extend(inner),
+                egui::Shape::Text(t) => texts.push((t.galley.text().to_owned(), t.visual_bounding_rect().center())),
+                _ => {}
+            }
+        }
+        texts
+    }
+
+    /// A click of `button` at `at`: pressed in one pass, released in the next.
+    fn click(ctx: &egui::Context, app: &mut App, at: egui::Pos2, button: egui::PointerButton) -> Vec<(String, egui::Pos2)> {
+        let event = |pressed| egui::Event::PointerButton { pos: at, button, pressed, modifiers: egui::Modifiers::NONE };
+        sources_pass(ctx, app, vec![egui::Event::PointerMoved(at), event(true)]);
+        sources_pass(ctx, app, vec![event(false)]);
+        sources_pass(ctx, app, Vec::new())
+    }
+
+    #[test]
+    fn a_source_is_changed_by_right_clicking_it() {
+        let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut app = test_app();
+        app.sources = vec![Source { id: SourceId::Monitor(1), label: "Display 1".into() }];
+        app.selected = Some(SourceId::Monitor(1));
+        app.config.camera = Some(CameraConfig { device: "cam".into(), name: "Cam".into(), place: Place::default() });
+        let ctx = egui::Context::default();
+        sources_pass(&ctx, &mut app, Vec::new());
+        let texts = sources_pass(&ctx, &mut app, Vec::new());
+        let find = |texts: &[(String, egui::Pos2)], start: &str| texts.iter().find(|(t, _)| t.starts_with(start)).map(|(_, at)| *at);
+        let remove = tr!("Quitar cámara", "Remove Camera");
+        assert!(find(&texts, remove).is_none(), "no options before the right click");
+        // Right-click the camera's row, then its option.
+        let row = find(&texts, tr!("Dispositivo de captura de vídeo", "Video Capture Device")).expect("camera row drawn");
+        let texts = click(&ctx, &mut app, row, egui::PointerButton::Secondary);
+        let option = find(&texts, remove).expect("the camera's options open on a right click");
+        assert!(find(&texts, tr!("Seleccionar región…", "Select Region…")).is_none(), "only the camera's options");
+        click(&ctx, &mut app, option, egui::PointerButton::Primary);
+        assert!(app.config.camera.is_none(), "the camera was not removed");
+        // The screen's row has its own.
+        let texts = sources_pass(&ctx, &mut app, Vec::new());
+        let row = find(&texts, tr!("Captura de pantalla", "Display Capture")).expect("source row drawn");
+        let texts = click(&ctx, &mut app, row, egui::PointerButton::Secondary);
+        assert!(find(&texts, tr!("Seleccionar región…", "Select Region…")).is_some());
     }
 
     #[test]

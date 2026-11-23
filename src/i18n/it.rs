@@ -62,7 +62,6 @@ pub const TEXT: &[(&str, &str)] = &[
     ("Video Capture Device", "Dispositivo di acquisizione video"),
     ("No camera found", "Nessuna fotocamera trovata"),
     ("Add source", "Aggiungi sorgente"),
-    ("Properties", "Proprietà"),
     ("Capture Cursor", "Cattura il cursore"),
     ("Select Region…", "Seleziona area…"),
     ("Record Whole Source", "Registra tutta la sorgente"),
@@ -200,4 +199,5 @@ pub const TEXT: &[(&str, &str)] = &[
     ("the region no longer fits the source; select it again", "l'area non rientra più nella sorgente; selezionala di nuovo"),
     ("encoding did not finish in time; the end may be missing", "la codifica non è terminata in tempo; la parte finale potrebbe mancare"),
     ("Drag to move the camera; drag its corner to resize it", "Trascina la fotocamera per spostarla; trascina il suo angolo per ridimensionarla"),
+    ("Right-click for its options", "Clic destro per le opzioni"),
 ];
