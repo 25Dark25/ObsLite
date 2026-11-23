@@ -46,6 +46,8 @@ const GREEN: Color32 = Color32::from_rgb(0x37, 0xD2, 0x47);
 const RED_DIM: Color32 = Color32::from_rgb(0x7D, 0x12, 0x24);
 const YELLOW_DIM: Color32 = Color32::from_rgb(0x6E, 0x52, 0x0D);
 const GREEN_DIM: Color32 = Color32::from_rgb(0x17, 0x64, 0x1E);
+/// Widest the update dialog gets, in points; its texts wrap within it.
+const MAX_DIALOG_WIDTH: f32 = 440.0;
 
 #[derive(Clone, Copy)]
 enum Action {
@@ -1693,6 +1695,8 @@ impl App {
         let response = egui::Modal::new(egui::Id::unique("update"))
             .frame(egui::Frame::new().fill(GREY7).stroke(Stroke::new(1.0, GREY4)).corner_radius(6).inner_margin(16))
             .show(ctx, |ui| {
+                // Long texts (an error from Windows) wrap instead of widening the dialog.
+                ui.set_max_width(MAX_DIALOG_WIDTH);
                 ui.heading(tr!("Nueva versión disponible", "New version available"));
                 ui.add_space(8.0);
                 ui.label(tr!(
@@ -1708,10 +1712,7 @@ impl App {
                     }
                     _ if installer.is_some() => {
                         ui.add_space(6.0);
-                        ui.label(RichText::new(tr!(
-                            "Al actualizar, Obs Lite se cierra, instala la versión nueva y se vuelve a abrir.",
-                            "To update, Obs Lite closes, installs the new version and opens again."
-                        )).color(TEXT_MUTED));
+                        ui.label(RichText::new(tr!("Obs Lite se cierra, se actualiza y se vuelve a abrir.", "Obs Lite closes, updates and opens again.")).color(TEXT_MUTED));
                     }
                     _ => {}
                 }
@@ -1719,7 +1720,7 @@ impl App {
                 // The buttons, the widest row, set the dialog's width (it differs by language).
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(!downloading, |ui| {
-                        if ui.add(Button::new(tr!("No recordar esta versión", "Don't remind me of this version")).min_size(vec2(0.0, 26.0))).clicked() {
+                        if ui.add(Button::new(tr!("No recordar", "Don't remind me")).min_size(vec2(0.0, 26.0))).clicked() {
                             skip = true;
                             ui.close();
                         }
@@ -1740,6 +1741,12 @@ impl App {
                             }
                             if response.clicked() {
                                 start = Some(installer.clone());
+                            }
+                            // For whoever prefers to download it themselves.
+                            let web = ui.add_enabled(!downloading, Button::new(tr!("Web", "Web")).min_size(vec2(0.0, 26.0)));
+                            if web.on_hover_text(update::download_page()).clicked() {
+                                open_url(update::download_page());
+                                ui.close();
                             }
                         }
                         None => {
@@ -2786,10 +2793,15 @@ mod tests {
     fn update_dialog_buttons_stay_inside_it_in_every_language() {
         let _language = LANGUAGE.lock().unwrap_or_else(|e| e.into_inner());
         let installer = crate::update::Installer { url: "https://example.com".into(), sha256: String::new() };
-        for (language, installer) in Language::ALL.into_iter().flat_map(|l| [(l, None), (l, Some(installer.clone()))]) {
+        let error = "Could not download the update: ".to_owned() + &"a long message from Windows ".repeat(8);
+        let cases = |l| [(l, None, false), (l, Some(installer.clone()), false), (l, Some(installer.clone()), true)];
+        for (language, installer, failed) in Language::ALL.into_iter().flat_map(cases) {
             i18n::set(language);
             let mut app = test_app();
-            let can_update = installer.is_some();
+            if failed {
+                app.updating = Updating::Failed(error.clone());
+            }
+            let can_update = installer.is_some() && !failed;
             app.update = Some(Release { version: "10.10.10".into(), installer });
             app.update_dialog = true;
             let ctx = egui::Context::default();
@@ -2830,7 +2842,16 @@ mod tests {
             assert!(left >= title_pos.x - 0.5, "{language:?}: something starts at x = {left}, left of the title at {}", title_pos.x);
             let update_now = tr!("Actualizar ahora", "Update now");
             let drawn = flat.iter().any(|s| matches!(s, egui::Shape::Text(t) if t.galley.text() == update_now));
-            assert_eq!(drawn, can_update, "{language:?}: Update now is offered only with an installer");
+            assert_eq!(drawn, can_update, "{language:?}: Update now is offered only with an installer, and not after a failure");
+            // Nor does anything stick out of the width the dialog is kept to.
+            let right = flat
+                .iter()
+                .map(egui::Shape::visual_bounding_rect)
+                .filter(|r| r.is_positive() && !r.contains(title_pos))
+                .map(|r| r.max.x)
+                .fold(f32::NEG_INFINITY, f32::max);
+            let width = right - title_pos.x;
+            assert!(width <= MAX_DIALOG_WIDTH + 0.5, "{language:?}: the dialog content is {width} wide");
         }
         i18n::set(Language::Spanish);
     }
