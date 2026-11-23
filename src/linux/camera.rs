@@ -76,7 +76,13 @@ fn devices_on(fd: &OwnedFd) -> Vec<CameraDevice> {
 
 /// Video capture devices. Until the user grants access, which the portal asks only when a
 /// camera is chosen, this is a single entry for the default camera (id "").
+/// Called from the window when its menu opens: the portal is waited for a moment at most, as it
+/// asks the user again when access was taken back since, and its calls have no time limit.
 pub fn list_devices() -> Vec<CameraDevice> {
+    super::within(std::time::Duration::from_secs(2), list_now).unwrap_or_default()
+}
+
+fn list_now() -> Vec<CameraDevice> {
     if gst::init().is_err() {
         return Vec::new();
     }

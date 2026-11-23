@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A region that no longer fits its source (a window made smaller) now stops the recording or the
   screenshot with a message, instead of the whole source being recorded, including what the
   region was drawn to leave out.
+- Linux: opening the source menu, or showing a folder chosen through the portal, no longer
+  freezes the window while the portal does not answer: it is waited for 2 seconds at most.
+- Linux: a recording whose encoder does not finish in time now says that its end may be missing,
+  instead of being reported as saved.
+- Linux: frames handed over in memory are read with the row layout the desktop gives, so a
+  desktop that pads or offsets them no longer gives a sheared picture.
+- Linux: changing the hotkeys twice in quick succession no longer leaves the old combinations
+  taken until Obs Lite exits.
 - A screenshot with the webcam overlay of a source 1 pixel wide or high no longer crashes
   Obs Lite.
 - Windows: a webcam picture is read only if all of it lies in the memory the camera handed over,

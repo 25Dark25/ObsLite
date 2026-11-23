@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
+use gstreamer_video as gst_video;
 
 use super::encoder::{Encoder, EncoderSettings, FrameRef, Outputs, swap_red_blue};
 use super::{gpu, portal};
@@ -123,7 +124,8 @@ impl Handler {
             return Ok(());
         }
         let on_gpu = gpu::on_gpu(sample);
-        if !on_gpu && buffer.size() < size.0 as usize * 4 * size.1 as usize {
+        let layout = rows(buffer, size);
+        if !on_gpu && layout.is_none() {
             return Ok(());
         }
         shared.frames.fetch_add(1, Ordering::Relaxed);
@@ -141,8 +143,9 @@ impl Handler {
             }
             return Ok(());
         }
+        let (offset, stride) = layout.expect("checked above");
         let map = buffer.map_readable().map_err(|e| e.to_string())?;
-        let frame = FrameRef { data: map.as_slice(), size, stride: map.size() / size.1.max(1) as usize };
+        let frame = FrameRef { data: &map.as_slice()[offset..], size, stride };
 
         if self.record.is_some() {
             self.ensure_encoder(sample, size)?;
@@ -247,6 +250,19 @@ fn frame_size(sample: &gst::Sample) -> Option<Size> {
     Some((s.get::<i32>("width").ok()? as u32, s.get::<i32>("height").ok()? as u32))
 }
 
+/// Where a picture of `size` has its rows in `buffer`: (where the first starts, bytes from one to
+/// the next). The desktop says so with the buffer (`VideoMeta`): rows may be padded, or start further
+/// in. Without that they fill it evenly. `None` if they are not all in it.
+fn rows(buffer: &gst::BufferRef, (width, height): Size) -> Option<(usize, usize)> {
+    let (offset, stride) = match buffer.meta::<gst_video::VideoMeta>() {
+        Some(meta) => (*meta.offset().first()?, usize::try_from(*meta.stride().first()?).ok()?),
+        None => (0, buffer.size() / height.max(1) as usize),
+    };
+    let row = width as usize * 4;
+    let end = offset.checked_add(stride.checked_mul((height as usize).checked_sub(1)?)?)?.checked_add(row)?;
+    (stride >= row && end <= buffer.size()).then_some((offset, stride))
+}
+
 pub struct Session {
     pub shared: Arc<Shared>,
     /// Asks the portal and then runs the pipeline; the portal may show a dialog, so this
@@ -306,8 +322,10 @@ impl Session {
             let source = self.shared.encoder.lock().unwrap().as_ref().and_then(Encoder::newest_source).ok_or_else(none)?;
             return gpu::download(&source);
         }
-        let map = sample.buffer().ok_or_else(none)?.map_readable().map_err(|e| e.to_string())?;
-        let mut rgba = bgra_to_rgba(map.as_slice(), w as usize, h as usize, map.size() / h.max(1) as usize);
+        let buffer = sample.buffer().ok_or_else(none)?;
+        let (offset, stride) = rows(buffer, (w, h)).ok_or_else(none)?;
+        let map = buffer.map_readable().map_err(|e| e.to_string())?;
+        let mut rgba = bgra_to_rgba(&map.as_slice()[offset..], w as usize, h as usize, stride);
         if red_first(sample) {
             swap_red_blue(&mut rgba);
         }
@@ -500,6 +518,25 @@ mod tests {
     use super::*;
     use crate::camera::{CameraSize, Corner};
     use crate::config::{Quality, Region, Resolution};
+
+    #[test]
+    fn rows_are_read_where_the_desktop_says_they_are() {
+        gst::init().unwrap();
+        let with_meta = |size: usize, offset: usize, stride: i32| {
+            let mut buffer = gst::Buffer::with_size(size).unwrap();
+            gst_video::VideoMeta::add_full(buffer.get_mut().unwrap(), gst_video::VideoFrameFlags::empty(), gst_video::VideoFormat::Bgrx, 10, 5, &[offset], &[stride])
+                .unwrap();
+            buffer
+        };
+        // 10×5 pixels: rows of 40 bytes, padded to 48.
+        assert_eq!(rows(&with_meta(48 * 5, 0, 48), (10, 5)), Some((0, 48)));
+        // Starting 64 bytes in: guessed from the size, the rows were 52 bytes apart, a sheared
+        // picture.
+        assert_eq!(rows(&with_meta(64 + 40 * 5, 64, 40), (10, 5)), Some((64, 40)));
+        // No meta: rows fill the buffer evenly; one too small is not read.
+        assert_eq!(rows(&gst::Buffer::with_size(40 * 5).unwrap(), (10, 5)), Some((0, 40)));
+        assert_eq!(rows(&gst::Buffer::with_size(40 * 5 - 1).unwrap(), (10, 5)), None);
+    }
 
     #[test]
     fn a_recording_takes_frames_on_the_gpu() {

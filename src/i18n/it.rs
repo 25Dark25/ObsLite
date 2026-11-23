@@ -205,4 +205,5 @@ pub const TEXT: &[(&str, &str)] = &[
     ("could not start the H.264 encoder: {}", "impossibile avviare il codificatore H.264: {}"),
     ("the GPU could not convert the picture", "la GPU non è riuscita a convertire l'immagine"),
     ("the region no longer fits the source; select it again", "l'area non rientra più nella sorgente; selezionala di nuovo"),
+    ("encoding did not finish in time; the end may be missing", "la codifica non è terminata in tempo; la parte finale potrebbe mancare"),
 ];

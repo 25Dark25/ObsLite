@@ -184,4 +184,5 @@ pub const TEXT: &[(&str, &str)] = &[
     ("could not start the H.264 encoder: {}", "无法启动 H.264 编码器：{}"),
     ("the GPU could not convert the picture", "GPU 无法转换画面"),
     ("the region no longer fits the source; select it again", "区域已超出来源范围，请重新选择"),
+    ("encoding did not finish in time; the end may be missing", "编码未能及时完成，结尾可能缺失"),
 ];
