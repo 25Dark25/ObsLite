@@ -37,7 +37,7 @@
   "operatingSystem": "Windows 11, Linux",
   "softwareVersion": "{{VERSION}}",
   "dateModified": "{{DATE}}",
-  "fileSize": "{{MSI_SIZE}}",
+  "fileSize": "{{FILE_SIZE}}",
   "downloadUrl": "https://github.com/25Dark25/ObsLite/releases/latest",
   "screenshot": "https://25dark25.github.io/ObsLite/og.png",
   "license": "https://opensource.org/licenses/MIT",
@@ -711,13 +711,16 @@ footer .langs a[aria-current]{color:var(--text-2)}
 
   function copy(text, btn, done) {
     var ok = function () { var t = btn.textContent; btn.textContent = done; live.textContent = done; setTimeout(function () { btn.textContent = t; }, 1600); };
-    if (navigator.clipboard) navigator.clipboard.writeText(text).then(ok, function () { window.prompt("SHA-256", text); });
-    else window.prompt("SHA-256", text);
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(ok, function () { window.prompt("", text); });
+    else window.prompt("", text);
   }
   $("dl-sha").addEventListener("click", function () { copy(this.dataset.sha, this, {{j:sha_copied}}); });
   document.querySelectorAll("[data-copy]").forEach(function (b) {
     b.addEventListener("click", function () { copy(b.dataset.copy, b, {{j:copied}}); });
   });
+
+  // Switching language keeps what the page was opened with (the update notice's ?file=zip).
+  if (location.search) document.querySelectorAll("a[hreflang]").forEach(function (a) { a.href = a.getAttribute("href") + location.search; });
 
   // Offers the page in the visitor's language when there is one; never redirects.
   var hints = {{LANG_HINTS}};
@@ -732,7 +735,7 @@ footer .langs a[aria-current]{color:var(--text-2)}
     var match = wanted.filter(function (l) { return l === "{{LANG_KEY}}" || hints[l]; })[0];
     if (!dismissed && match && match !== "{{LANG_KEY}}") {
       var h = hints[match], text = $("lang-hint-text"), link = document.createElement("a");
-      link.href = h.url; link.lang = h.lang; link.textContent = h.text;
+      link.href = h.url + location.search; link.lang = h.lang; link.textContent = h.text;
       text.appendChild(link);
       $("lang-hint").hidden = false;
       $("lang-hint-close").addEventListener("click", function () {

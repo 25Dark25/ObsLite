@@ -106,6 +106,7 @@ for my $l (@langs) {
         VERSION => $env{VERSION}, DATE => $env{DATE},
         MSI_SIZE_NUM => num($env{MSI_MB}, $dec),
         MB => $t->{mb},
+        FILE_SIZE => "$env{MSI_MB} MB",
         # A no-break space, so "3.1" and "MB" never end up on different lines.
         MSI_SIZE => num($env{MSI_MB}, $dec) . "\x{a0}$t->{mb}", ZIP_SIZE => num($env{ZIP_MB}, $dec) . "\x{a0}$t->{mb}",
         FLATPAK_SIZE => num($env{FLATPAK_MB}, $dec) . "\x{a0}$t->{mb}",
