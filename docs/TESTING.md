@@ -742,3 +742,17 @@ closing and opening Obs Lite.
 
 Checked by hand with the release build: each row's right-click options, *Remove Camera*, and no
 menu while recording.
+
+2026-11-23, release 0.9.0, Windows 11 (the release build of that branch), same PC as release 0.8.0,
+encoding on its Intel GPU (Quick Sync):
+
+| Step | Result |
+|---|---|
+| Self-test 8 s 1080p60 | Quick Sync; 1920×1080, 462 frames, 0 lagged |
+| Self-test 6 s with pause, 720p, `replay`, `preview`, `shot` and `webcam` | 1280×720, 439 frames, 0 lagged; replay saved; 36 preview pictures, the last 640×360; a 1920×1080 screenshot |
+| CPU and memory, self-test 20 s 1080p60, 3 runs each against 0.8.0 (measured on `main` before the webcam changes, then with `webcam`) | 4.33 s of CPU and 230 MB at the peak against 4.58 s and 228 MB for 0.8.0; with the webcam, no difference from before the webcam changes. The executable is 7,678,976 bytes (0.8.0: 7,674,880) |
+| Automated tests and clippy | 131 passed (two ignored) on Windows; clippy clean on stable; CI green on Windows and Linux |
+
+Checked by hand with this release's changes: the webcam placed by dragging and kept after a
+restart, and each source's right-click options. Not verified for this release: Linux outside CI
+(the Flatpak is built and validated there).
