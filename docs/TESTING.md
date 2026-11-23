@@ -762,3 +762,18 @@ encoding on its Intel GPU (Quick Sync):
 Checked by hand with this release's changes: the webcam placed by dragging and kept after a
 restart, and each source's right-click options. Not verified for this release: Linux outside CI
 (the Flatpak is built and validated there).
+
+2026-11-23, release 0.9.1, Windows 11 (the release build of that branch), same PC as release 0.9.0,
+encoding on its Intel GPU (Quick Sync):
+
+| Step | Result |
+|---|---|
+| Self-test 8 s 1080p60 | Quick Sync; 1920×1080, 6.3 s written (the encoder starts late on this PC, as with 0.9.0), 0 lagged |
+| Self-test 6 s with pause, 720p, `replay`, `preview`, `shot` and `webcam` | 1280×720, 3.9 s (the paused third left out), 0 lagged; replay saved (1280×720); 29 preview pictures, the last 640×360; a 1920×1080 screenshot |
+| CPU and memory, self-test 20 s 1080p60, 3 runs each alternating with the 0.9.0 release | 2.67–3.42 s of CPU and 221–222 MB at the peak, against 2.58–3.00 s and 222–223 MB for 0.9.0: the same within run-to-run noise (nothing new runs while recording). The executable is 7,706,624 bytes (0.9.0: 7,681,536) |
+| Automated tests and clippy | 136 passed (three ignored) on Windows; clippy clean on stable; CI green on Windows and Linux |
+
+Checked by hand with this release's changes: *Update now* from a build labelled 0.8.99 installed
+with its own MSI, which installed the 0.9.0 release's package and opened Obs Lite again with no
+notice; the website opened with `?file=zip` and `?file=msi`. Not verified for this release: Linux
+outside CI (nothing changes there; the Flatpak is built and validated in CI).
