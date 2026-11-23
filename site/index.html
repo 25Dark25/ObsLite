@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Obs Lite — Lightweight Screen Recorder for Low-End PCs (Windows &amp; Linux)</title>
-<meta name="description" content="Free, open-source screen recorder for low-end PCs and old laptops. An OBS-style app in a {{MSI_SIZE}} download that records screen, desktop audio and mic to MP4 with your GPU. Windows and Linux.">
+<title>Obs Lite — Lightweight Screen Recorder for Low-End PCs</title>
+<meta name="description" content="Free, open-source screen recorder for low-end PCs: OBS-style, {{MSI_SIZE}}, records screen, desktop audio and mic to MP4 with your GPU. For Windows and Linux.">
 <link rel="canonical" href="https://25dark25.github.io/ObsLite/">
 <meta name="google-site-verification" content="HtZQZKYdtyb-W9jiwofz-W6uT49iUkps8hN9gGyJysg">
 <meta name="theme-color" content="#0d0e12">
@@ -66,6 +66,7 @@ a:hover{text-decoration-color:currentColor}
 :focus-visible{outline:2px solid var(--focus);outline-offset:3px;border-radius:6px}
 [hidden]{display:none!important}
 .wrap{max-width:var(--wrap);margin:0 auto;padding-inline:24px}
+.nw{white-space:nowrap}
 .mono{font-family:var(--mono);font-size:.86em;letter-spacing:0}
 .skip{position:absolute;left:-9999px;top:8px;background:var(--btn);color:var(--btn-text);padding:8px 14px;border-radius:8px;z-index:20}
 .skip:focus{left:16px}
@@ -188,6 +189,7 @@ h1 .soft{color:var(--text-3)}
 
 /* Sections */
 section{scroll-margin-top:72px}
+#download{scroll-margin-top:max(96px,calc(50vh - 150px))}
 .sec{padding:104px 0}
 .sec + .sec{border-top:1px solid var(--line)}
 .kicker{font-family:var(--mono);font-size:12.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3);margin:0 0 14px}
@@ -332,7 +334,7 @@ footer p{margin:0;max-width:44em}
       <a href="#faq">FAQ</a>
     </nav>
     <div class="top-actions">
-      <a class="btn btn-ghost btn-sm" href="https://github.com/25Dark25/ObsLite"><svg width="16" height="16" aria-hidden="true"><use href="#i-gh"/></svg><span class="gh-text">GitHub</span></a>
+      <a class="btn btn-ghost btn-sm" href="https://github.com/25Dark25/ObsLite" aria-label="Obs Lite on GitHub"><svg width="16" height="16" aria-hidden="true"><use href="#i-gh"/></svg><span class="gh-text">GitHub</span></a>
       <a class="btn btn-primary btn-sm" href="#download">Download</a>
     </div>
   </div>
@@ -343,7 +345,7 @@ footer p{margin:0;max-width:44em}
   <div class="wrap">
     <div>
       <p class="eyebrow"><b><span class="dot blink"></span>REC</b>Free &amp; open source · Windows &amp; Linux</p>
-      <h1 id="hero-title">The lightweight screen recorder <span class="soft">for low-end PCs.</span></h1>
+      <h1 id="hero-title">The lightweight screen recorder <span class="soft">for <span class="nw">low-end</span> PCs.</span></h1>
       <p class="lead">Obs Lite records your screen, desktop audio and microphone to MP4 with your graphics card's hardware encoder. <strong>It looks and works like OBS Studio</strong>, in a {{MSI_SIZE}} download that leaves your game or app the CPU and memory it needs.</p>
 
       <div class="dl" id="download">
