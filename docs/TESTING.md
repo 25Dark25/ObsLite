@@ -730,8 +730,9 @@ sending padded or offset frames, an encoder that does not drain, two quick hotke
 | Automated tests and clippy | 130 passed (two ignored) on Windows; clippy clean on stable |
 | CPU and memory, self-test 20 s 1080p60 with `webcam`, 3 runs each, release builds | 3.51 s of CPU and 230 MB at the peak, against 3.71 s and 227 MB for `main`: no difference beyond run-to-run noise. The executable is 3 KB smaller |
 
-Not verified: dragging the webcam on the preview by hand, and a real camera (the self-test's
-webcam is a made-up picture).
+Checked by hand afterwards with the release build and the built-in camera: the webcam dragged and
+resized on the preview, the same place and size in a recording and a screenshot, and kept after
+closing and opening Obs Lite.
 
 2026-11-23, each source's options on a right click, Windows 11 (same PC as release 0.8.0):
 
@@ -739,4 +740,5 @@ webcam is a made-up picture).
 |---|---|
 | Automated tests and clippy | 131 passed (two ignored) on Windows; clippy clean on stable. The new test fails when the rows do not take clicks |
 
-Not verified: by hand in the window.
+Checked by hand with the release build: each row's right-click options, *Remove Camera*, and no
+menu while recording.
