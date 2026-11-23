@@ -183,4 +183,5 @@ pub const TEXT: &[(&str, &str)] = &[
     ("Display {} ({}×{}) {}", "顯示器 {}（{}×{}）{}"),
     ("could not start the H.264 encoder: {}", "無法啟動 H.264 編碼器：{}"),
     ("the GPU could not convert the picture", "GPU 無法轉換畫面"),
+    ("the region no longer fits the source; select it again", "範圍已超出來源，請重新選擇"),
 ];

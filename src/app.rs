@@ -134,6 +134,8 @@ pub struct App {
     cpu: CpuMeter,
     actions: Arc<Mutex<Vec<Action>>>,
     hotkeys: Option<GlobalHotkeys>,
+    /// The global hotkeys are registered (see `sync_hotkeys`).
+    hotkeys_bound: bool,
     /// The action of each bound hotkey, by index, shared with the hotkey handler.
     bound_actions: Arc<Mutex<Vec<Action>>>,
     /// The main window, for excluding it from capture.
@@ -205,6 +207,7 @@ impl App {
             cpu: CpuMeter { last: None, percent: 0.0 },
             actions,
             hotkeys,
+            hotkeys_bound: false,
             bound_actions,
             native_window: crate::platform::sys::window_handle(cc),
             tray: None,
@@ -747,7 +750,11 @@ impl App {
             Ok(image) => image,
             Err(e) => return self.set_status(tr!("No se pudo hacer la captura: {}", "Could not take the screenshot: {}", e), None, true),
         };
-        if let Some(region) = self.config.region.and_then(|r| r.fit((width, height))) {
+        let area = match capture::recorded_area(self.config.region, (width, height)) {
+            Ok(area) => area,
+            Err(e) => return self.set_status(tr!("No se pudo hacer la captura: {}", "Could not take the screenshot: {}", e), None, true),
+        };
+        if let Some(region) = area {
             rgba = capture::crop_rgba(&rgba, width, region);
             (width, height) = (region.width, region.height);
         }
@@ -920,8 +927,7 @@ impl App {
     fn open_settings(&mut self) {
         self.refresh_devices();
         self.settings = Some(SettingsDialog { draft: self.config.clone(), page: SettingsPage::General, capturing: None });
-        // Registered combinations never reach the window, so they could not be typed again.
-        self.unbind_hotkeys();
+        self.sync_hotkeys();
     }
 
     fn apply_settings(&mut self, mut new: Config) {
@@ -971,6 +977,7 @@ impl App {
 
     /// Registers the configured hotkeys, reporting the ones another application already uses.
     fn bind_hotkeys(&mut self) {
+        self.hotkeys_bound = true;
         let Some(hotkeys) = &mut self.hotkeys else { return };
         let Hotkeys { record, pause, screenshot, mute_mic, replay, save_replay } = &self.config.hotkeys;
         let wanted = [
@@ -996,8 +1003,23 @@ impl App {
     }
 
     fn unbind_hotkeys(&mut self) {
+        self.hotkeys_bound = false;
         if let Some(hotkeys) = &mut self.hotkeys {
             hotkeys.unbind();
+        }
+    }
+
+    /// While Settings is open the global hotkeys are let go: registered combinations never reach
+    /// the window, so they could not be typed again. But not while a recording or the replay
+    /// buffer runs, which locks every setting: Stop and Pause must still work from a game.
+    fn sync_hotkeys(&mut self) {
+        let wanted = hotkeys_wanted(self.settings.is_some(), self.is_session_active());
+        if wanted != self.hotkeys_bound {
+            if wanted {
+                self.bind_hotkeys();
+            } else {
+                self.unbind_hotkeys();
+            }
         }
     }
 
@@ -1482,6 +1504,11 @@ impl App {
     // ------------------------------------------------------------------ settings dialog
 
     fn settings_dialog(&mut self, ctx: &egui::Context) {
+        if self.settings.is_none() {
+            return;
+        }
+        // A recording may have started or stopped since the dialog opened.
+        self.sync_hotkeys();
         let Some(dialog) = &mut self.settings else { return };
         let recording = matches!(self.rec, RecState::Active { .. });
         // Read before the dialog runs: Escape there ends the wait for a hotkey, and must not then
@@ -1546,11 +1573,11 @@ impl App {
             Some(true) => {
                 let draft = self.settings.take().expect("dialog is open").draft;
                 self.apply_settings(draft);
-                self.bind_hotkeys();
+                self.sync_hotkeys();
             }
             Some(false) => {
                 self.settings = None;
-                self.bind_hotkeys();
+                self.sync_hotkeys();
             }
             None => {}
         }
@@ -2263,6 +2290,11 @@ fn restart_on_ok(changed: bool, failed: bool, session_active: bool) -> bool {
     !session_active && (changed || failed)
 }
 
+/// Whether the global hotkeys should be registered (see `App::sync_hotkeys`).
+fn hotkeys_wanted(settings_open: bool, session_active: bool) -> bool {
+    !settings_open || session_active
+}
+
 /// Whether the application's audio has to be captured again: the process captured is not the
 /// one running now (the application started, restarted or exited since), or its capture failed.
 fn app_audio_stale(captured: Option<u32>, running: Option<u32>, failed: bool) -> bool {
@@ -2343,6 +2375,7 @@ mod tests {
             cpu: CpuMeter { last: None, percent: 0.0 },
             actions: Arc::new(Mutex::new(Vec::new())),
             hotkeys: None,
+            hotkeys_bound: false,
             bound_actions: Arc::default(),
             native_window: None,
             tray: None,
@@ -2437,6 +2470,23 @@ mod tests {
         assert!(restart_on_ok(false, true, false), "an input that failed is tried again");
         assert!(restart_on_ok(true, false, false));
         assert!(!restart_on_ok(false, false, false));
+    }
+
+    #[test]
+    fn hotkeys_stay_registered_while_settings_are_locked() {
+        // Settings open while recording: everything there is locked, and Stop and Pause must
+        // still work from a game.
+        assert!(hotkeys_wanted(true, true));
+        // Settings open otherwise: let go, so a combination can be typed there.
+        assert!(!hotkeys_wanted(true, false));
+        assert!(hotkeys_wanted(false, false));
+        let mut app = test_app();
+        app.settings = Some(SettingsDialog { draft: Config::default(), page: SettingsPage::General, capturing: None });
+        app.sync_hotkeys();
+        assert!(!app.hotkeys_bound);
+        app.settings = None;
+        app.sync_hotkeys();
+        assert!(app.hotkeys_bound);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 use crate::camera::{CameraSize, Corner};
 use crate::config::{Quality, Region, Resolution};
+use crate::i18n::tr;
 
 pub use crate::platform::capture::{Session, list_audio_apps, list_sources};
 #[cfg(target_os = "linux")]
@@ -13,6 +14,19 @@ pub use crate::platform::capture::forget_choice;
 /// a second, so the second one would be most of the idle drawing.
 pub fn repaint_for_picture(ctx: &eframe::egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(1));
+}
+
+/// The part of a `size` source that is recorded or captured: all of it without a region. A region
+/// that no longer fits the source (a window made smaller) is an error: recording the whole
+/// source instead would show what the region was drawn to leave out.
+pub fn recorded_area(region: Option<Region>, size: (u32, u32)) -> Result<Option<Region>, String> {
+    match region {
+        None => Ok(None),
+        Some(region) => region
+            .fit(size)
+            .map(Some)
+            .ok_or_else(|| tr!("la región ya no cabe en la fuente; selecciónala de nuevo", "the region no longer fits the source; select it again").to_owned()),
+    }
 }
 
 /// Preview width until the UI reports how wide the preview is drawn.
@@ -155,6 +169,16 @@ pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_region_that_no_longer_fits_is_refused_not_dropped() {
+        let region = Region { x: 800, y: 100, width: 400, height: 300 };
+        assert_eq!(recorded_area(None, (1920, 1080)), Ok(None));
+        assert_eq!(recorded_area(Some(region), (1920, 1080)), Ok(Some(region)));
+        // The window was made narrower than where the region starts: the whole window was
+        // recorded, what the region was drawn to leave out included.
+        assert!(recorded_area(Some(region), (640, 1080)).is_err());
+    }
 
     #[test]
     fn an_odd_sized_frame_is_cropped_not_scaled() {
