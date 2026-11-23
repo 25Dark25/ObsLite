@@ -149,7 +149,7 @@ impl GraphicsCaptureApiHandler for Handler {
             // and starting the hardware encoder can take a moment.
             if shared.encoder.lock().unwrap().is_none() {
                 let full = (frame.width(), frame.height());
-                let input = match rec.region.and_then(|r| r.fit(full)) {
+                let input = match crate::capture::recorded_area(rec.region, full)? {
                     Some(r) => {
                         self.region = Some((r.x, r.y));
                         (r.width, r.height)

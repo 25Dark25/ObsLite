@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start; and on Windows a recording that another Obs Lite is still writing is left alone.
 - The replay buffer no longer grows without end with an encoder that makes keyframes further
   apart than asked: once it holds twice its length, it asks for one.
+- Opening Settings during a recording no longer turns off the global hotkeys: Stop and Pause
+  still work from another application.
+- A region that no longer fits its source (a window made smaller) now stops the recording or the
+  screenshot with a message, instead of the whole source being recorded, including what the
+  region was drawn to leave out.
 - A screenshot with the webcam overlay of a source 1 pixel wide or high no longer crashes
   Obs Lite.
 - Windows: a webcam picture is read only if all of it lies in the memory the camera handed over,

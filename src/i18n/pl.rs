@@ -204,4 +204,5 @@ pub const TEXT: &[(&str, &str)] = &[
     ("Display {} ({}×{}) {}", "Ekran {} ({}×{}) {}"),
     ("could not start the H.264 encoder: {}", "nie można uruchomić kodera H.264: {}"),
     ("the GPU could not convert the picture", "GPU nie mógł przekonwertować obrazu"),
+    ("the region no longer fits the source; select it again", "obszar nie mieści się już w źródle; wybierz go ponownie"),
 ];

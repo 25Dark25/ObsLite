@@ -178,7 +178,7 @@ impl Handler {
     /// The encoder for frames like `sample` (`size`), which starts the recording's clock.
     fn new_encoder(&mut self, sample: &gst::Sample, size: Size) -> Result<Encoder, String> {
         let rec = self.record.as_ref().ok_or("not recording")?;
-        let (origin, input) = match rec.region.and_then(|r| r.fit(size)) {
+        let (origin, input) = match crate::capture::recorded_area(rec.region, size)? {
             Some(r) => ((r.x, r.y), (r.width, r.height)),
             None => ((0, 0), (size.0 & !1, size.1 & !1)),
         };

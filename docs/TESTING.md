@@ -111,6 +111,8 @@ cargo test --locked
 | `app::desktop_audio_leaves_out_the_application_captured_on_its_own` | With an application captured on its own, desktop audio leaves it out; not with no application, nor with a chosen output device. |
 | `app::a_new_release_opens_the_dialog_unless_skipped` | A newer release opens the update dialog unless the user chose not to be reminded of that version; the status-bar link shows either way. |
 | `app::update_dialog_buttons_stay_inside_it_in_every_language` | In every language, nothing in the update dialog starts left of its title: the buttons fit. |
+| `app::hotkeys_stay_registered_while_settings_are_locked` | With Settings open the global hotkeys are let go, except while a recording or the replay buffer runs (every setting is locked then), so Stop and Pause still work. |
+| `capture::a_region_that_no_longer_fits_is_refused_not_dropped` | A region that no longer fits the source (a window made smaller) is an error instead of the whole source being recorded. |
 
 ## Results
 
@@ -693,3 +695,14 @@ neither can be caused on purpose here.
 | Self-test 8 s 1080p60 with `replay`, release build | 379 frames, 0 lagged; replay saved (4 s in Explorer) |
 
 Not verified: an encoder that ignores the keyframe interval it is given (Quick Sync here keeps it).
+
+2026-11-23, hotkeys with Settings open and a region that no longer fits, Windows 11 (same PC as
+release 0.8.0):
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 127 passed (two ignored) on Windows; clippy clean on stable |
+| Self-test 6 s 1080p60 with `region shot`, release build | 960×540 recorded, 366 frames, 0 lagged |
+
+Not verified: by hand, the hotkeys while Settings is open during a recording, and a window made
+smaller than its region.

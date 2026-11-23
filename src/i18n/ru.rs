@@ -204,4 +204,5 @@ pub const TEXT: &[(&str, &str)] = &[
     ("Display {} ({}×{}) {}", "Экран {} ({}×{}) {}"),
     ("could not start the H.264 encoder: {}", "не удалось запустить кодировщик H.264: {}"),
     ("the GPU could not convert the picture", "GPU не смог преобразовать изображение"),
+    ("the region no longer fits the source; select it again", "область больше не помещается в источник; выберите её заново"),
 ];
