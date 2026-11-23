@@ -339,7 +339,9 @@ to `site/` and each published release; `sh site/build.sh OUT_DIR` builds it loca
 fill in the latest release's version, sizes and hashes, and `perl`). `site/index.html` is one template
 for every language and `site/i18n/<language>.json` holds its texts: each language must have every
 text, or the build stops. The build writes one page per language (`/es/`, `/de/`…) with its
-`hreflang` links, the FAQ as structured data, and `sitemap.xml`.
+`hreflang` links, the FAQ as structured data, and `sitemap.xml`. The main page opens in the language chosen
+before in the menu or, failing that, the first of the browser's languages the site has; search
+engines, which crawl in English, see every page through the `hreflang` links.
 
 ### How it works
 

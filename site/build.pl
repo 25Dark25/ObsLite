@@ -97,6 +97,30 @@ for my $l (@langs) {
     $page =~ s/\{\{LANG_LINKS\}\}/$footer_links/;
     my $hints_js = JSON::PP->new->canonical->encode(\%hints);
     $page =~ s/\{\{LANG_HINTS\}\}/$hints_js/;
+    # Only the main page moves visitors to their language, before anything is drawn. Search
+    # engines crawl it in English and see every page through the hreflang links.
+    my $auto = '';
+    if ($dir eq '') {
+        my $pages = JSON::PP->new->canonical->encode({ map { ($_->[0] => $_->[1]) } grep { $_->[1] ne '' } @langs });
+        $auto = <<"JS";
+<script>
+// Opens the page in the language the visitor chose before, or else in the first of the
+// browser's languages the site has; English, this page, stays.
+(function () {
+  var pages = $pages, chosen = null;
+  try { chosen = localStorage.getItem("obslite-lang"); } catch (e) {}
+  var langs = chosen ? [chosen] : (navigator.languages || [navigator.language || ""]);
+  for (var i = 0; i < langs.length; i++) {
+    var l = String(langs[i]).toLowerCase();
+    var k = /^zh-(tw|hk|mo|hant)/.test(l) ? "zh-hant" : /^zh/.test(l) ? "zh-hans" : l.split("-")[0];
+    if (k === "en") return;
+    if (pages[k]) { location.replace(pages[k] + location.search + location.hash); return; }
+  }
+})();
+</script>
+JS
+    }
+    $page =~ s/\{\{AUTO_LANG\}\}\n?/$auto/;
     $page =~ s/\{\{t:(\w+)\}\}/$t->{$1}/g;
     $page =~ s/\{\{a:(\w+)\}\}/attr($t->{$1})/ge;
     $page =~ s/\{\{j:(\w+)\}\}/js($t->{$1})/ge;
