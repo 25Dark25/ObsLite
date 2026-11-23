@@ -102,6 +102,8 @@ cargo test --locked
 | `linux::camera::row_padding_is_dropped` | Linux only: camera pictures with padded rows are packed, and short buffers are rejected. |
 | `linux::sys::document_portal_paths_are_recognised` | Linux only: a folder granted through the folder picker (`/run/user/UID/doc/ID/NAME/…`) is recognised, so its real path can be shown; other paths are left alone. |
 | `linux::sys::a_granted_folder_shows_without_a_trailing_slash` | Linux only: that real path is shown as `/home/…/Descargas`, not `/home/…/Descargas/`. |
+| `linux::capture::rows_are_read_where_the_desktop_says_they_are` | Linux only: frames in memory are read with the row offset and stride the desktop gives with the buffer, and a buffer too small for its picture is not read. |
+| `linux::tests::a_call_that_does_not_answer_is_waited_for_a_moment_only` | Linux only: a portal call made from the window is waited for a moment at most. |
 | `tray::idle_icon_is_grey_with_the_same_alpha` | The idle tray icon. |
 | `update::versions_compare_numerically` | Only a strictly newer plain version counts as an update. |
 | `update::release_is_read_from_the_github_response` | The tag and page are read from GitHub's response; an error response gives nothing. |
@@ -706,3 +708,13 @@ release 0.8.0):
 
 Not verified: by hand, the hotkeys while Settings is open during a recording, and a window made
 smaller than its region.
+
+2026-11-23, Linux: portals, frames in memory, the encoder's end and shortcuts; built and tested
+in CI only (no Linux machine here):
+
+| Step | Result |
+|---|---|
+| Automated tests and clippy | 127 passed (two ignored) on Windows, clippy clean on stable; Linux in CI |
+
+Not verified: any of it by hand on a Linux desktop (a portal that does not answer, a desktop
+sending padded or offset frames, an encoder that does not drain, two quick hotkey changes).

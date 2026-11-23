@@ -192,7 +192,17 @@ async fn listen(state: &State, generation: u64, shortcuts: Vec<NewShortcut>) -> 
     }
     let portal = Portal::new().await?;
     let session = Arc::new(portal.create_session(CreateSessionOptions::default()).await?);
-    *state.session.lock().unwrap() = Some(session.clone());
+    {
+        let mut stored = state.session.lock().unwrap();
+        // A newer binding came meanwhile and found no session to close: this one closes its own,
+        // or the desktop would keep its combinations taken until obs-lite exits.
+        if state.generation.load(Ordering::Acquire) != generation {
+            drop(stored);
+            let _ = session.close().await;
+            return Ok(());
+        }
+        *stored = Some(session.clone());
+    }
     let mut activated = portal.receive_activated().await?;
     portal.bind_shortcuts(&session, &shortcuts, None, Default::default()).await?.response()?;
     loop {

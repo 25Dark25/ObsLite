@@ -137,7 +137,17 @@ fn open_with_portal(path: PathBuf, select: bool) {
 pub fn display_path(path: &Path) -> PathBuf {
     static HOSTS: LazyLock<Mutex<HashMap<String, Option<PathBuf>>>> = LazyLock::new(Mutex::default);
     let Some((id, rest)) = document_parts(path) else { return path.to_owned() };
-    let host = HOSTS.lock().unwrap().entry(id.clone()).or_insert_with(|| host_path(&id)).clone();
+    let known = HOSTS.lock().unwrap().get(&id).cloned();
+    let host = known.unwrap_or_else(|| {
+        // Asked without holding the answers, and for a moment at most: the window waits for it.
+        let host = super::within(std::time::Duration::from_secs(2), {
+            let id = id.clone();
+            move || host_path(&id)
+        })
+        .flatten();
+        HOSTS.lock().unwrap().insert(id, host.clone());
+        host
+    });
     host.map_or_else(|| path.to_owned(), |host| inside(host, &rest))
 }
 

@@ -202,4 +202,5 @@ pub const TEXT: &[(&str, &str)] = &[
     ("could not start the H.264 encoder: {}", "H.264 エンコーダーを開始できませんでした: {}"),
     ("the GPU could not convert the picture", "GPU が画像を変換できませんでした"),
     ("the region no longer fits the source; select it again", "範囲がソースに収まらなくなりました。もう一度選択してください"),
+    ("encoding did not finish in time; the end may be missing", "エンコードが時間内に終わりませんでした。最後の部分が欠けている可能性があります"),
 ];

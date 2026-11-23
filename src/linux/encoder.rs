@@ -860,10 +860,13 @@ fn end_pipeline(pipeline: &gst::Pipeline, failed: bool) -> Option<String> {
     error
 }
 
-/// Waits (at most 10 s) for a pipeline to drain after end-of-stream; the error if it failed.
+/// Waits (at most 10 s) for a pipeline to drain after end-of-stream; the error if it failed, or if
+/// it did not drain in time: what an element still held is then lost, and the user is told.
 fn wait_for_eos(pipeline: &gst::Pipeline) -> Option<String> {
     let bus = pipeline.bus()?;
-    let message = bus.timed_pop_filtered(gst::ClockTime::from_seconds(10), &[gst::MessageType::Eos, gst::MessageType::Error])?;
+    let Some(message) = bus.timed_pop_filtered(gst::ClockTime::from_seconds(10), &[gst::MessageType::Eos, gst::MessageType::Error]) else {
+        return Some(tr!("la codificación no terminó a tiempo; puede faltar el final", "encoding did not finish in time; the end may be missing").to_owned());
+    };
     match message.view() {
         gst::MessageView::Error(e) => Some(e.error().to_string()),
         _ => None,
