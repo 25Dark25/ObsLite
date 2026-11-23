@@ -164,8 +164,10 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording
   use the system's font for those characters (on Linux, found with fontconfig); without one, Obs Lite
   shows in English and says why.
 - **Update notice**: at start-up it asks GitHub for the latest release and, if there is a newer
-  one, says so in a dialog with a link to it (and in the status bar). "Don't remind me of this
-  version" stops the dialog until the next release. Nothing is downloaded; Settings › General
+  one, says so in a dialog (and in the status bar) with a link to the
+  [website](https://25dark25.github.io/ObsLite/), which offers the same kind of file: the
+  installer if Obs Lite was installed with it, otherwise the portable zip. "Don't remind me of
+  this version" stops the dialog until the next release. Nothing is downloaded; Settings › General
   turns the check off.
 - Sharp preview at 5 fps: frames are scaled down to the size the preview is drawn at, averaging
   every pixel, so text stays legible.

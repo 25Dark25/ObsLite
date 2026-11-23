@@ -683,7 +683,8 @@ footer p{margin:0;max-width:44em}
   };
   var alt = {
     msi: '<a data-file="zip" href="' + files.zip.url + '">Windows portable (.zip, {{ZIP_SIZE}})</a> · <a data-file="flatpak" href="' + files.flatpak.url + '">Linux (Flatpak, {{FLATPAK_SIZE}})</a>',
-    flatpak: '<a data-file="msi" href="' + files.msi.url + '">Windows installer (.msi, {{MSI_SIZE}})</a> · <a data-file="zip" href="' + files.zip.url + '">Windows portable (.zip, {{ZIP_SIZE}})</a>'
+    flatpak: '<a data-file="msi" href="' + files.msi.url + '">Windows installer (.msi, {{MSI_SIZE}})</a> · <a data-file="zip" href="' + files.zip.url + '">Windows portable (.zip, {{ZIP_SIZE}})</a>',
+    zip: '<a data-file="msi" href="' + files.msi.url + '">Windows installer (.msi, {{MSI_SIZE}})</a> · <a data-file="flatpak" href="' + files.flatpak.url + '">Linux (Flatpak, {{FLATPAK_SIZE}})</a>'
   };
   var $ = function (id) { return document.getElementById(id); };
   var live = $("live");
@@ -706,7 +707,10 @@ footer p{margin:0;max-width:44em}
     var sha = $("dl-sha"); sha.dataset.sha = f.sha; sha.title = "SHA-256: " + f.sha;
     if (alt[key]) $("dl-alt").innerHTML = "Also available: " + alt[key];
   }
-  if (os === "linux") show("flatpak");
+  // Obs Lite's update notice asks for the kind of file the user already has.
+  var asked = new URLSearchParams(location.search).get("file");
+  if (files.hasOwnProperty(asked)) show(asked);
+  else if (os === "linux") show("flatpak");
   var note = $("dl-note");
   if (os === "mac") { note.textContent = "Obs Lite is for Windows and Linux; there is no macOS version."; note.hidden = false; }
   if (os === "mobile") { note.textContent = "Obs Lite is a desktop app for Windows and Linux. Open this page on your PC to download it."; note.hidden = false; }

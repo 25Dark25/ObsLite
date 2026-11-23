@@ -1516,8 +1516,8 @@ impl App {
                 if let Some(release) = &self.update {
                     let text = tr!("Nueva versión {} disponible", "New version {} available", release.version);
                     let link = ui.add(egui::Label::new(RichText::new(text).small().color(PRIMARY_LIGHT).underline()).sense(Sense::click()));
-                    if link.on_hover_text(&release.url).clicked() {
-                        open_url(&release.url);
+                    if link.on_hover_text(update::download_page()).clicked() {
+                        open_url(update::download_page());
                     }
                 }
             });
@@ -1667,8 +1667,8 @@ impl App {
                         ui.close();
                     }
                     let download = Button::new(RichText::new(tr!("Descargar", "Download")).color(Color32::WHITE)).fill(PRIMARY);
-                    if ui.add(download.min_size(vec2(90.0, 26.0))).on_hover_text(&release.url).clicked() {
-                        open_url(&release.url);
+                    if ui.add(download.min_size(vec2(90.0, 26.0))).on_hover_text(update::download_page()).clicked() {
+                        open_url(update::download_page());
                         ui.close();
                     }
                 });
@@ -2653,7 +2653,7 @@ mod tests {
     #[test]
     fn a_new_release_opens_the_dialog_unless_skipped() {
         let ctx = egui::Context::default();
-        let release = Release { version: "9.0.0".into(), url: "https://example.com".into() };
+        let release = Release { version: "9.0.0".into() };
         for (skipped, dialog) in [(None, true), (Some("8.0.0"), true), (Some("9.0.0"), false)] {
             let mut app = test_app();
             app.config.skipped_version = skipped.map(str::to_owned);
@@ -2678,7 +2678,7 @@ mod tests {
         for language in Language::ALL {
             i18n::set(language);
             let mut app = test_app();
-            app.update = Some(Release { version: "10.10.10".into(), url: "https://example.com".into() });
+            app.update = Some(Release { version: "10.10.10".into() });
             app.update_dialog = true;
             let ctx = egui::Context::default();
             let input = || egui::RawInput {
