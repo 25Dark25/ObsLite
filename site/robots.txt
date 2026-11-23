@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://25dark25.github.io/ObsLite/sitemap.xml
