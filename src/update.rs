@@ -1,14 +1,13 @@
 //! Looks up the latest obs-lite release on GitHub once at start-up. Settings › General can turn
-//! it off. Nothing is downloaded or installed: the user is only told, with a link.
+//! it off. Nothing is downloaded or installed: the user is only told, with a link to the website.
+
+use std::path::Path;
 
 const LATEST: &str = "https://api.github.com/repos/25Dark25/ObsLite/releases/latest";
-/// Where every release page is: the link is opened as it comes only if it is one of them.
-const RELEASES: &str = "https://github.com/25Dark25/ObsLite/releases/";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Release {
     pub version: String,
-    pub url: String,
 }
 
 /// The latest release, if it is newer than this build. Errors (no network, rate limit…) are
@@ -19,12 +18,31 @@ pub fn newer_release() -> Result<Option<Release>, String> {
     Ok(is_newer(&release.version, env!("CARGO_PKG_VERSION")).then_some(release))
 }
 
-/// Release tag and page from the GitHub API response.
+/// The website's download section, offering the file this copy came from: the installer, or the
+/// portable zip. The website always offers the latest release.
+pub fn download_page() -> &'static str {
+    let installed = match (std::env::current_exe(), std::env::var_os("LOCALAPPDATA")) {
+        (Ok(exe), Some(local)) => is_installed(&exe, Path::new(&local)),
+        _ => false,
+    };
+    if installed {
+        "https://25dark25.github.io/ObsLite/?file=msi#download"
+    } else {
+        "https://25dark25.github.io/ObsLite/?file=zip#download"
+    }
+}
+
+/// Whether `exe` is where the installer puts it: `%LOCALAPPDATA%\Programs\obs-lite`.
+fn is_installed(exe: &Path, local_app_data: &Path) -> bool {
+    let folder = local_app_data.join("Programs").join("obs-lite");
+    exe.parent().is_some_and(|dir| dir.as_os_str().eq_ignore_ascii_case(folder.as_os_str()))
+}
+
+/// Release tag from the GitHub API response.
 fn parse(json: &str) -> Option<Release> {
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
     let tag = value.get("tag_name")?.as_str()?;
-    let url = value.get("html_url")?.as_str().filter(|url| url.starts_with(RELEASES))?;
-    Some(Release { version: tag.trim_start_matches('v').to_owned(), url: url.to_owned() })
+    Some(Release { version: tag.trim_start_matches('v').to_owned() })
 }
 
 /// Whether `candidate` ("0.3.0") is a later version than `current`.
@@ -52,18 +70,18 @@ mod tests {
     #[test]
     fn release_is_read_from_the_github_response() {
         let json = r#"{"tag_name": "v0.3.0", "html_url": "https://github.com/25Dark25/ObsLite/releases/tag/v0.3.0", "assets": []}"#;
-        let release = parse(json).unwrap();
-        assert_eq!(release.version, "0.3.0");
-        assert_eq!(release.url, "https://github.com/25Dark25/ObsLite/releases/tag/v0.3.0");
+        assert_eq!(parse(json), Some(Release { version: "0.3.0".into() }));
         assert_eq!(parse(r#"{"message": "Not Found"}"#), None);
     }
 
     #[test]
-    fn only_a_link_to_a_release_page_is_taken() {
-        // The link is opened with Explorer, which would run a program or open any folder.
-        for url in ["file:///C:/Windows/System32/calc.exe", r"\\server\share\setup.exe", "https://example.com/ObsLite/releases/", "http://github.com/25Dark25/ObsLite/releases/tag/v0.3.0"] {
-            let json = serde_json::json!({"tag_name": "v0.3.0", "html_url": url}).to_string();
-            assert_eq!(parse(&json), None, "{url}");
-        }
+    fn installed_copies_are_told_apart_from_portable_ones() {
+        // Built with join so the separators are right on every platform the tests run on.
+        let local = Path::new("Users").join("Ana").join("AppData").join("Local");
+        let under = |parts: &[&str]| parts.iter().fold(local.clone(), |path, part| path.join(part));
+        assert!(is_installed(&under(&["Programs", "obs-lite", "obs-lite.exe"]), &local));
+        assert!(is_installed(&under(&["programs", "OBS-LITE", "obs-lite.exe"]), &local), "Windows paths ignore case");
+        assert!(!is_installed(&under(&["Programs", "obs-lite", "sub", "obs-lite.exe"]), &local));
+        assert!(!is_installed(&Path::new("Users").join("Ana").join("Downloads").join("obs-lite.exe"), &local));
     }
 }

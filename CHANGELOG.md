@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The new-version notice links to the [website](https://25dark25.github.io/ObsLite/) instead of
+  the release page on GitHub. The website offers the same kind of file as the copy that opened
+  it, the installer or the portable zip, and says what to do once it is downloaded.
+
 ## [0.9.0] - 2026-11-23
 
 ### Added

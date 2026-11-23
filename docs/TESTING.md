@@ -110,8 +110,8 @@ cargo test --locked
 | `linux::tests::a_call_that_does_not_answer_is_waited_for_a_moment_only` | Linux only: a portal call made from the window is waited for a moment at most. |
 | `tray::idle_icon_is_grey_with_the_same_alpha` | The idle tray icon. |
 | `update::versions_compare_numerically` | Only a strictly newer plain version counts as an update. |
-| `update::release_is_read_from_the_github_response` | The tag and page are read from GitHub's response; an error response gives nothing. |
-| `update::only_a_link_to_a_release_page_is_taken` | A response whose link is not an `https://github.com/25Dark25/ObsLite/releases/` page (a file, a network share, another site, plain http) is not offered as a new version. |
+| `update::release_is_read_from_the_github_response` | The version is read from the tag in GitHub's response; an error response gives nothing. |
+| `update::installed_copies_are_told_apart_from_portable_ones` | A copy in `%LOCALAPPDATA%\Programs\obs-lite` (in any letter case) counts as installed, so the update link offers the installer; anywhere else, a subfolder there included, counts as portable. |
 | `win::sys::explorer_is_started_from_the_windows_folder_with_the_path_in_quotes` | Windows only: Explorer is started by its full path in the Windows folder, and paths are given to it in quotes, so a comma in a folder name does not cut it. |
 | `app::saved_message_survives_a_source_that_is_gone` | When the recorded window is closed, the "saved" message and file link stay, and the source is deselected. |
 | `app::desktop_audio_leaves_out_the_application_captured_on_its_own` | With an application captured on its own, desktop audio leaves it out; not with no application, nor with a chosen output device. |
