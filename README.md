@@ -4,7 +4,7 @@ Lightweight screen recorder for Windows and Linux, a small alternative to OBS St
 on Windows a single ~7 MB `.exe`, on Linux a ~4 MB Flatpak, with no bundled browser. The interface
 follows OBS Studio, so OBS users find everything where they expect it.
 
-**Website and downloads: <https://25dark25.github.io/ObsLite/>** (in the same 10 languages as the app)
+**Website and downloads: <https://25dark25.github.io/ObsLite/>** (in the same 11 languages as the app)
 
 > **Obs Lite is an independent project.** It is not affiliated with, endorsed by or sponsored by
 > the OBS Project or OBS Studio. "OBS" and "OBS Studio" are trademarks of their respective owners.
