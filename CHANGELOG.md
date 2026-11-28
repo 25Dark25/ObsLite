@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- On Windows, *Web* and *Download* in the new-version notice opened the Documents folder
+  instead of the website.
+
+## [0.9.2] - 2026-11-28
+
+### Added
+
+- *File › Export Settings*: saves a copy of the settings in use wherever you choose.
+- Portable settings: with a `settings.json` next to `obs-lite.exe`, Obs Lite keeps its settings
+  there instead of in `%APPDATA%`. Export them there to make the portable version fully portable.
+  Without that file nothing changes.
+- The interface is also in Brazilian Portuguese (*Português (Brasil)*), translated by a user. It
+  is also used when the system is in Portuguese from Portugal.
+
 ## [0.9.1] - 2026-11-23
 
 ### Added
@@ -450,7 +466,8 @@ changes.
 - Minimum supported Rust version: 1.95.
 - Releases ship `THIRD-PARTY-LICENSES.html` with the licenses of the bundled crates.
 
-[Unreleased]: https://github.com/25Dark25/ObsLite/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/25Dark25/ObsLite/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/25Dark25/ObsLite/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/25Dark25/ObsLite/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/25Dark25/ObsLite/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/25Dark25/ObsLite/compare/v0.7.0...v0.8.0

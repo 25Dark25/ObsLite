@@ -207,4 +207,7 @@ pub const TEXT: &[(&str, &str)] = &[
     ("encoding did not finish in time; the end may be missing", "kodowanie nie zakończyło się na czas; może brakować końcówki"),
     ("Drag to move the camera; drag its corner to resize it", "Przeciągnij kamerę, aby ją przesunąć; przeciągnij jej róg, aby zmienić rozmiar"),
     ("Right-click for its options", "Kliknij prawym przyciskiem, aby zobaczyć opcje"),
+    ("Export Settings…", "Eksportuj ustawienia…"),
+    ("Settings exported to '{}'", "Ustawienia wyeksportowano do „{}”"),
+    ("Could not export the settings: {}", "Nie można wyeksportować ustawień: {}"),
 ];

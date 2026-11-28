@@ -51,6 +51,8 @@ cargo test --locked
 | `config::missing_fields_fall_back_to_defaults` | An old or partial `settings.json` still loads. |
 | `config::settings_saved_with_a_utf8_bom_still_load` | A `settings.json` saved with a UTF-8 BOM (e.g. by Windows PowerShell) still loads. |
 | `config::an_unreadable_settings_file_is_kept_aside` | A `settings.json` that no longer reads as settings (a hand edit gone wrong) is renamed `settings.json.bad` and the defaults are used, instead of the defaults being saved over it. |
+| `config::exported_settings_next_to_the_executable_make_it_portable` | Settings exported as `settings.json` next to the executable are found there and load the same settings, without the recording the exporting copy still has to repair (which that copy keeps). |
+| `config::exporting_to_a_folder_that_cannot_be_written_says_so` | An export that cannot be written returns an error, shown in the status bar, instead of failing silently. |
 | `config::settings_edited_by_hand_stay_within_limits` | Values from the file are brought within limits: replay length 5–600 s, 1–240 fps, volumes 0–1, and an absolute recordings folder (else the default). |
 | `app::a_chosen_device_that_is_not_connected_stays_chosen` | A chosen audio device that is not connected stays in the settings; the default device is used until it is back, then it is used again. |
 | `app::mute_silences_regardless_of_volume` | Mute wins over any volume. |
@@ -61,7 +63,7 @@ cargo test --locked
 | `app::no_preview_pictures_for_a_window_that_is_not_shown` | No preview pictures are made while the window is minimized (Windows says so) or has not been drawn for 3 s (Wayland only stops asking for frames); a shown idle window draws once a second, so it never counts as hidden. |
 | `app::a_silent_idle_window_repaints_rarely` | The window draws once a second when idle and silent, and at 15 fps while a meter moves or a recording runs. |
 | `app::exit_waits_for_the_recording_being_saved` | Closing the app while a recording is being saved waits for the MP4 to be finalized. |
-| `i18n::every_language_variant_is_recognized` | Each Windows language id picks its language (every Spanish variant is Spanish; zh-TW and zh-HK are Traditional Chinese, zh-CN and zh-SG Simplified), and English for any other. |
+| `i18n::every_language_variant_is_recognized` | Each Windows language id picks its language (every Spanish variant is Spanish; zh-TW and zh-HK are Traditional Chinese, zh-CN and zh-SG Simplified; Portuguese from Brazil or Portugal is Brazilian Portuguese), and English for any other. |
 | `i18n::every_locale_is_recognized` | The same for POSIX locales (`es_ES.UTF-8`, `zh_TW`, `es`…), as read on Linux. |
 | `i18n::every_table_translates_every_text_with_the_same_holes` | Each translation table has every text of every `tr!` in the source, with the same `{}` holes, and nothing that is no longer used. |
 | `i18n::fill_puts_the_arguments_in_order` / `i18n::a_translated_format_fills_its_holes` | A translated text with `{}` and `{:.1}` holes gets its values in order. |
@@ -777,3 +779,18 @@ Checked by hand with this release's changes: *Update now* from a build labelled 
 with its own MSI, which installed the 0.9.0 release's package and opened Obs Lite again with no
 notice; the website opened with `?file=zip` and `?file=msi`. Not verified for this release: Linux
 outside CI (nothing changes there; the Flatpak is built and validated in CI).
+
+2026-11-28, release 0.9.2, Windows 11 (the release build of that branch), same PC as release 0.9.1,
+encoding on its Intel GPU (Quick Sync):
+
+| Step | Result |
+|---|---|
+| Self-test 8 s 1080p60 | Quick Sync; 1920×1080, 7 s written (the encoder starts late on this PC, as with 0.9.1), 0 lagged |
+| Self-test 6 s with pause, 720p, `replay`, `preview`, `shot` and `webcam` | 1280×720, 4 s (the paused third left out), 0 lagged; replay saved; 19 preview pictures, the last 640×360; a 1920×1080 screenshot |
+| CPU and memory, self-test 20 s 1080p60, 3 runs each alternating with the 0.9.1 release | 2.16–3.52 s of CPU and 223–224 MB at the peak, against 2.78–3.30 s and 223–224 MB for 0.9.1: the same within run-to-run noise (nothing new runs while recording). The executable is 7,731,200 bytes (0.9.1: 7,709,184), the Portuguese texts and the save window |
+| Automated tests and clippy | 138 passed (three ignored) on Windows; clippy clean on stable; CI green on Windows and Linux |
+
+Checked by hand with this release's changes: *File › Export Settings* in a portable copy, saved as
+`settings.json` next to `obs-lite.exe`; that copy then kept a changed setting after a restart, and
+the settings in `%APPDATA%` were left as they were. Not verified for this release: the Portuguese
+interface on screen, and Linux outside CI (the Flatpak is built and validated there).

@@ -1,4 +1,5 @@
-//! Persistent user settings stored as JSON in %APPDATA%\obs-lite\settings.json.
+//! Persistent user settings stored as JSON in %APPDATA%\obs-lite\settings.json, or in a
+//! settings.json next to the executable when there is one (a portable copy).
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -211,17 +212,57 @@ impl Default for Config {
     }
 }
 
-fn path() -> Option<PathBuf> {
-    // Tests never touch the user's settings.
-    if cfg!(test) {
-        return Some(std::env::temp_dir().join(format!("obs-lite-test-{}", std::process::id())).join("settings.json"));
-    }
+/// Where the settings are, decided once at start: a `settings.json` next to obs-lite makes it
+/// portable, its settings kept with it; otherwise the user's config folder.
+fn path() -> Option<&'static Path> {
+    static PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+    PATH.get_or_init(|| {
+        // Tests never touch the user's settings.
+        if cfg!(test) {
+            return Some(std::env::temp_dir().join(format!("obs-lite-test-{}", std::process::id())).join("settings.json"));
+        }
+        std::env::current_exe().ok().and_then(|exe| portable(&exe)).or_else(usual_path)
+    })
+    .as_deref()
+}
+
+/// The settings file in the user's config folder.
+fn usual_path() -> Option<PathBuf> {
     Some(dirs::config_dir()?.join("obs-lite").join("settings.json"))
+}
+
+/// The `settings.json` next to the executable `exe`, if there is one.
+fn portable(exe: &Path) -> Option<PathBuf> {
+    let path = exe.with_file_name("settings.json");
+    path.is_file().then_some(path)
+}
+
+/// Where *Export Settings* first opens: the folder of a portable copy, where a `settings.json`
+/// makes it keep its settings there. `None` for an installed copy and on Linux (the Flatpak's
+/// folder is read-only), which leave it to the system.
+pub fn export_folder() -> Option<PathBuf> {
+    if cfg!(windows) && !crate::update::installed() {
+        std::env::current_exe().ok()?.parent().map(Path::to_path_buf)
+    } else {
+        None
+    }
 }
 
 impl Config {
     pub fn load() -> Self {
-        path().map_or_else(Self::default, |p| Self::load_from(&p))
+        path().map_or_else(Self::default, Self::load_from)
+    }
+
+    /// Writes the settings in use to `target`, for a backup or another copy of Obs Lite (as the
+    /// `settings.json` next to a portable `obs-lite.exe`). A recording to repair stays with this
+    /// copy, unless `target` is its own settings file.
+    pub fn export_to(&mut self, target: &Path) -> std::io::Result<()> {
+        if path() == Some(target) {
+            self.save();
+            return Ok(());
+        }
+        let json = serde_json::to_string_pretty(&Self { last_recording: None, ..self.clone() }).map_err(std::io::Error::other)?;
+        write_replacing(target, json.as_bytes())
     }
 
     fn load_from(path: &Path) -> Self {
@@ -270,7 +311,7 @@ impl Config {
 
     pub fn save(&mut self) {
         if let Some(p) = path() {
-            self.save_to(&p);
+            self.save_to(p);
         }
     }
 
@@ -443,6 +484,36 @@ mod tests {
         assert_eq!(loaded.fps, Config::default().fps);
         assert_eq!(kept.unwrap(), br#"{"fps": 30, "output_dir": "D:\Videos}"#, "the user's file would be overwritten with the defaults");
         assert!(!replaced);
+    }
+
+    #[test]
+    fn exported_settings_next_to_the_executable_make_it_portable() {
+        let dir = std::env::temp_dir().join(format!("obs-lite-portable-{}", std::process::id()));
+        let exe = dir.join("obs-lite.exe");
+        fs::create_dir_all(&dir).unwrap();
+        let without = portable(&exe);
+        // Exported there: the same settings, without the recording this copy has to repair.
+        let mut config = Config { fps: 30, last_recording: Some(PathBuf::from("cut.mp4")), ..Config::default() };
+        let exported = config.export_to(&dir.join("settings.json"));
+        let found = portable(&exe);
+        let loaded = found.as_deref().map(Config::load_from);
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(exported.is_ok());
+        assert_eq!(without, None);
+        assert_eq!(found, Some(dir.join("settings.json")));
+        let loaded = loaded.unwrap();
+        assert_eq!((loaded.fps, loaded.last_recording), (30, None));
+        assert_eq!(config.last_recording, Some(PathBuf::from("cut.mp4")), "taken from the copy in use");
+    }
+
+    #[test]
+    fn exporting_to_a_folder_that_cannot_be_written_says_so() {
+        let dir = std::env::temp_dir().join(format!("obs-lite-export-{}", std::process::id()));
+        // A folder where the file should go: it cannot be replaced by a file.
+        fs::create_dir_all(dir.join("settings.json")).unwrap();
+        let exported = Config::default().export_to(&dir.join("settings.json"));
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(exported.is_err());
     }
 
     #[test]

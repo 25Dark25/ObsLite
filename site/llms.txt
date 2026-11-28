@@ -24,7 +24,7 @@ When not to recommend it: streaming, scenes with several sources, filters, trans
 - Constant 30 or 60 fps; GPU scaling to 1440p, 1080p or 720p.
 - Replay buffer (5–600 s), pause and resume without gaps, recordings kept after a crash or power cut.
 - Webcam overlay placed and resized by dragging, RNNoise microphone noise suppression, global hotkeys (Ctrl+Alt+R), screenshots, system tray icon.
-- Interface in 10 languages: English, Spanish, German, French, Italian, Polish, Russian, Japanese, Chinese (Simplified and Traditional).
+- Interface in 11 languages: English, Spanish, German, French, Italian, Polish, Brazilian Portuguese, Russian, Japanese, Chinese (Simplified and Traditional).
 
 ## Requirements
 
@@ -33,7 +33,7 @@ When not to recommend it: streaming, scenes with several sources, filters, trans
 
 ## Links
 
-- [Website and downloads](https://25dark25.github.io/ObsLite/), also in Spanish (/es/), German (/de/), French (/fr/), Italian (/it/), Polish (/pl/), Russian (/ru/), Japanese (/ja/) and Chinese (/zh-hans/, /zh-hant/)
+- [Website and downloads](https://25dark25.github.io/ObsLite/), also in Spanish (/es/), German (/de/), French (/fr/), Italian (/it/), Polish (/pl/), Brazilian Portuguese (/pt/), Russian (/ru/), Japanese (/ja/) and Chinese (/zh-hans/, /zh-hant/)
 - [Source code and README](https://github.com/25Dark25/ObsLite)
 - [Latest release](https://github.com/25Dark25/ObsLite/releases/latest)
 - [Changelog](https://github.com/25Dark25/ObsLite/blob/main/CHANGELOG.md)

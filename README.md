@@ -4,7 +4,7 @@ Lightweight screen recorder for Windows and Linux, a small alternative to OBS St
 on Windows a single ~7 MB `.exe`, on Linux a ~4 MB Flatpak, with no bundled browser. The interface
 follows OBS Studio, so OBS users find everything where they expect it.
 
-**Website and downloads: <https://25dark25.github.io/ObsLite/>** (in the same 10 languages as the app)
+**Website and downloads: <https://25dark25.github.io/ObsLite/>** (in the same 11 languages as the app)
 
 > **Obs Lite is an independent project.** It is not affiliated with, endorsed by or sponsored by
 > the OBS Project or OBS Studio. "OBS" and "OBS Studio" are trademarks of their respective owners.
@@ -52,7 +52,7 @@ Obs Lite does one thing, record, and leaves out what it would need a much larger
 | Streaming | — | ✓ |
 | Plugins, browser source | — | ✓ |
 | Formats | H.264 + AAC in MP4 | H.264, HEVC, AV1… in MP4, MKV, MOV… |
-| Interface languages | 10 | many |
+| Interface languages | 11 | many |
 
 The sizes are OBS Studio 33.0 from Flathub and Obs Lite 0.5.0, both on the same runtime
 (`org.freedesktop.Platform` 26.08), measured with `flatpak info` on 2026-10-27. Memory and CPU were
@@ -60,7 +60,7 @@ measured on 2026-10-29 on the laptop above, Obs Lite built from `main`: both sho
 recording the whole screen with its audio, with VA-API on the Intel GPU at 12 Mbit/s, a keyframe
 every 2 s and no B-frames. Recording, OBS takes a little less CPU; Obs Lite less memory.
 
-> **Status: early (0.9.1).** Obs Lite has been tested on Windows on a single machine
+> **Status: early (0.9.2).** Obs Lite has been tested on Windows on a single machine
 > (Windows 11, laptop with Intel and NVIDIA GPUs) and, on Linux, in a virtual machine (Ubuntu
 > 26.04, GNOME) and on a laptop (Pop!_OS 24.04, COSMIC, Intel and NVIDIA GPUs); see
 > [docs/TESTING.md](docs/TESTING.md) for what was and was not verified. It has
@@ -86,7 +86,8 @@ every 2 s and no B-frames. Recording, OBS takes a little less CPU; Obs Lite less
      to `%LOCALAPPDATA%\Programs\obs-lite`, adds *Obs Lite* to the Start menu and, if you tick the
      box, to the desktop. A newer `.msi` upgrades it in place; uninstall it from *Settings › Apps*.
    - `obs-lite-X.Y.Z-portable-windows-x64.zip`, the portable version: unzip it anywhere and run
-     `obs-lite.exe`. There is nothing to install.
+     `obs-lite.exe`. There is nothing to install. To keep its settings in that folder too, see
+     [Configuration](#configuration).
    - `obs-lite-X.Y.Z-linux-x86_64.flatpak`, for Linux. Install it with
      `flatpak install --user obs-lite-X.Y.Z-linux-x86_64.flatpak` (it fetches the runtime from
      Flathub the first time) and start *Obs Lite* from the applications menu. A newer bundle
@@ -118,7 +119,8 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording
   output resolution and FPS) and *Hotkeys* (click a field and press the combination). *OK* applies,
   *Cancel* discards.
 - **Status bar**: messages, CPU usage, dropped frames and the recording indicator with elapsed time.
-- **File**: *Take Screenshot* and *Show Recordings*.
+- **File**: *Take Screenshot*, *Show Recordings* and *Export Settings*, which saves a copy of the
+  settings wherever you choose (see [Configuration](#configuration)).
 - **System tray icon**: grey when idle, in colour while recording or while the replay buffer runs.
   Its menu starts/stops and pauses recording, starts/stops the replay buffer, saves a replay, takes
   a screenshot, shows the window or exits; a left click shows the window.
@@ -158,11 +160,12 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording
 - **Hidden from capture**: like OBS's option, the Obs Lite window never appears in recordings or
   in its own preview.
 - **System tray icon**, with an option to minimize to the tray.
-- **Interface in English, Spanish, German, French, Italian, Polish, Russian, Japanese and Chinese**
-  (Simplified and Traditional). All but English and Spanish are machine translations, so
-  corrections are welcome: each language is one file in [src/i18n/](src/i18n/). Japanese and Chinese
-  use the system's font for those characters (on Linux, found with fontconfig); without one, Obs Lite
-  shows in English and says why.
+- **Interface in English, Spanish, German, French, Italian, Polish, Brazilian Portuguese, Russian,
+  Japanese and Chinese** (Simplified and Traditional). Brazilian Portuguese was translated by a
+  user; all the others but English and Spanish are machine translations, so corrections are
+  welcome: each language is one file in [src/i18n/](src/i18n/). Japanese and Chinese use the
+  system's font for those characters (on Linux, found with fontconfig); without one, Obs Lite shows
+  in English and says why.
 - **Update notice**: at start-up it asks GitHub for the latest release and, if there is a newer
   one, says so in a dialog (and in the status bar) with a link to the
   [website](https://25dark25.github.io/ObsLite/), which offers the same kind of file: the
@@ -205,6 +208,14 @@ Everything is set from the interface (*Settings* and the docks) and saved in
 cursor captured, desktop audio on, microphone off, 60 fps, native resolution, medium quality,
 output to the *Videos* folder, hotkeys `Ctrl+Alt+R` and `Ctrl+Alt+P`, Obs Lite hidden from capture,
 update check on, 20 s replay buffer.
+
+*File › Export Settings* saves a copy of the settings in use wherever you choose, as a backup or
+to take them to another copy of Obs Lite. To make the portable version fully portable, for example
+on a USB drive, save it as `settings.json` next to its `obs-lite.exe` (the portable version opens
+that folder in the save window). From its next start, that copy keeps its settings there and leaves
+`%APPDATA%` alone. Without that file nothing changes. The folder must be one Obs Lite can write to,
+so not *Program Files*.
+
 Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and screenshots likewise
 (`Screenshot 2026-10-16 13-45-02.png`, or `Captura …` in Spanish).
 
@@ -272,14 +283,14 @@ A7FC EDEA D7E6 C343 7312  284A 442D A687 E0FF 73EE
 2. Verify the signature of the zip (or, the same way, of the `.msi` or the `.flatpak`):
 
    ```sh
-   gpg --verify obs-lite-0.9.1-portable-windows-x64.zip.asc obs-lite-0.9.1-portable-windows-x64.zip
+   gpg --verify obs-lite-0.9.2-portable-windows-x64.zip.asc obs-lite-0.9.2-portable-windows-x64.zip
    ```
 
    The output must say `Good signature` and show the fingerprint above.
 
 3. Optionally, compare the file's SHA-256 with the one in the release notes:
-   `sha256sum obs-lite-0.9.1-portable-windows-x64.zip`, or on Windows
-   `Get-FileHash obs-lite-0.9.1-portable-windows-x64.zip -Algorithm SHA256`.
+   `sha256sum obs-lite-0.9.2-portable-windows-x64.zip`, or on Windows
+   `Get-FileHash obs-lite-0.9.2-portable-windows-x64.zip -Algorithm SHA256`.
 
 Releases after 0.8.0 also have a build provenance attestation from GitHub for each file. It shows
 that the file was built by this repository's *Release build* workflow, and from which commit. With

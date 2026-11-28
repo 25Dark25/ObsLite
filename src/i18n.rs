@@ -15,6 +15,7 @@ mod fr;
 mod it;
 mod ja;
 mod pl;
+mod pt_br;
 mod ru;
 mod zh_hans;
 mod zh_hant;
@@ -31,6 +32,7 @@ pub enum Language {
     Japanese,
     ChineseSimplified,
     ChineseTraditional,
+    PortugueseBrazil,
 }
 
 /// The current language, as its discriminant.
@@ -42,13 +44,14 @@ pub static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 impl Language {
     /// In the order Settings lists them.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::German,
         Self::English,
         Self::Spanish,
         Self::French,
         Self::Italian,
         Self::Polish,
+        Self::PortugueseBrazil,
         Self::Russian,
         Self::Japanese,
         Self::ChineseSimplified,
@@ -71,6 +74,7 @@ impl Language {
             "fr" => Self::French,
             "it" => Self::Italian,
             "pl" => Self::Polish,
+            "pt" => Self::PortugueseBrazil,
             "ru" => Self::Russian,
             "ja" => Self::Japanese,
             "zh" if ["TW", "HK", "MO", "Hant"].iter().any(|r| region.starts_with(r)) => Self::ChineseTraditional,
@@ -90,6 +94,7 @@ impl Language {
             0x0C => Self::French,
             0x10 => Self::Italian,
             0x15 => Self::Polish,
+            0x16 => Self::PortugueseBrazil,
             0x19 => Self::Russian,
             0x11 => Self::Japanese,
             0x04 if TRADITIONAL.contains(&id) => Self::ChineseTraditional,
@@ -107,6 +112,7 @@ impl Language {
             Self::French => "Français",
             Self::Italian => "Italiano",
             Self::Polish => "Polski",
+            Self::PortugueseBrazil => "Português (Brasil)",
             Self::Russian => "Русский",
             Self::Japanese => "日本語",
             Self::ChineseSimplified => "简体中文",
@@ -137,6 +143,7 @@ impl Language {
             Self::French => Some(fr::TEXT),
             Self::Italian => Some(it::TEXT),
             Self::Polish => Some(pl::TEXT),
+            Self::PortugueseBrazil => Some(pt_br::TEXT),
             Self::Russian => Some(ru::TEXT),
             Self::Japanese => Some(ja::TEXT),
             Self::ChineseSimplified => Some(zh_hans::TEXT),
@@ -226,7 +233,9 @@ mod tests {
         assert_eq!(Language::from_lang_id(0x1004), Language::ChineseSimplified); // zh-SG
         assert_eq!(Language::from_lang_id(0x0404), Language::ChineseTraditional); // zh-TW
         assert_eq!(Language::from_lang_id(0x0C04), Language::ChineseTraditional); // zh-HK
-        assert_eq!(Language::from_lang_id(0x0416), Language::English); // pt-BR: not translated
+        assert_eq!(Language::from_lang_id(0x0416), Language::PortugueseBrazil); // pt-BR
+        assert_eq!(Language::from_lang_id(0x0816), Language::PortugueseBrazil); // pt-PT: closer than English
+        assert_eq!(Language::from_lang_id(0x042D), Language::English); // Basque: not translated
     }
 
     #[test]
@@ -234,13 +243,15 @@ mod tests {
         for locale in ["es_ES.UTF-8", "es_MX", "es", "es.UTF-8", "es_ES@euro"] {
             assert_eq!(Language::from_locale(locale), Language::Spanish, "{locale}");
         }
-        for locale in ["en_US.UTF-8", "C", "POSIX", "", "eu_ES.UTF-8", "esperanto", "pt_BR.UTF-8"] {
+        for locale in ["en_US.UTF-8", "C", "POSIX", "", "eu_ES.UTF-8", "esperanto"] {
             assert_eq!(Language::from_locale(locale), Language::English, "{locale}");
         }
         assert_eq!(Language::from_locale("de_DE.UTF-8"), Language::German);
         assert_eq!(Language::from_locale("fr_CA"), Language::French);
         assert_eq!(Language::from_locale("it"), Language::Italian);
         assert_eq!(Language::from_locale("pl_PL.UTF-8"), Language::Polish);
+        assert_eq!(Language::from_locale("pt_BR.UTF-8"), Language::PortugueseBrazil);
+        assert_eq!(Language::from_locale("pt_PT"), Language::PortugueseBrazil);
         assert_eq!(Language::from_locale("ru_RU.UTF-8"), Language::Russian);
         assert_eq!(Language::from_locale("ja_JP.UTF-8"), Language::Japanese);
         assert_eq!(Language::from_locale("zh_CN.UTF-8"), Language::ChineseSimplified);
