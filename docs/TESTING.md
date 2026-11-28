@@ -779,3 +779,18 @@ Checked by hand with this release's changes: *Update now* from a build labelled 
 with its own MSI, which installed the 0.9.0 release's package and opened Obs Lite again with no
 notice; the website opened with `?file=zip` and `?file=msi`. Not verified for this release: Linux
 outside CI (nothing changes there; the Flatpak is built and validated in CI).
+
+2026-11-28, release 0.9.2, Windows 11 (the release build of that branch), same PC as release 0.9.1,
+encoding on its Intel GPU (Quick Sync):
+
+| Step | Result |
+|---|---|
+| Self-test 8 s 1080p60 | Quick Sync; 1920×1080, 7 s written (the encoder starts late on this PC, as with 0.9.1), 0 lagged |
+| Self-test 6 s with pause, 720p, `replay`, `preview`, `shot` and `webcam` | 1280×720, 4 s (the paused third left out), 0 lagged; replay saved; 19 preview pictures, the last 640×360; a 1920×1080 screenshot |
+| CPU and memory, self-test 20 s 1080p60, 3 runs each alternating with the 0.9.1 release | 2.16–3.52 s of CPU and 223–224 MB at the peak, against 2.78–3.30 s and 223–224 MB for 0.9.1: the same within run-to-run noise (nothing new runs while recording). The executable is 7,731,200 bytes (0.9.1: 7,709,184), the Portuguese texts and the save window |
+| Automated tests and clippy | 138 passed (three ignored) on Windows; clippy clean on stable; CI green on Windows and Linux |
+
+Checked by hand with this release's changes: *File › Export Settings* in a portable copy, saved as
+`settings.json` next to `obs-lite.exe`; that copy then kept a changed setting after a restart, and
+the settings in `%APPDATA%` were left as they were. Not verified for this release: the Portuguese
+interface on screen, and Linux outside CI (the Flatpak is built and validated there).
