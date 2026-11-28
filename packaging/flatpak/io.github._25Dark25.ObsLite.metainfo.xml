@@ -49,6 +49,11 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.9.3" date="2026-11-28">
+      <description>
+        <p>On Windows, the new-version notice opens the website again instead of the Documents folder. Nothing changes on Linux.</p>
+      </description>
+    </release>
     <release version="0.9.2" date="2026-11-28">
       <description>
         <p>The interface is also in Brazilian Portuguese. File › Export Settings saves a copy of the settings wherever you choose, and on Windows a settings.json next to obs-lite.exe keeps the portable version's settings in its own folder.</p>

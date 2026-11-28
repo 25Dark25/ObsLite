@@ -794,3 +794,18 @@ Checked by hand with this release's changes: *File › Export Settings* in a por
 `settings.json` next to `obs-lite.exe`; that copy then kept a changed setting after a restart, and
 the settings in `%APPDATA%` were left as they were. Not verified for this release: the Portuguese
 interface on screen, and Linux outside CI (the Flatpak is built and validated there).
+
+2026-11-28, release 0.9.3, Windows 11 (the release build of that branch), same PC as release 0.9.2,
+encoding on its Intel GPU (Quick Sync):
+
+| Step | Result |
+|---|---|
+| Self-test 8 s 1080p60 | Quick Sync; 1920×1080, 7 s written (the encoder starts late on this PC, as with 0.9.2), 0 lagged |
+| Self-test 6 s with pause, 720p, `replay`, `preview`, `shot` and `webcam` | 1280×720, 4 s (the paused third left out), 0 lagged; replay saved; 32 preview pictures, the last 640×360; a 1920×1080 screenshot |
+| CPU and memory, self-test 20 s 1080p60, 3 runs each alternating with the 0.9.2 release | 3.00–4.23 s of CPU and 227–233 MB at the peak, against 4.23–4.91 s and 225–230 MB for 0.9.2: the same within run-to-run noise (nothing changes while recording). The executable is 7,731,712 bytes (0.9.2: 7,733,760) |
+| Automated tests and clippy | 138 passed (three ignored) on Windows; clippy clean on stable; CI green on Windows and Linux |
+
+Checked by hand with this release's changes: *Download* in the new-version notice of a build
+labelled 0.9.1 opened the website in the default browser (Firefox) instead of the Documents folder.
+Not verified for this release: Linux outside CI (ashpd 0.14.3 changes nothing Obs Lite uses; the
+Flatpak is built and validated in CI).
