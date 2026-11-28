@@ -119,7 +119,8 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording
   output resolution and FPS) and *Hotkeys* (click a field and press the combination). *OK* applies,
   *Cancel* discards.
 - **Status bar**: messages, CPU usage, dropped frames and the recording indicator with elapsed time.
-- **File**: *Take Screenshot* and *Show Recordings*.
+- **File**: *Take Screenshot*, *Show Recordings* and *Export Settings*, which saves a copy of the
+  settings wherever you choose (see [Configuration](#configuration)).
 - **System tray icon**: grey when idle, in colour while recording or while the replay buffer runs.
   Its menu starts/stops and pauses recording, starts/stops the replay buffer, saves a replay, takes
   a screenshot, shows the window or exits; a left click shows the window.
@@ -207,11 +208,12 @@ cursor captured, desktop audio on, microphone off, 60 fps, native resolution, me
 output to the *Videos* folder, hotkeys `Ctrl+Alt+R` and `Ctrl+Alt+P`, Obs Lite hidden from capture,
 update check on, 20 s replay buffer.
 
-To make Obs Lite fully portable, for example on a USB drive, create an empty file named
-`settings.json` next to `obs-lite.exe`. From then on that copy keeps its settings there and
-leaves `%APPDATA%` alone. The first time, it starts with the settings Obs Lite already had on this
-PC, so nothing has to be set again. Without that file nothing changes: the settings stay in
-`%APPDATA%`. The folder must be one Obs Lite can write to, so not *Program Files*.
+*File › Export Settings* saves a copy of the settings in use wherever you choose, as a backup or
+to take them to another copy of Obs Lite. To make the portable version fully portable, for example
+on a USB drive, save it as `settings.json` next to its `obs-lite.exe` (the portable version opens
+that folder in the save window). From its next start, that copy keeps its settings there and leaves
+`%APPDATA%` alone. Without that file nothing changes. The folder must be one Obs Lite can write to,
+so not *Program Files*.
 
 Recordings are named after their start time (`2026-10-16 13-45-02.mp4`) and screenshots likewise
 (`Screenshot 2026-10-16 13-45-02.png`, or `Captura …` in Spanish).

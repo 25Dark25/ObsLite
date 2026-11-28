@@ -237,30 +237,36 @@ fn portable(exe: &Path) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-/// Whether the file at `path` is there but has nothing in it, as when just created to make
-/// obs-lite portable.
-fn blank(path: &Path) -> bool {
-    fs::read(path).is_ok_and(|bytes| bytes.trim_ascii().is_empty())
+/// Where *Export Settings* first opens: the folder of a portable copy, where a `settings.json`
+/// makes it keep its settings there. `None` for an installed copy and on Linux (the Flatpak's
+/// folder is read-only), which leave it to the system.
+pub fn export_folder() -> Option<PathBuf> {
+    if cfg!(windows) && !crate::update::installed() {
+        std::env::current_exe().ok()?.parent().map(Path::to_path_buf)
+    } else {
+        None
+    }
 }
 
 impl Config {
     pub fn load() -> Self {
-        path().map_or_else(Self::default, |p| Self::load_or_copy(p, usual_path().as_deref()))
+        path().map_or_else(Self::default, Self::load_from)
     }
 
-    /// The settings at `path`; while that file is blank, a copy of those at `usual`, so an empty
-    /// `settings.json` put next to obs-lite starts it with the settings it already had. A
-    /// recording to repair is left to the copy whose recording it is.
-    fn load_or_copy(path: &Path, usual: Option<&Path>) -> Self {
-        match usual.filter(|&usual| usual != path && blank(path)) {
-            Some(usual) => Self { last_recording: None, last_recording_on_disk: None, ..Self::load_from(usual) },
-            None => Self::load_from(path),
+    /// Writes the settings in use to `target`, for a backup or another copy of Obs Lite (as the
+    /// `settings.json` next to a portable `obs-lite.exe`). A recording to repair stays with this
+    /// copy, unless `target` is its own settings file.
+    pub fn export_to(&mut self, target: &Path) -> std::io::Result<()> {
+        if path() == Some(target) {
+            self.save();
+            return Ok(());
         }
+        let json = serde_json::to_string_pretty(&Self { last_recording: None, ..self.clone() }).map_err(std::io::Error::other)?;
+        write_replacing(target, json.as_bytes())
     }
 
     fn load_from(path: &Path) -> Self {
-        let read = fs::read(path).ok().filter(|bytes| !bytes.trim_ascii().is_empty());
-        let read = read.map(|bytes| String::from_utf8(bytes).ok().and_then(|s| Self::parse(&s)));
+        let read = fs::read(path).ok().map(|bytes| String::from_utf8(bytes).ok().and_then(|s| Self::parse(&s)));
         let mut config = match read {
             Some(Some(config)) => config.within_range(),
             // Not a settings file any more (a hand edit gone wrong, another encoding): kept aside
@@ -481,42 +487,33 @@ mod tests {
     }
 
     #[test]
-    fn a_settings_file_next_to_the_executable_makes_it_portable() {
+    fn exported_settings_next_to_the_executable_make_it_portable() {
         let dir = std::env::temp_dir().join(format!("obs-lite-portable-{}", std::process::id()));
-        let (exe, usual) = (dir.join("obs-lite.exe"), dir.join("usual").join("settings.json"));
+        let exe = dir.join("obs-lite.exe");
         fs::create_dir_all(&dir).unwrap();
         let without = portable(&exe);
-        // An empty file put there: it starts with the settings already in use, without their
-        // recording to repair, and is not taken for a broken file.
-        let here = dir.join("settings.json");
-        fs::write(&here, "").unwrap();
+        // Exported there: the same settings, without the recording this copy has to repair.
+        let mut config = Config { fps: 30, last_recording: Some(PathBuf::from("cut.mp4")), ..Config::default() };
+        let exported = config.export_to(&dir.join("settings.json"));
         let found = portable(&exe);
-        Config { fps: 30, last_recording: Some(PathBuf::from("cut.mp4")), ..Config::default() }.save_to(&usual);
-        let mut copied = Config::load_or_copy(&here, Some(&usual));
-        copied.save_to(&here);
-        // Saved there, it is read from there from then on, whatever the other one says.
-        Config { fps: 24, ..Config::default() }.save_to(&usual);
-        let reloaded = Config::load_or_copy(&here, Some(&usual));
-        let bad = dir.join("settings.json.bad").exists();
+        let loaded = found.as_deref().map(Config::load_from);
         fs::remove_dir_all(&dir).unwrap();
+        assert!(exported.is_ok());
         assert_eq!(without, None);
-        assert_eq!(found, Some(here));
-        assert_eq!((copied.fps, copied.last_recording), (30, None));
-        assert_eq!((reloaded.fps, reloaded.last_recording), (30, None));
-        assert!(!bad);
+        assert_eq!(found, Some(dir.join("settings.json")));
+        let loaded = loaded.unwrap();
+        assert_eq!((loaded.fps, loaded.last_recording), (30, None));
+        assert_eq!(config.last_recording, Some(PathBuf::from("cut.mp4")), "taken from the copy in use");
     }
 
     #[test]
-    fn an_empty_settings_file_loads_the_defaults() {
-        let dir = std::env::temp_dir().join(format!("obs-lite-empty-{}", std::process::id()));
-        let path = dir.join("settings.json");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(&path, " \r\n").unwrap();
-        let loaded = Config::load_from(&path);
-        let kept = path.exists() && !dir.join("settings.json.bad").exists();
+    fn exporting_to_a_folder_that_cannot_be_written_says_so() {
+        let dir = std::env::temp_dir().join(format!("obs-lite-export-{}", std::process::id()));
+        // A folder where the file should go: it cannot be replaced by a file.
+        fs::create_dir_all(dir.join("settings.json")).unwrap();
+        let exported = Config::default().export_to(&dir.join("settings.json"));
         fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(loaded.fps, Config::default().fps);
-        assert!(kept, "an empty file was set aside as broken");
+        assert!(exported.is_err());
     }
 
     #[test]

@@ -9,9 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- *File › Export Settings*: saves a copy of the settings in use wherever you choose.
 - Portable settings: with a `settings.json` next to `obs-lite.exe`, Obs Lite keeps its settings
-  there instead of in `%APPDATA%`. Create it empty and that copy starts with the settings already
-  in use. Without that file nothing changes.
+  there instead of in `%APPDATA%`. Export them there to make the portable version fully portable.
+  Without that file nothing changes.
 
 ## [0.9.1] - 2026-11-23
 
