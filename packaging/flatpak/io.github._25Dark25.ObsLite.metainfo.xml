@@ -49,6 +49,11 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.9.2" date="2026-11-28">
+      <description>
+        <p>The interface is also in Brazilian Portuguese. File › Export Settings saves a copy of the settings wherever you choose, and on Windows a settings.json next to obs-lite.exe keeps the portable version's settings in its own folder.</p>
+      </description>
+    </release>
     <release version="0.9.1" date="2026-11-23">
       <description>
         <p>On Windows, the new-version notice links to the website, which offers the same kind of file as the installed or portable copy, and a copy installed with the installer can update itself with Update now: the new installer is downloaded, checked against its SHA-256 and installed, and Obs Lite opens again. Nothing changes on Linux.</p>
