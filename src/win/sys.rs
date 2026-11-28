@@ -99,9 +99,20 @@ pub fn show_in_folder(file: &Path) {
     let _ = explorer().raw_arg(arg).spawn();
 }
 
-/// Opens a web page in the default browser.
+/// Opens a web page in the default browser. Not through Explorer: it splits its arguments at
+/// characters such as `=`, so a link with a query (`?file=msi`) opened the Documents folder.
+/// On a thread of its own, as the browser may take a moment to answer.
 pub fn open_url(url: &str) {
-    let _ = explorer().arg(url).spawn();
+    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx};
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::core::{HSTRING, PCWSTR, w};
+    let url = HSTRING::from(url);
+    std::thread::spawn(move || unsafe {
+        // What the shell asks of a thread that calls ShellExecute.
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        ShellExecuteW(None, w!("open"), &url, PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL);
+    });
 }
 
 /// Explorer from the Windows folder. Found by name, it would be looked for first in obs-lite's
