@@ -186,4 +186,7 @@ pub const TEXT: &[(&str, &str)] = &[
     ("encoding did not finish in time; the end may be missing", "編碼未能及時完成，結尾可能缺失"),
     ("Drag to move the camera; drag its corner to resize it", "拖曳攝影機以移動，拖曳其角落以調整大小"),
     ("Right-click for its options", "按右鍵查看選項"),
+    ("Export Settings…", "匯出設定…"),
+    ("Settings exported to '{}'", "設定已匯出至「{}」"),
+    ("Could not export the settings: {}", "無法匯出設定：{}"),
 ];

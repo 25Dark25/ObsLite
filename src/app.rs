@@ -780,6 +780,22 @@ impl App {
     }
 
     /// Saves the newest frame of the current source as a PNG in the recordings folder.
+    /// File › Export Settings: a copy of the settings in use wherever the user chooses.
+    fn export_settings(&mut self) {
+        let mut dialog = rfd::FileDialog::new().set_file_name("settings.json").add_filter("JSON", &["json"]);
+        if let Some(folder) = crate::config::export_folder() {
+            dialog = dialog.set_directory(folder);
+        }
+        let Some(target) = dialog.save_file() else { return };
+        match self.config.export_to(&target) {
+            Ok(()) => {
+                let shown = crate::platform::sys::display_path(&target);
+                self.set_status(tr!("Ajustes exportados a '{}'", "Settings exported to '{}'", shown.display()), Some(target), false);
+            }
+            Err(e) => self.set_status(tr!("No se pudieron exportar los ajustes: {}", "Could not export the settings: {}", e), None, true),
+        }
+    }
+
     fn take_screenshot(&mut self, ctx: &egui::Context) {
         if matches!(self.rec, RecState::Saving(_)) {
             return self.set_status(tr!("Espera a que se guarde la grabación.", "Wait until the recording is saved."), None, true);
@@ -1114,6 +1130,10 @@ impl App {
                 if ui.button(tr!("Ajustes", "Settings")).clicked() {
                     self.open_settings();
                     ui.close();
+                }
+                if ui.button(tr!("Exportar ajustes…", "Export Settings…")).clicked() {
+                    ui.close();
+                    self.export_settings();
                 }
                 ui.separator();
                 if ui.button(tr!("Salir", "Exit")).clicked() {

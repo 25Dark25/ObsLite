@@ -204,4 +204,7 @@ pub const TEXT: &[(&str, &str)] = &[
     ("encoding did not finish in time; the end may be missing", "エンコードが時間内に終わりませんでした。最後の部分が欠けている可能性があります"),
     ("Drag to move the camera; drag its corner to resize it", "カメラをドラッグして移動、角をドラッグしてサイズを変更"),
     ("Right-click for its options", "右クリックでオプションを表示"),
+    ("Export Settings…", "設定をエクスポート…"),
+    ("Settings exported to '{}'", "設定を「{}」にエクスポートしました"),
+    ("Could not export the settings: {}", "設定をエクスポートできませんでした: {}"),
 ];

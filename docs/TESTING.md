@@ -51,6 +51,8 @@ cargo test --locked
 | `config::missing_fields_fall_back_to_defaults` | An old or partial `settings.json` still loads. |
 | `config::settings_saved_with_a_utf8_bom_still_load` | A `settings.json` saved with a UTF-8 BOM (e.g. by Windows PowerShell) still loads. |
 | `config::an_unreadable_settings_file_is_kept_aside` | A `settings.json` that no longer reads as settings (a hand edit gone wrong) is renamed `settings.json.bad` and the defaults are used, instead of the defaults being saved over it. |
+| `config::exported_settings_next_to_the_executable_make_it_portable` | Settings exported as `settings.json` next to the executable are found there and load the same settings, without the recording the exporting copy still has to repair (which that copy keeps). |
+| `config::exporting_to_a_folder_that_cannot_be_written_says_so` | An export that cannot be written returns an error, shown in the status bar, instead of failing silently. |
 | `config::settings_edited_by_hand_stay_within_limits` | Values from the file are brought within limits: replay length 5–600 s, 1–240 fps, volumes 0–1, and an absolute recordings folder (else the default). |
 | `app::a_chosen_device_that_is_not_connected_stays_chosen` | A chosen audio device that is not connected stays in the settings; the default device is used until it is back, then it is used again. |
 | `app::mute_silences_regardless_of_volume` | Mute wins over any volume. |

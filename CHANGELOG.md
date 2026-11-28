@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- *File › Export Settings*: saves a copy of the settings in use wherever you choose.
+- Portable settings: with a `settings.json` next to `obs-lite.exe`, Obs Lite keeps its settings
+  there instead of in `%APPDATA%`. Export them there to make the portable version fully portable.
+  Without that file nothing changes.
 - The interface is also in Brazilian Portuguese (*Português (Brasil)*), translated by a user. It
   is also used when the system is in Portuguese from Portugal.
 
