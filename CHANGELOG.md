@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The interface is also in Brazilian Portuguese (*Português (Brasil)*), translated by a user. It
+  is also used when the system is in Portuguese from Portugal.
+
 ## [0.9.1] - 2026-11-23
 
 ### Added

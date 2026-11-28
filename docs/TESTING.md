@@ -61,7 +61,7 @@ cargo test --locked
 | `app::no_preview_pictures_for_a_window_that_is_not_shown` | No preview pictures are made while the window is minimized (Windows says so) or has not been drawn for 3 s (Wayland only stops asking for frames); a shown idle window draws once a second, so it never counts as hidden. |
 | `app::a_silent_idle_window_repaints_rarely` | The window draws once a second when idle and silent, and at 15 fps while a meter moves or a recording runs. |
 | `app::exit_waits_for_the_recording_being_saved` | Closing the app while a recording is being saved waits for the MP4 to be finalized. |
-| `i18n::every_language_variant_is_recognized` | Each Windows language id picks its language (every Spanish variant is Spanish; zh-TW and zh-HK are Traditional Chinese, zh-CN and zh-SG Simplified), and English for any other. |
+| `i18n::every_language_variant_is_recognized` | Each Windows language id picks its language (every Spanish variant is Spanish; zh-TW and zh-HK are Traditional Chinese, zh-CN and zh-SG Simplified; Portuguese from Brazil or Portugal is Brazilian Portuguese), and English for any other. |
 | `i18n::every_locale_is_recognized` | The same for POSIX locales (`es_ES.UTF-8`, `zh_TW`, `es`…), as read on Linux. |
 | `i18n::every_table_translates_every_text_with_the_same_holes` | Each translation table has every text of every `tr!` in the source, with the same `{}` holes, and nothing that is no longer used. |
 | `i18n::fill_puts_the_arguments_in_order` / `i18n::a_translated_format_fills_its_holes` | A translated text with `{}` and `{:.1}` holes gets its values in order. |

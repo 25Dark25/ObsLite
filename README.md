@@ -52,7 +52,7 @@ Obs Lite does one thing, record, and leaves out what it would need a much larger
 | Streaming | — | ✓ |
 | Plugins, browser source | — | ✓ |
 | Formats | H.264 + AAC in MP4 | H.264, HEVC, AV1… in MP4, MKV, MOV… |
-| Interface languages | 10 | many |
+| Interface languages | 11 | many |
 
 The sizes are OBS Studio 33.0 from Flathub and Obs Lite 0.5.0, both on the same runtime
 (`org.freedesktop.Platform` 26.08), measured with `flatpak info` on 2026-10-27. Memory and CPU were
@@ -158,11 +158,12 @@ Same layout as OBS Studio and its dark *Yami* palette, with OBS's wording
 - **Hidden from capture**: like OBS's option, the Obs Lite window never appears in recordings or
   in its own preview.
 - **System tray icon**, with an option to minimize to the tray.
-- **Interface in English, Spanish, German, French, Italian, Polish, Russian, Japanese and Chinese**
-  (Simplified and Traditional). All but English and Spanish are machine translations, so
-  corrections are welcome: each language is one file in [src/i18n/](src/i18n/). Japanese and Chinese
-  use the system's font for those characters (on Linux, found with fontconfig); without one, Obs Lite
-  shows in English and says why.
+- **Interface in English, Spanish, German, French, Italian, Polish, Brazilian Portuguese, Russian,
+  Japanese and Chinese** (Simplified and Traditional). Brazilian Portuguese was translated by a
+  user; all the others but English and Spanish are machine translations, so corrections are
+  welcome: each language is one file in [src/i18n/](src/i18n/). Japanese and Chinese use the
+  system's font for those characters (on Linux, found with fontconfig); without one, Obs Lite shows
+  in English and says why.
 - **Update notice**: at start-up it asks GitHub for the latest release and, if there is a newer
   one, says so in a dialog (and in the status bar) with a link to the
   [website](https://25dark25.github.io/ObsLite/), which offers the same kind of file: the
