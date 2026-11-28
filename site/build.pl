@@ -26,6 +26,7 @@ my @langs = (
     ['fr', 'fr/', 'fr', 'fr_FR', 'FR'],
     ['it', 'it/', 'it', 'it_IT', 'IT'],
     ['pl', 'pl/', 'pl', 'pl_PL', 'PL'],
+    ['pt', 'pt/', 'pt-BR', 'pt_BR', 'PT'],
     ['ru', 'ru/', 'ru', 'ru_RU', 'RU'],
     ['ja', 'ja/', 'ja', 'ja_JP', 'JA'],
     ['zh-hans', 'zh-hans/', 'zh-Hans', 'zh_CN', '简'],
