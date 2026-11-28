@@ -1,4 +1,5 @@
-//! Persistent user settings stored as JSON in %APPDATA%\obs-lite\settings.json.
+//! Persistent user settings stored as JSON in %APPDATA%\obs-lite\settings.json, or in a
+//! settings.json next to the executable when there is one (a portable copy).
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -211,21 +212,55 @@ impl Default for Config {
     }
 }
 
-fn path() -> Option<PathBuf> {
-    // Tests never touch the user's settings.
-    if cfg!(test) {
-        return Some(std::env::temp_dir().join(format!("obs-lite-test-{}", std::process::id())).join("settings.json"));
-    }
+/// Where the settings are, decided once at start: a `settings.json` next to obs-lite makes it
+/// portable, its settings kept with it; otherwise the user's config folder.
+fn path() -> Option<&'static Path> {
+    static PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+    PATH.get_or_init(|| {
+        // Tests never touch the user's settings.
+        if cfg!(test) {
+            return Some(std::env::temp_dir().join(format!("obs-lite-test-{}", std::process::id())).join("settings.json"));
+        }
+        std::env::current_exe().ok().and_then(|exe| portable(&exe)).or_else(usual_path)
+    })
+    .as_deref()
+}
+
+/// The settings file in the user's config folder.
+fn usual_path() -> Option<PathBuf> {
     Some(dirs::config_dir()?.join("obs-lite").join("settings.json"))
+}
+
+/// The `settings.json` next to the executable `exe`, if there is one.
+fn portable(exe: &Path) -> Option<PathBuf> {
+    let path = exe.with_file_name("settings.json");
+    path.is_file().then_some(path)
+}
+
+/// Whether the file at `path` is there but has nothing in it, as when just created to make
+/// obs-lite portable.
+fn blank(path: &Path) -> bool {
+    fs::read(path).is_ok_and(|bytes| bytes.trim_ascii().is_empty())
 }
 
 impl Config {
     pub fn load() -> Self {
-        path().map_or_else(Self::default, |p| Self::load_from(&p))
+        path().map_or_else(Self::default, |p| Self::load_or_copy(p, usual_path().as_deref()))
+    }
+
+    /// The settings at `path`; while that file is blank, a copy of those at `usual`, so an empty
+    /// `settings.json` put next to obs-lite starts it with the settings it already had. A
+    /// recording to repair is left to the copy whose recording it is.
+    fn load_or_copy(path: &Path, usual: Option<&Path>) -> Self {
+        match usual.filter(|&usual| usual != path && blank(path)) {
+            Some(usual) => Self { last_recording: None, last_recording_on_disk: None, ..Self::load_from(usual) },
+            None => Self::load_from(path),
+        }
     }
 
     fn load_from(path: &Path) -> Self {
-        let read = fs::read(path).ok().map(|bytes| String::from_utf8(bytes).ok().and_then(|s| Self::parse(&s)));
+        let read = fs::read(path).ok().filter(|bytes| !bytes.trim_ascii().is_empty());
+        let read = read.map(|bytes| String::from_utf8(bytes).ok().and_then(|s| Self::parse(&s)));
         let mut config = match read {
             Some(Some(config)) => config.within_range(),
             // Not a settings file any more (a hand edit gone wrong, another encoding): kept aside
@@ -270,7 +305,7 @@ impl Config {
 
     pub fn save(&mut self) {
         if let Some(p) = path() {
-            self.save_to(&p);
+            self.save_to(p);
         }
     }
 
@@ -443,6 +478,45 @@ mod tests {
         assert_eq!(loaded.fps, Config::default().fps);
         assert_eq!(kept.unwrap(), br#"{"fps": 30, "output_dir": "D:\Videos}"#, "the user's file would be overwritten with the defaults");
         assert!(!replaced);
+    }
+
+    #[test]
+    fn a_settings_file_next_to_the_executable_makes_it_portable() {
+        let dir = std::env::temp_dir().join(format!("obs-lite-portable-{}", std::process::id()));
+        let (exe, usual) = (dir.join("obs-lite.exe"), dir.join("usual").join("settings.json"));
+        fs::create_dir_all(&dir).unwrap();
+        let without = portable(&exe);
+        // An empty file put there: it starts with the settings already in use, without their
+        // recording to repair, and is not taken for a broken file.
+        let here = dir.join("settings.json");
+        fs::write(&here, "").unwrap();
+        let found = portable(&exe);
+        Config { fps: 30, last_recording: Some(PathBuf::from("cut.mp4")), ..Config::default() }.save_to(&usual);
+        let mut copied = Config::load_or_copy(&here, Some(&usual));
+        copied.save_to(&here);
+        // Saved there, it is read from there from then on, whatever the other one says.
+        Config { fps: 24, ..Config::default() }.save_to(&usual);
+        let reloaded = Config::load_or_copy(&here, Some(&usual));
+        let bad = dir.join("settings.json.bad").exists();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(without, None);
+        assert_eq!(found, Some(here));
+        assert_eq!((copied.fps, copied.last_recording), (30, None));
+        assert_eq!((reloaded.fps, reloaded.last_recording), (30, None));
+        assert!(!bad);
+    }
+
+    #[test]
+    fn an_empty_settings_file_loads_the_defaults() {
+        let dir = std::env::temp_dir().join(format!("obs-lite-empty-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&path, " \r\n").unwrap();
+        let loaded = Config::load_from(&path);
+        let kept = path.exists() && !dir.join("settings.json.bad").exists();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(loaded.fps, Config::default().fps);
+        assert!(kept, "an empty file was set aside as broken");
     }
 
     #[test]

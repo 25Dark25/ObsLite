@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Portable settings: with a `settings.json` next to `obs-lite.exe`, Obs Lite keeps its settings
+  there instead of in `%APPDATA%`. Create it empty and that copy starts with the settings already
+  in use. Without that file nothing changes.
+
 ## [0.9.1] - 2026-11-23
 
 ### Added
